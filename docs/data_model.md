@@ -154,3 +154,10 @@ Tous les blancs sont retirés (1) du texte brut, (2) de la concaténation
 | `EMPTY_TURN` | info | marqueur sans texte |
 
 La liste de référence est `core/schemas.py → WARNING_CODES`.
+
+## Ce qui est transmis aux agents de l'étape 3
+
+Les agents ne reçoivent pas ces fichiers tels quels, mais une représentation
+compacte d'UN entretien : `interview_id`, puis pour chaque tour `turn_id`,
+`speaker`, `text` et, pour un PDF, `page`. Voir
+[`docs/agents_stage3.md`](agents_stage3.md#5-données-envoyées).

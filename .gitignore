@@ -13,6 +13,8 @@ venv/
 # Données de recherche et sorties des runs (jamais versionnées)
 data/inputs/**
 data/outputs/**
+# Cache des analyses IA (contient des extraits d'entretiens)
+data/cache/**
 data/problematique.txt
 !data/inputs/.gitkeep
 !data/outputs/.gitkeep

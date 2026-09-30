@@ -3,8 +3,13 @@
 **Analyse ethnométhodologique des usages étudiants des IAG**
 
 Outil expérimental d'analyse qualitative assistée par IA, destiné à analyser
-des entretiens semi-directifs. **Version actuelle : ingestion déterministe
-des entretiens** — aucun agent IA, aucun appel à l'API Anthropic, aucune analyse.
+des entretiens semi-directifs. **Version actuelle :**
+
+1. ingestion **déterministe** des entretiens (sans IA) ;
+2. **étape 3** — deux agents IA **indépendants**, lancés **en parallèle** et
+   uniquement sur action explicite : *Practice Extractor* (ce que l'étudiant·e
+   fait, avec ou sans IAG) et *Interaction Signal Reader* (comment il ou elle
+   le raconte). Aucune synthèse, aucune analyse théorique à ce stade.
 
 ## Installation
 
@@ -12,8 +17,11 @@ des entretiens** — aucun agent IA, aucun appel à l'API Anthropic, aucune anal
 python -m venv .venv
 source .venv/bin/activate        # Windows : .venv\Scripts\activate
 pip install -r requirements.txt
-cp .env.example .env             # clé non utilisée pour l'instant
+cp .env.example .env             # facultatif : clé API et modèle pour l'étape 3
 ```
+
+Sans `ANTHROPIC_API_KEY` ni `ANTHROPIC_MODEL`, l'application fonctionne
+normalement pour l'ingestion ; l'analyse IA est désactivée avec un message explicite.
 
 ## Lancer l'application
 
@@ -33,10 +41,35 @@ Tests ciblés :
 python -m pytest tests/test_document_extractor.py     # extraction TXT / DOCX / PDF
 python -m pytest tests/test_transcript_structurer.py  # tours de parole
 python -m pytest tests/test_ingestion.py              # couverture, robustesse, runs
+python -m pytest tests/test_llm_client.py             # client LLM : config, réessais, réponses invalides
+python -m pytest tests/test_evidence_validator.py     # validation des citations
+python -m pytest tests/test_analysis_cache.py         # cache des analyses
+python -m pytest tests/test_analysis_pipeline.py      # indépendance, parallélisme, échecs isolés
+python -m pytest tests/test_app_stage3.py             # interface de l'étape 3 (AppTest)
 ```
 
 Les tests n'utilisent que des documents **synthétiques** générés à la volée
-(`tests/synthetic_docs.py`) : aucun vrai entretien n'est versionné.
+(`tests/synthetic_docs.py`, `tests/synthetic_interviews.py`) : aucun vrai
+entretien n'est versionné. **Aucun test n'appelle l'API Anthropic** : le LLM
+est simulé et `tests/conftest.py` interdit le transport réel et toute
+connexion réseau.
+
+Test navigateur (Playwright + Chromium, LLM simulé, lancé à la main ;
+nécessite `pip install playwright` et un Chromium, hors `requirements.txt`) :
+
+```bash
+python tests/e2e/browser_check.py
+```
+
+Démonstration locale du parcours complet de l'étape 3 **sans clé ni appel
+réel** (LLM simulé) : `streamlit run tests/e2e/fake_llm_app.py`.
+
+Test **réel** de l'étape 3 sur l'entretien synthétique (2 appels API,
+**consomme des tokens**, exige une option explicite) :
+
+```bash
+python scripts/smoke_test_stage3.py --confirm-api-cost
+```
 
 ## Fonctionnement
 
@@ -48,7 +81,16 @@ Les tests n'utilisent que des documents **synthétiques** générés à la volé
    tours et d'avertissements, un aperçu des premiers tours de parole, et permet
    de télécharger `structured_transcript.json` et `ingestion_report.json`.
 
-Seule l'étape « Structuration des entretiens » est active ; les autres restent inactives.
+5. **Étape 3 (facultative, sur action explicite)** : dans la section
+   « Analyse IA — Étape 3 », choisir « Test — un entretien » ou « Corpus
+   complet » (confirmation supplémentaire), puis cliquer sur « Lancer les deux
+   analyses IA ». Le bouton indique le nombre d'appels API payants prévus
+   (2 par entretien absent du cache). L'interface affiche ensuite les statuts
+   des deux agents, le nombre de pratiques, de signaux et de citations
+   invalides, les tokens consommés, un aperçu et les téléchargements JSON.
+
+L'ingestion ne déclenche jamais d'appel IA. Les étapes du pipeline au-delà
+de l'extraction des pratiques et de l'analyse interactionnelle restent inactives.
 
 Chaque run produit :
 
@@ -60,6 +102,13 @@ data/outputs/<run_id>/interviews/<interview_id>/
     raw_text.txt                            texte brut extrait
     structured_transcript.json              tours de parole
     ingestion_report.json                   rapport de qualité
+    analysis/                               étape 3 (si lancée)
+        practice_extractor.json             pratiques, citations annotées
+        interaction_signals.json            signaux interactionnels, citations annotées
+        practice_manifest.json              agent, versions, empreintes, modèle, cache, tokens
+        interaction_manifest.json
+        evidence_validation.json            validation déterministe des citations
+data/cache/analysis/<agent>/<clé>.json      cache global des réponses validées
 ```
 
 ## Couche d'ingestion
@@ -130,6 +179,33 @@ avertissements et le statut `PASS`, `PASS_WITH_WARNINGS` ou `FAIL`. Aucune
 }
 ```
 
+## Étape 3 — analyse IA
+
+Documentation complète : [`docs/agents_stage3.md`](docs/agents_stage3.md).
+
+- **Indépendance** : chaque agent reçoit ses propres consignes, son propre
+  schéma et le même entretien compact ; jamais la sortie de l'autre.
+- **Practice Extractor** : descriptif et « aveugle » à la théorie ; reprend
+  les raisons données par l'enquêté·e, n'en invente pas.
+- **Interaction Signal Reader** : relève des marques observables (hésitation,
+  autocorrection, minimisation, affect explicitement nommé, référence au
+  jugement d'un·e enseignant·e, contradiction entre tours…) sans inférer
+  d'état psychologique.
+- **Preuves** : chaque pratique et chaque signal cite l'entretien ; un
+  validateur déterministe vérifie que chaque citation est une sous-chaîne
+  exacte du tour cité, que les `turn_id` existent et appartiennent à cet
+  entretien, que les intervalles sont ordonnés. Rien n'est corrigé : les
+  objets douteux sont marqués `needs_review`.
+- **Sécurité** : la transcription est une donnée, jamais une instruction ;
+  elle est encadrée et échappée ; la sortie est contrainte par un schéma JSON
+  puis revalidée.
+- **Cache** : une analyse n'est repayée que si le fichier, le transcript, le
+  prompt, la version de l'agent, le schéma, le modèle ou les paramètres changent.
+- **Coût** : tokens d'entrée / sortie et nombre d'appels affichés ; aucun
+  montant inventé.
+- **Configuration** : `ANTHROPIC_API_KEY` et `ANTHROPIC_MODEL` (environnement
+  ou `.env`) ; `TRACE_MAX_CONCURRENCY` (défaut 2) limite les appels simultanés.
+
 ## Architecture
 
 ```
@@ -141,9 +217,19 @@ core/document_extractor.py     extraction du texte brut (TXT, DOCX, PDF)
 core/transcript_structurer.py  découpage en tours de parole (règles explicites)
 core/ingestion_validator.py    contrôle de couverture, statistiques, rapport de qualité
 core/ingestion.py              orchestration par fichier et par run
-docs/data_model.md             format des données transmis aux futurs agents
-agents/                        futurs agents (un module par étape)
-prompts/               futurs prompts
+core/llm_client.py             client LLM (SDK Anthropic) : config, réessais, sortie JSON validée
+core/analysis.py               étape 3 : deux agents en parallèle, sorties, manifests, statuts
+core/analysis_cache.py         cache déterministe des analyses
+core/evidence_validator.py     validation déterministe des citations
+core/interpretation_guard.py   détection du vocabulaire interprétatif dans les sorties
+agents/base.py                 citation, identité versionnée d'un agent, entretien compact
+agents/practice_extractor.py   agent 1 : version, schéma de sortie
+agents/interaction_signal_reader.py  agent 2 : version, schéma de sortie
+prompts/practice_extractor.md  consignes de l'agent 1
+prompts/interaction_signal_reader.md  consignes de l'agent 2
+scripts/smoke_test_stage3.py   test réel (payant, sur confirmation) sur l'entretien synthétique
+docs/data_model.md             format des données transmis aux agents
+docs/agents_stage3.md          étape 3 : méthode, schémas, validation, cache, configuration
 data/inputs|outputs/   données des runs (non versionnées)
 logs/                  journal trace.log (non versionné)
 tests/                 tests automatiques (pytest), documents synthétiques uniquement
@@ -151,8 +237,12 @@ tests/                 tests automatiques (pytest), documents synthétiques uniq
 
 ## Sécurité
 
-- Aucun secret dans le dépôt : `.env` est ignoré par git.
-- Les données d'entretien (`data/inputs/**`, `data/outputs/**`) et les journaux (`logs/**`) ne sont pas versionnés.
+- Aucun secret dans le dépôt : `.env` est ignoré par git. La clé est lue
+  uniquement dans `ANTHROPIC_API_KEY` et n'est jamais affichée ni journalisée.
+- Les données d'entretien (`data/inputs/**`, `data/outputs/**`), le cache
+  d'analyse (`data/cache/**`) et les journaux (`logs/**`) ne sont pas versionnés.
+- Les journaux ne contiennent ni transcript ni citation : identifiants,
+  statuts, tokens et durées seulement.
 
 ## Limites connues de l'ingestion
 
