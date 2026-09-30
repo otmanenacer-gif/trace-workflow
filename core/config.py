@@ -37,3 +37,10 @@ PIPELINE_STEPS = (
 
 METADATA_FILENAME = "metadata.json"
 RUN_PROBLEMATIQUE_FILENAME = "problematique.txt"
+
+# Ingestion : sorties par entretien dans data/outputs/<run_id>/interviews/<interview_id>/
+INGESTION_STEP = PIPELINE_STEPS[0]
+INTERVIEWS_SUBDIR = "interviews"
+RAW_TEXT_FILENAME = "raw_text.txt"
+STRUCTURED_TRANSCRIPT_FILENAME = "structured_transcript.json"
+INGESTION_REPORT_FILENAME = "ingestion_report.json"

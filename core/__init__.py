@@ -1,1 +1,1 @@
-"""Cœur technique de TRACE : configuration et gestion des runs."""
+"""Cœur technique de TRACE : configuration, gestion des runs et ingestion déterministe des entretiens."""
