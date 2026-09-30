@@ -1,5 +1,7 @@
 # Secrets
 .env
+.env.*
+!.env.example
 
 # Python
 __pycache__/
@@ -8,16 +10,29 @@ __pycache__/
 .venv/
 venv/
 
-# Données de recherche et journaux (jamais versionnés)
-data/inputs/*
-data/outputs/*
+# Données de recherche et sorties des runs (jamais versionnées)
+data/inputs/**
+data/outputs/**
 data/problematique.txt
-logs/*
 !data/inputs/.gitkeep
 !data/outputs/.gitkeep
+
+# Journaux (peuvent contenir des noms de fichiers ou extraits d'entretiens)
+logs/**
 !logs/.gitkeep
+*.log
+
+# Fichiers temporaires
+tmp/
+*.tmp
+*.bak
+*.swp
+*~
+~$*
+.~lock.*#
 
 # Système / éditeurs
 .DS_Store
+Thumbs.db
 .idea/
 .vscode/
