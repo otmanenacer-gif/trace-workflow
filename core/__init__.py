@@ -1,1 +1,1 @@
-"""Cœur technique de TRACE : configuration, gestion des runs et ingestion déterministe des entretiens."""
+"""Cœur technique de TRACE : configuration, runs, ingestion déterministe et orchestration de l'étape 3 (analyse IA)."""
