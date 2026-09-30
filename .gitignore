@@ -1,0 +1,23 @@
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+
+# Données de recherche et journaux (jamais versionnés)
+data/inputs/*
+data/outputs/*
+data/problematique.txt
+logs/*
+!data/inputs/.gitkeep
+!data/outputs/.gitkeep
+!logs/.gitkeep
+
+# Système / éditeurs
+.DS_Store
+.idea/
+.vscode/
