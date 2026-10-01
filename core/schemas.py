@@ -41,6 +41,7 @@ WARNING_CODES = {
     "TEXT_BEFORE_FIRST_LABEL": (SEVERITY_WARNING, "Du texte précède le premier marqueur de locuteur : attribué à « unknown »."),
     "UNRECOGNIZED_SPEAKER_LABEL": (SEVERITY_WARNING, "Marqueur de locuteur récurrent mais non reconnu : tours attribués à « unknown »."),
     "POSSIBLE_INLINE_SPEAKER_LABEL": (SEVERITY_WARNING, "Un marqueur de locuteur semble apparaître au milieu d'une ligne : non découpé, à vérifier."),
+    "INLINE_SPEAKER_LABELS_SPLIT": (SEVERITY_INFO, "Marqueurs explicites de locuteur en milieu de ligne : un nouveau tour a été ouvert à chacun (texte inchangé)."),
     "SINGLE_ROLE_ONLY": (SEVERITY_WARNING, "Un seul des deux rôles (enquêteur / enquêté) a été détecté."),
     "EMPTY_TURN": (SEVERITY_INFO, "Un marqueur de locuteur n'est suivi d'aucun texte."),
     # Contrôles de validation
@@ -49,6 +50,7 @@ WARNING_CODES = {
     "CONTENT_ADDED": (SEVERITY_ERROR, "Les tours de parole contiennent du texte absent de l'extraction."),
     "SOURCE_MODIFIED": (SEVERITY_ERROR, "L'empreinte SHA-256 du fichier a changé pendant le traitement."),
     "INVALID_TURN_SEQUENCE": (SEVERITY_ERROR, "Identifiants de tours non uniques ou non ordonnés."),
+    "OVERSIZED_TURN_WITH_INTERNAL_MARKERS": (SEVERITY_ERROR, "Tour anormalement long contenant plusieurs marqueurs de locuteur internes : segmentation à vérifier, analyse IA bloquée."),
 }
 
 

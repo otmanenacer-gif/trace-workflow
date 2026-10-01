@@ -87,11 +87,24 @@ Champs d'un tour :
    - `enqueteur` : Enquêteur, Enqueteur, Enquêteuse, Enquêtrice, Intervieweur, Intervieweuse, Interviewer, Question, Q
    - `enquete` : Enquêté(e), Enquete(e), Interviewé(e), Interviewee, Participant(e), Réponse, Reponse, R
    - « Enquête » (nom commun) n'est **pas** un libellé : c'est souvent un titre.
+
+   1 bis. **Marqueur explicite en milieu de ligne** (correctif « paragraphes ») : un
+   paragraphe DOCX ou une ligne de PDF peut contenir toute une suite d'échanges
+   (« … ? Enquêté : Oui. Enquêteur : Et pour… »). Un libellé **sans ambiguïté**
+   (Enquêteur / Enquêté / Interviewer / Interviewé et leurs variantes de casse,
+   d'accents et de genre ; jamais Q, R, Question, Réponse, Participant) suivi de `:`
+   ouvre alors aussi un nouveau tour, s'il suit une fin de phrase (`. ! ? …`,
+   guillemet, parenthèse) ou s'il commence par une majuscule après un blanc.
+   La ligne est coupée juste avant le libellé : le texte est recopié à l'identique,
+   chaque tour garde le numéro de ligne d'origine, le libellé écrit décide seul du
+   locuteur (un libellé qui semble faux n'est pas corrigé : l'audit des locuteurs le
+   signale). Avertissement `INLINE_SPEAKER_LABELS_SPLIT` (info). Sans LLM.
 2. **Marqueur récurrent non reconnu** : 1 à 3 mots à majuscule initiale suivis
    de `:` en début de ligne, présents au moins 2 fois (ex. `Eloïse :`) →
    tour `unknown`, libellé conservé dans `speaker_raw`, avertissement.
 3. **Continuation** : toute autre ligne prolonge le tour en cours. Un `:`
-   au milieu d'une ligne (« il m'a dit : … », « 14:30 ») ne change jamais de locuteur.
+   au milieu d'une ligne (« il m'a dit : … », « 14:30 », « le rôle de l'enquêteur : … »)
+   ne change jamais de locuteur ; seule la règle 1 bis découpe en milieu de ligne.
 4. **Texte sans marqueur** (avant le premier marqueur, ou document sans
    marqueur) : segments `unknown` découpés aux lignes vides.
 
@@ -141,13 +154,15 @@ Tous les blancs sont retirés (1) du texte brut, (2) de la concaténation
 | `CONTENT_ADDED` | error | texte absent de l'extraction dans les tours |
 | `SOURCE_MODIFIED` | error | SHA-256 du fichier modifié pendant le traitement |
 | `INVALID_TURN_SEQUENCE` | error | identifiants non uniques ou désordonnés |
+| `OVERSIZED_TURN_WITH_INTERNAL_MARKERS` | error | tour de plus de 4 000 caractères contenant au moins 2 marqueurs de locuteur internes : segmentation manquée, l'entretien n'est jamais envoyé aux agents IA |
 | `EMPTY_PDF_PAGES` | warning | pages PDF sans texte extractible |
 | `ENCODING_FALLBACK` | warning | TXT non UTF-8, décodé en cp1252 ou latin-1 |
 | `DOCX_UNKNOWN_ELEMENT` | warning | élément DOCX inhabituel récupéré en texte brut |
 | `NO_SPEAKER_LABEL_DETECTED` | warning | aucun marqueur : tout est `unknown` |
 | `TEXT_BEFORE_FIRST_LABEL` | warning | texte (souvent un en-tête) avant le premier marqueur |
 | `UNRECOGNIZED_SPEAKER_LABEL` | warning | libellé récurrent non reconnu (ex. un prénom) |
-| `POSSIBLE_INLINE_SPEAKER_LABEL` | warning | marqueur apparent en milieu de ligne, non découpé |
+| `POSSIBLE_INLINE_SPEAKER_LABEL` | warning | marqueur ambigu (Q, R, Question, Réponse, Participant) en milieu de ligne, non découpé |
+| `INLINE_SPEAKER_LABELS_SPLIT` | info | marqueurs explicites en milieu de ligne : un tour ouvert à chacun (règle 1 bis), texte inchangé |
 | `SINGLE_ROLE_ONLY` | warning | un seul des deux rôles détecté |
 | `CONTENT_MISMATCH_MINOR` | warning | légère différence de contenu |
 | `DOCX_TABLE_FLATTENED` | info | tableaux DOCX extraits ligne par ligne |

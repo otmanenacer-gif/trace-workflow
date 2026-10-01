@@ -304,7 +304,10 @@ tests/                 tests automatiques (pytest), documents synthétiques uniq
   numéros de page peuvent se retrouver dans les tours) ; les lignes vides n'existent
   pas dans un PDF, ce qui influence le découpage des segments sans marqueur.
 - DOCX : en-têtes / pieds de page, notes, commentaires et zones de texte ne sont pas extraits.
-- Seuls les libellés listés sont reconnus ; un marqueur collé au milieu d'une ligne
-  est signalé mais pas découpé.
+- Seuls les libellés listés sont reconnus. Un marqueur explicite (Enquêteur, Enquêté,
+  Interviewer, Interviewé…) au milieu d'une ligne ouvre un nouveau tour ; un libellé
+  ambigu (Q, R, Question, Réponse, Participant) en milieu de ligne est seulement signalé.
+  Garde-fou : un tour de plus de 4 000 caractères contenant encore au moins 2 marqueurs
+  internes rend l'entretien `FAIL` (jamais envoyé aux agents IA).
 - Un texte non attribué situé après le premier marqueur (ex. « Fin de l'entretien »)
   est rattaché au tour précédent, faute de règle permettant de le distinguer.
