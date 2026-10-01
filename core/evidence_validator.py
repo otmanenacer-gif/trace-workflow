@@ -32,7 +32,10 @@ from core import interpretation_guard
 
 logger = logging.getLogger(__name__)
 
-VALIDATOR_VERSION = "1.1"  # 1.1 : non_use_reason, signal métadiscursif, avertissements de locuteur, auditeur
+VALIDATOR_VERSION = "1.2"
+# 1.1 : non_use_reason, signal métadiscursif, avertissements de locuteur, auditeur.
+# 1.2 : tour enquêteur signalé par l'audit des locuteurs = appui possible (à revoir) ; référence à sa propre
+#       parole cherchée dans la phrase citée ; affect « explicite » comparé par radical (interpretation_guard).
 
 ERROR = "error"      # la preuve ou l'objet n'est pas valide
 WARNING = "warning"  # vérification humaine recommandée
@@ -49,7 +52,7 @@ ISSUE_CODES = {
     "NO_VALID_EVIDENCE": (ERROR, "Aucune citation valide pour cet objet."),
     "EVIDENCE_OUTSIDE_RANGE": (WARNING, "Citation située hors de l'intervalle turn_start–turn_end."),
     "EVIDENCE_TURN_NOT_LISTED": (WARNING, "Citation provenant d'un tour absent de turn_ids."),
-    "NO_INTERVIEWEE_EVIDENCE": (WARNING, "Toutes les citations proviennent de tours de l'enquêteur."),
+    "NO_INTERVIEWEE_EVIDENCE": (WARNING, "Toutes les citations proviennent de tours de l'enquêteur (sans avertissement de locuteur)."),
     "CONTRADICTION_SINGLE_TURN": (WARNING, "Contradiction entre tours appuyée sur moins de deux tours distincts."),
     "AFFECT_NOT_IN_QUOTES": (WARNING, "Affect « explicite » absent des citations du signal."),
     "INTERPRETIVE_VOCABULARY": (WARNING, "Vocabulaire interprétatif dans un champ rédigé par l'agent."),
@@ -150,12 +153,32 @@ def _range_issues(item: dict, turns: dict, interview_id: str) -> tuple[list[dict
 
 # Référence de l'enquêté·e à sa propre parole : première personne, ou « (de) dire ça », « dit comme ça ».
 _SELF_REFERENCE = re.compile(r"\b(?:je|j|moi|me|m|mon|ma|mes|dire)\b|\bdit comme ca\b")
+_SENTENCE_BREAK = re.compile(r"(?<=[.!?…])\s+|\n+")
 
 
 def refers_to_own_speech(texts: list[str]) -> bool:
     """Vrai si l'un des textes contient une marque de référence à sa propre parole (accents et casse ignorés)."""
     folded = interpretation_guard.fold(" ".join(texts)).replace("'", " ")
     return bool(_SELF_REFERENCE.search(folded))
+
+
+def quoted_sentences(quote: str, text: str) -> list[str]:
+    """Phrase(s) du tour qui contiennent la citation (la citation seule si elle chevauche plusieurs phrases).
+
+    Une évaluation de sa propre parole peut être citée sans la proposition qui la rattache à la parole
+    (« c'est un peu facile », suivi dans la même phrase de « ce que je dis ») : la phrase entière est lue."""
+    quote_n, text_n = _nfc(quote), _nfc(text)
+    start = text_n.find(quote_n)
+    if start < 0:
+        return [quote]
+    end = start + len(quote_n)
+    sentences, offset = [], 0
+    for part in _SENTENCE_BREAK.split(text_n):
+        begin = text_n.find(part, offset)
+        offset = begin + len(part)
+        if begin < end and offset > start:
+            sentences.append(part)
+    return sentences if len(sentences) == 1 else [quote]
 
 
 def validate_item(item: dict, kind: str, turns: dict, interview_id: str,
@@ -172,7 +195,9 @@ def validate_item(item: dict, kind: str, turns: dict, interview_id: str,
     valid_turns = [evidence[i]["turn_id"] for i, r in enumerate(results) if r["valid"]]
     if not valid_turns:
         issues.append(make_issue("NO_VALID_EVIDENCE"))
-    elif all(turns[t]["speaker"] == "enqueteur" for t in valid_turns):
+    elif all(turns[t]["speaker"] == "enqueteur" and t not in (speaker_warnings or {}) for t in valid_turns):
+        # un tour enquêteur signalé par l'audit (réponse probable de l'enquêté·e) reste un appui, à revoir :
+        # EVIDENCE_ON_DOUBTFUL_SPEAKER_TURN ci-dessous
         issues.append(make_issue("NO_INTERVIEWEE_EVIDENCE"))
 
     for turn_id in dict.fromkeys(t for t in valid_turns if t in (speaker_warnings or {})):
@@ -202,7 +227,8 @@ def validate_item(item: dict, kind: str, turns: dict, interview_id: str,
                 len(set(listed)) < 2 or len(set(valid_turns)) < 2):
             issues.append(make_issue("CONTRADICTION_SINGLE_TURN"))
         if item.get("signal_type") == "metadiscursive_self_evaluation" and not refers_to_own_speech(
-                [evidence[i]["quote"] for i, r in enumerate(results) if r["valid"]]):
+                [sentence for i, r in enumerate(results) if r["valid"]
+                 for sentence in quoted_sentences(evidence[i]["quote"], turns[evidence[i]["turn_id"]]["text"])]):
             issues.append(make_issue("METADISCURSIVE_NO_SELF_REFERENCE"))
         affect = item.get("explicit_affect")
         if affect and not interpretation_guard.affect_in_quotes(

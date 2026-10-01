@@ -185,9 +185,10 @@ def test_long_interview_announces_blocks_then_shows_chunk_results(tmp_path, monk
             in texts(at.info))
     assert "au plus **6 appels** Interaction Reader" in texts(at.info)
     assert "Interaction Reader : au plus **6 appel(s)**" in texts(at.caption)
-    assert "(au plus 7 appel(s) API payant(s))" in at.button(key="ai_launch").label
+    # étape 3.7 : le Practice Extractor lit aussi l'entretien long par blocs (6 blocs) : 6 + 6 appels au plus
+    assert "(au plus 12 appel(s) API payant(s))" in at.button(key="ai_launch").label
     at.button(key="ai_launch").click().run()
-    assert not at.exception and len(transport.calls) == 7
+    assert not at.exception and len(transport.calls) == 12
     table = at.table[-1].value
     assert list(table["Interaction Reader"]) == ["✅ SUCCESS"] and list(table["Blocs (Interaction)"]) == ["5/5"]
     assert "entretien long : analyse en 5 blocs (chevauchement inclus) · blocs réussis : **5/5**" in texts(at.markdown)
@@ -213,3 +214,68 @@ def test_truncated_block_is_shown_as_incomplete(tmp_path, monkeypatch):
     errors = texts(at.error)
     assert "Analyse INCOMPLÈTE : 4/5 bloc(s) réussi(s)" in errors and "Bloc(s) tronqué(s)" in errors
     assert "(au plus 2 appel(s) API payant(s))" in at.button(key="ai_launch").label  # bloc 3 + longue distance
+
+
+# --- Étape 3.7 : Practice Extractor par blocs, sélectivité, anomalies de validation -----------------
+
+def stage37_api(monkeypatch, practice=None):
+    from tests import synthetic_stage37 as S
+    from tests.fake_llm import AUDITOR, LONG_DISTANCE
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-FAKE-KEY-000")
+    monkeypatch.setenv("ANTHROPIC_MODEL", "fake-model")
+    transport = FakeTransport({PRACTICE: practice or S.practice_reader, INTERACTION: S.naive_reader,
+                               LONG_DISTANCE: S.long_distance_reader,
+                               AUDITOR: lambda p: text_response({"assessments": [], "audit_notes": None})})
+    monkeypatch.setattr(llm_client, "AnthropicTransport", lambda settings: transport)
+    return transport
+
+
+def test_stage37_long_interview_announces_and_reports_both_chunked_agents(tmp_path, monkeypatch):
+    from tests import synthetic_stage37 as S
+    transport = stage37_api(monkeypatch)
+    at = app_with_run(si.make_ingested_run(tmp_path, S.files()))
+    assert not at.exception and transport.calls == []
+    infos = texts(at.info)
+    assert f"Practice Extractor — {S.INTERVIEW_ID} : entretien long : analyse en **4 blocs**" in infos
+    assert "soit au plus **4 appels** Practice Extractor" in infos
+    assert f"Interaction Reader — {S.INTERVIEW_ID} : entretien long : analyse en **3 blocs**" in infos
+    assert "Practice Extractor : au plus **4 appel(s)** · Interaction Reader : au plus **4 appel(s)**" in texts(at.caption)
+    assert "(au plus 9 appel(s) API payant(s))" in at.button(key="ai_launch").label  # 1 audit + 4 + 3 + 1
+    at.button(key="ai_launch").click().run()
+    assert not at.exception and len(transport.calls) == 9
+    table = at.table[-1].value
+    assert list(table["Practice Extractor"]) == ["✅ SUCCESS"] and list(table["Interaction Reader"]) == ["✅ SUCCESS"]
+    assert list(table["Blocs (Practice)"]) == ["4/4"] and list(table["Blocs (Interaction)"]) == ["3/3"]
+    assert list(table["Anomalies validation"]) == [0] and list(table["Pratiques"]) == [S.EXPECTED_PRACTICE_COUNT]
+    markdown = texts(at.markdown)
+    assert ("**Practice Extractor** — entretien long : analyse en 4 blocs (chevauchement inclus) · blocs réussis : "
+            f"**4/4** · pratiques finales : **{S.EXPECTED_PRACTICE_COUNT}** (avant dédoublonnage : "
+            f"{S.EXPECTED_PRACTICE_COUNT + 1}) · statut : SUCCESS") in markdown
+    assert "**Interaction Reader** — entretien long : analyse en 3 blocs" in markdown
+    assert "lecture à longue distance : SUCCESS · anomalies de validation : 0" in markdown
+    assert "signal(aux) écarté(s) avant validation" in texts(at.caption)
+    labels = [b.label for b in at.get("download_button")]
+    for name in ("practice_extractor.json", "interaction_signals.json", "evidence_validation.json"):
+        assert f"Télécharger {name}" in labels
+    assert "(0 appel(s) API payant(s))" in at.button(key="ai_launch").label  # relance : tout est en cache
+    at.button(key="ai_launch").click().run()
+    assert not at.exception and len(transport.calls) == 9
+
+
+def test_stage37_truncated_practice_block_is_shown_as_incomplete(tmp_path, monkeypatch):
+    from tests import synthetic_stage37 as S
+    from tests.synthetic_long_interview import sent_turns
+
+    def truncating(params):
+        if any(t["turn_id"] == S.tid(140) for t in sent_turns(params)):
+            return text_response('{"practices": [', stop_reason="max_tokens")
+        return S.practice_reader(params)
+
+    stage37_api(monkeypatch, truncating)
+    at = app_with_run(si.make_ingested_run(tmp_path, S.files()))
+    at.button(key="ai_launch").click().run()
+    assert not at.exception
+    table = at.table[-1].value
+    assert list(table["Practice Extractor"]) == ["🟠 PARTIAL"] and list(table["Blocs (Practice)"]) == ["3/4"]
+    assert "Practice Extractor — Bloc(s) tronqué(s)" in texts(at.error)
+    assert "(1 appel(s) API payant(s))" in at.button(key="ai_launch").label  # seul le bloc tronqué est à refaire

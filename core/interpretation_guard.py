@@ -23,7 +23,9 @@ from __future__ import annotations
 import re
 import unicodedata
 
-GUARD_VERSION = "1.2"  # 1.2 : « réparation » examinée en contexte (sens matériel non signalé), auditeur des locuteurs
+GUARD_VERSION = "1.3"
+# 1.2 : « réparation » examinée en contexte (sens matériel non signalé), auditeur des locuteurs.
+# 1.3 : « légitimation », « normalisation » (deux agents), « défense » (Interaction Reader) ; affect comparé par radical.
 
 # Concepts théoriques réservés à l'étape interprétative ultérieure (les deux agents).
 THEORETICAL_TERMS = {
@@ -66,6 +68,13 @@ FUNCTION_TERMS = {
     "mensonge": r"mensong\w*",
     "dissimulation": r"dissimul\w*",
     "gêné (rire gêné…)": r"gene(?:e|s|es)?\b",
+    "défense": r"defenses?\b",
+}
+
+# Catégories d'analyse qui qualifient l'opération de l'enquêté·e (les deux agents descriptifs, pas l'auditeur).
+ANALYTIC_TERMS = {
+    "légitimation": r"legitim\w*",
+    "normalisation": r"normalis\w*",
 }
 
 # Lecture de la personne à partir d'une formulation, p. ex. d'une préférence énoncée (Interaction Signal Reader).
@@ -76,8 +85,9 @@ PERSON_READING_TERMS = {
 }
 
 AGENT_TERM_SETS = {
-    "practice_extractor": (THEORETICAL_TERMS, JUDGMENT_TERMS),
-    "interaction_signal_reader": (THEORETICAL_TERMS, JUDGMENT_TERMS, FUNCTION_TERMS, PERSON_READING_TERMS),
+    "practice_extractor": (THEORETICAL_TERMS, JUDGMENT_TERMS, ANALYTIC_TERMS),
+    "interaction_signal_reader": (THEORETICAL_TERMS, JUDGMENT_TERMS, FUNCTION_TERMS, PERSON_READING_TERMS,
+                                  ANALYTIC_TERMS),
     # Auditeur des locuteurs : sa justification (« reason ») ne doit contenir ni concept ni jugement.
     "speaker_attribution_auditor": (THEORETICAL_TERMS, JUDGMENT_TERMS),
 }
@@ -250,13 +260,28 @@ def scan_item(item: dict, agent: str) -> list[dict]:
     return findings
 
 
+# Mots-outils et auxiliaires ignorés quand un affect est écrit comme une expression (« j'avais peur »).
+_AFFECT_FUNCTION_WORDS = frozenset("""
+    pas que qui les des une est suis etait etais avais avait avoir etre ete fait tres trop plus moins bien tout
+    cette avec pour dans sur mon mes ton son ses leur elle lui nous vous ils car mais donc
+""".split())
+
+
+def _affect_stem(word: str) -> str:
+    """Radical d'un mot d'affect : 6 lettres au plus, la dernière ôtée au-delà de 4 (« scrupule(s) »,
+    « stressé(e) », « énerve / énervement », « angoissé / angoisse »)."""
+    return word[:6] if len(word) > 6 else (word[:-1] if len(word) > 4 else word)
+
+
 def affect_in_quotes(affect: str, quotes: list[str]) -> bool:
     """Vérifie qu'un affect « explicite » est bien présent dans les citations (accents et casse ignorés).
 
-    Tolère une variation de fin de mot (singulier / pluriel, genre) : « scrupule » ↔ « scrupules ».
+    Chaque mot porteur (hors mots-outils) doit apparaître dans les citations, à une variation de fin de
+    mot près (singulier / pluriel, genre, dérivation proche) : « scrupule » ↔ « scrupules », « j'avais peur »
+    ↔ « j'ai peur ». Un affect absent des citations (« honte » pour « Euh… oui ») reste signalé.
     """
-    words = [w for w in re.findall(r"\w+", fold(affect)) if len(w) >= 3]
+    words = [w for w in re.findall(r"\w+", fold(affect)) if len(w) >= 3 and w not in _AFFECT_FUNCTION_WORDS]
     if not words:
         return False
     haystack = fold(" ".join(quotes))
-    return all(re.search(r"\b" + re.escape(w[:-1] if len(w) > 4 else w), haystack) for w in words)
+    return all(re.search(r"\b" + re.escape(_affect_stem(w)), haystack) for w in words)

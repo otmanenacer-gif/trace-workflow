@@ -165,13 +165,20 @@ signal de ce type dont les citations ne contiennent aucune référence de
 l'enquêté·e à sa propre parole (première personne, « dire ça », « dit comme
 ça ») est signalé `METADISCURSIVE_NO_SELF_REFERENCE`.
 
-Le nombre de signaux n'est pas limité : ils ne sont ni sélectionnés par
-importance, ni fusionnés (environ 66 signaux pour le premier entretien réel,
-volume jugé acceptable ; l'étape suivante les organisera).
+**Pertinence (version 1.3, étape 3.7)** : un élément de langage ne devient un
+signal que s'il intervient dans la manière dont l'enquêté·e rend compte de sa
+conduite (la décrit, la limite, la reformule, l'évalue, en distingue des usages,
+exprime un trouble, une réserve, une préférence…). Ni quota ni plafond, mais
+pas d'inventaire linguistique : « euh », « ben », « voilà », « juste », « un
+peu », « on va dire »… ne sont jamais relevés seuls ; on préfère un signal
+substantiel à plusieurs micro-signaux redondants. Le premier vrai entretien
+long avait donné 498 signaux avec les consignes 1.2. Détails, exemples et
+couche déterministe (`set_aside_signals`) : [`stage3_7.md`](stage3_7.md).
 
 **Il peut** : noter « scrupules » comme `explicit_affect` quand l'enquêté·e
-dit « j'ai un peu des scrupules » ; relever « euh… enfin… juste » comme
-hésitation, autocorrection et minimisation ; mettre en regard deux tours qui
+dit « j'ai un peu des scrupules » ; relever « Je l'utilise jamais pour écrire…
+enfin, sauf une fois » comme autocorrection et exception ; relever « juste
+reformuler, jamais écrire » comme restriction ; mettre en regard deux tours qui
 se contredisent, de façon neutre.
 
 **Il ne peut pas** : attribuer une émotion non formulée (honte, culpabilité,
@@ -182,13 +189,16 @@ préférence énoncée (`preference_statement`) en trait de la personne
 (autonomie, résistance, identité, position morale). Rire et silence ne sont
 relevés que s'ils sont **transcrits**.
 
-### Entretiens longs (étape 3.6)
+### Entretiens longs (étapes 3.6 et 3.7)
 
 Au-delà d'environ 7 000 tokens estimés, l'Interaction Signal Reader lit
 l'entretien en blocs de tours qui se chevauchent (même agent, mêmes consignes,
 même schéma), puis une lecture légère rapproche les passages éloignés ; les
 signaux sont fusionnés de façon déterministe en un seul `interaction_signals.json`.
-Détails : [`interaction_chunking.md`](interaction_chunking.md).
+Détails : [`interaction_chunking.md`](interaction_chunking.md). Depuis l'étape 3.7,
+le Practice Extractor lit lui aussi un entretien long par blocs (au-delà d'environ
+5 600 tokens estimés) ; ses pratiques sont fusionnées sans jamais réunir deux
+conduites différentes ([`stage3_7.md`](stage3_7.md)).
 
 ### Schéma d'un signal (schema_version 1.2)
 

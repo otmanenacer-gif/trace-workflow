@@ -33,7 +33,7 @@ def by_type(document, signal_type):
 def test_agent_identity_is_versioned():
     identity = SPEC.identity()
     assert identity["agent"] == "interaction_signal_reader"
-    assert identity["agent_version"] == INTERACTION_SIGNAL_READER_VERSION == "1.2"
+    assert identity["agent_version"] == INTERACTION_SIGNAL_READER_VERSION == "1.3"  # étape 3.7
     assert identity["schema_version"] == INTERACTION_SCHEMA_VERSION == "1.2"
 
 

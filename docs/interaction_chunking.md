@@ -1,5 +1,11 @@
 # Étape 3.6 — Interaction Signal Reader sur les entretiens longs
 
+> Étape 3.7 : le Practice Extractor est découpé à son tour (même découpage, taille
+> 4 000, chevauchement de 8 tours) ; l'Interaction Reader applique une règle de
+> pertinence (consignes 1.3) et une couche déterministe de sélectivité avant la
+> validation ; la lecture à longue distance exige deux tours CITÉS dans des blocs
+> différents. Voir [`stage3_7.md`](stage3_7.md).
+
 ## Problème
 
 Sur le premier vrai entretien long (349 tours), l'Interaction Signal Reader v1.2
@@ -149,7 +155,8 @@ l'empreinte du fichier entier :
   la lecture à longue distance si sa sélection change ;
 - un bloc en échec n'est jamais mis en cache ; les blocs réussis le sont.
 
-Le cache du Practice Extractor et de l'auditeur n'est pas touché.
+Le cache de l'auditeur n'est pas touché. (Étape 3.7 : le Practice Extractor a
+désormais, pour un entretien long, le même cache par bloc.)
 
 ## 7. Bloc tronqué ou en échec
 

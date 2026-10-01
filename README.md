@@ -53,6 +53,11 @@ python -m pytest tests/test_app_stage3.py             # interface de l'étape 3 
 python -m pytest tests/test_speaker_attribution_auditor.py  # étape 3.5 : audit des locuteurs
 python -m pytest tests/test_interpretation_guard.py   # étape 3.5 : « réparation » en contexte
 python -m pytest tests/test_stage3_5_synthetic.py     # étape 3.5 : scénario global synthétique
+python -m pytest tests/test_interaction_chunking.py   # étape 3.6 : Interaction Reader par blocs
+python -m pytest tests/test_practice_chunking.py      # étape 3.7 : Practice Extractor par blocs, fusion
+python -m pytest tests/test_signal_selectivity.py     # étape 3.7 : pertinence, micro-marqueurs
+python -m pytest tests/test_stage3_7_warnings.py      # étape 3.7 : les 5 avertissements du vrai run
+python -m pytest tests/test_stage3_7_synthetic.py     # étape 3.7 : entretien long synthétique (330 tours)
 ```
 
 Les tests n'utilisent que des documents **synthétiques** générés à la volée
@@ -208,7 +213,9 @@ pour l'audit des locuteurs, [`docs/speaker_attribution_audit.md`](docs/speaker_a
   les raisons données par l'enquêté·e, n'en invente pas. Cherche les usages ET
   les non-usages / refus (`non_use_reason`), y compris contradictoires sur un
   même thème, sans les fusionner ; décrit aussi les usages personnels et
-  professionnels (`practice_domain`).
+  professionnels (`practice_domain`). Un entretien long est lu en blocs qui se
+  chevauchent, puis les pratiques sont fusionnées sans LLM, sans jamais réunir
+  deux conduites différentes (étape 3.7, [`docs/stage3_7.md`](docs/stage3_7.md)).
 - **Interaction Signal Reader** : relève des marques observables (hésitation,
   autocorrection, minimisation, affect explicitement nommé, référence au
   jugement d'un·e enseignant·e, contradiction entre tours, préférence,
@@ -217,6 +224,11 @@ pour l'audit des locuteurs, [`docs/speaker_attribution_audit.md`](docs/speaker_a
   plus une lecture légère des passages éloignés, puis fusionné sans LLM
   (étape 3.6, [`docs/interaction_chunking.md`](docs/interaction_chunking.md)) ;
   un bloc tronqué rend l'analyse `PARTIAL`, jamais présentée comme complète.
+  Étape 3.7 : seuls les phénomènes **pertinents pour le récit des pratiques**
+  sont relevés (pas d'inventaire de « euh », « juste », « un peu »…) ; une
+  couche déterministe complète les `turn_ids` et écarte, en les conservant à
+  part (`set_aside_signals`), les micro-marqueurs isolés ou redondants et les
+  signaux appuyés sur la seule question de l'enquêteur.
 - **Preuves** : chaque pratique et chaque signal cite l'entretien ; un
   validateur déterministe vérifie que chaque citation est une sous-chaîne
   exacte du tour cité, que les `turn_id` existent et appartiennent à cet
@@ -235,7 +247,8 @@ pour l'audit des locuteurs, [`docs/speaker_attribution_audit.md`](docs/speaker_a
   montant inventé.
 - **Configuration** : `ANTHROPIC_API_KEY` et `ANTHROPIC_MODEL` (environnement
   ou `.env`) ; `TRACE_MAX_CONCURRENCY` (défaut 2) limite les appels simultanés ;
-  `TRACE_INTERACTION_CHUNK_TOKENS` (défaut 5 000) fixe la taille d'un bloc.
+  `TRACE_INTERACTION_CHUNK_TOKENS` (défaut 5 000) et `TRACE_PRACTICE_CHUNK_TOKENS`
+  (défaut 4 000) fixent la taille d'un bloc de chaque agent.
 
 ## Architecture
 
@@ -255,6 +268,8 @@ core/evidence_validator.py     validation déterministe des citations
 core/interpretation_guard.py   détection du vocabulaire interprétatif dans les sorties
 core/speaker_attribution_auditor.py  étape 3.5 : audit des locuteurs (règles, extrait, revalidation)
 core/interaction_chunking.py   étape 3.6 : blocs, sélection à longue distance, fusion (Interaction Reader)
+core/practice_chunking.py      étape 3.7 : blocs et fusion déterministe des pratiques (Practice Extractor)
+core/signal_selectivity.py     étape 3.7 : turn_ids complétés, micro-marqueurs et appuis « enquêteur » écartés
 agents/base.py                 citation, identité versionnée d'un agent, entretien compact
 agents/practice_extractor.py   agent 1 : version, schéma de sortie
 agents/interaction_signal_reader.py  agent 2 : version, schéma de sortie
@@ -267,6 +282,7 @@ docs/data_model.md             format des données transmis aux agents
 docs/agents_stage3.md          étape 3 : méthode, schémas, validation, cache, configuration
 docs/speaker_attribution_audit.md  étape 3.5 : audit de l'attribution des locuteurs
 docs/interaction_chunking.md   étape 3.6 : Interaction Reader sur les entretiens longs
+docs/stage3_7.md               étape 3.7 : Practice Extractor par blocs, sélectivité, avertissements
 data/inputs|outputs/   données des runs (non versionnées)
 logs/                  journal trace.log (non versionné)
 tests/                 tests automatiques (pytest), documents synthétiques uniquement

@@ -26,7 +26,9 @@ Fonctions DÉTERMINISTES, sans appel LLM (l'orchestration des appels est dans co
    dans un budget de 6 000 tokens estimés (≈ un bloc ; les candidats les moins appuyés
    sont écartés au-delà, et comptés). Elle ne produit que cross_turn_contradiction,
    significant_repetition ou vocabulary_shift (schéma restreint), et seuls les signaux
-   dont les tours ne tiennent pas dans un même bloc sont conservés (`is_long_distance`).
+   dont les tours CITÉS (au moins deux) ne tiennent pas dans un même bloc sont conservés
+   (`is_long_distance`). Étape 3.7 : un micro-marqueur relevé seul (« juste », « un peu »…,
+   voir core/signal_selectivity.py) ne rend pas un tour candidat.
 
 3. Fusion (`merge_signals`) — sans LLM. Deux signaux de deux blocs DIFFÉRENTS sont un
    même signal si : même signal_type, mêmes turn_ids, tous ces tours appartiennent aux
@@ -37,6 +39,9 @@ Fonctions DÉTERMINISTES, sans appel LLM (l'orchestration des appels est dans co
    Deux signaux d'un MÊME bloc ne sont jamais fusionnés (l'agent les a distingués).
    Ordre final : ordre de l'entretien (premier tour cité), puis bloc, puis rang dans le bloc ;
    les identifiants S001, S002… sont attribués ensuite par la validation des preuves.
+
+Le découpage (`plan_chunks`, `chunk_request`, `Chunk`) sert aussi au Practice Extractor
+(étape 3.7, voir core/practice_chunking.py), avec sa propre taille cible et son propre chevauchement.
 """
 
 from __future__ import annotations
@@ -49,10 +54,10 @@ from dataclasses import dataclass
 
 from agents import interaction_signal_reader as reader
 from agents.base import build_agent_input, serialize_agent_input
-from core import interpretation_guard
+from core import interpretation_guard, signal_selectivity
 from core.schemas import SPEAKER_INTERVIEWER
 
-CHUNKING_VERSION = "1.0"
+CHUNKING_VERSION = "1.1"  # 1.1 : chevauchement paramétrable (Practice Extractor), longue distance sur les tours cités
 CHARS_PER_TOKEN = 3.5
 SINGLE_CALL_FACTOR = 1.4      # jusqu'à 1,4 × la cible : un seul appel (évite un 2e bloc minuscule)
 MIN_TAIL_FACTOR = 0.4         # dernier bloc < 40 % de la cible : rattaché au précédent
@@ -105,7 +110,7 @@ def turn_costs(transcript: dict) -> list[int]:
     return [estimate_tokens(json.dumps(t, ensure_ascii=False, sort_keys=True)) + 1 for t in compact]
 
 
-def plan_chunks(transcript: dict, target_tokens: int) -> list[Chunk]:
+def plan_chunks(transcript: dict, target_tokens: int, overlap_turns: int = OVERLAP_TURNS) -> list[Chunk]:
     """Blocs de tours consécutifs (un seul bloc pour un entretien court)."""
     turns = transcript["turns"]
     ids = [t["turn_id"] for t in turns]
@@ -131,7 +136,7 @@ def plan_chunks(transcript: dict, target_tokens: int) -> list[Chunk]:
             cores[-1][1] = last[1]
     chunks = []
     for index, (core_start, end) in enumerate(cores, start=1):
-        start = max(0, core_start - OVERLAP_TURNS) if index > 1 else 0
+        start = max(0, core_start - overlap_turns) if index > 1 else 0
         chunks.append(Chunk(index, start, core_start, end, tuple(ids[start:end]), sum(costs[start:end])))
     return chunks
 
@@ -150,17 +155,20 @@ def routed_warnings(turn_ids, warnings: dict[str, dict]) -> dict[str, dict]:
     return {t: warnings[t] for t in turn_ids if t in warnings}
 
 
-def chunk_request(transcript: dict, chunk: Chunk, warnings: dict[str, dict]) -> dict:
-    """Message d'un bloc : représentation compacte des tours du bloc, avec leurs seuls avertissements."""
+def chunk_request(transcript: dict, chunk: Chunk, warnings: dict[str, dict],
+                  template: str = reader.CHUNK_USER_TEMPLATE, overlap_note: str = reader.CHUNK_OVERLAP_NOTE) -> dict:
+    """Message d'un bloc : représentation compacte des tours du bloc, avec leurs seuls avertissements.
+
+    `template` / `overlap_note` : gabarit du message de bloc de l'agent (Interaction Reader par défaut)."""
     sub = {"interview_id": transcript["interview_id"], "turns": transcript["turns"][chunk.start:chunk.end]}
     chunk_warnings = routed_warnings(chunk.turn_ids, warnings)
     agent_input = build_agent_input(sub, chunk_warnings)
     transcript_json = serialize_agent_input(agent_input)
-    overlap_note = "" if not chunk.overlap_turns else reader.CHUNK_OVERLAP_NOTE.format(
+    note = "" if not chunk.overlap_turns else overlap_note.format(
         overlap_turns=chunk.overlap_turns, overlap_last_turn_id=chunk.turn_ids[chunk.overlap_turns - 1])
-    message = reader.CHUNK_USER_TEMPLATE.format(
+    message = template.format(
         interview_id=transcript["interview_id"], turn_count=len(chunk.turn_ids),
-        first_turn_id=chunk.turn_ids[0], last_turn_id=chunk.turn_ids[-1], overlap_note=overlap_note,
+        first_turn_id=chunk.turn_ids[0], last_turn_id=chunk.turn_ids[-1], overlap_note=note,
         transcript_json=transcript_json)
     return {"chunk": chunk, "user_message": message, "warnings": chunk_warnings}
 
@@ -184,7 +192,7 @@ def select_long_distance_turns(transcript: dict, chunks: list[Chunk], chunk_sign
     score: dict[int, int] = {}
     for signals in chunk_signals:
         for signal in signals:
-            if signal.get("signal_type") in FORMAL_SIGNAL_TYPES:
+            if signal.get("signal_type") in FORMAL_SIGNAL_TYPES or signal_selectivity.is_bare_micro_marker(signal):
                 continue
             for turn_id in dict.fromkeys(e.get("turn_id") for e in signal.get("evidence", [])):
                 if turn_id in position and turns[position[turn_id]]["speaker"] != SPEAKER_INTERVIEWER:
@@ -231,13 +239,16 @@ def long_distance_request(transcript: dict, chunks: list[Chunk], selection: dict
 
 
 def is_long_distance(signal: dict, chunks: list[Chunk], position: dict[str, int]) -> bool:
-    """Vrai si les tours du signal ne tiennent dans aucun bloc (un turn_id inconnu est laissé à la validation)."""
-    turn_ids = list(dict.fromkeys(signal.get("turn_ids", [])))
-    if len(turn_ids) < 2:
+    """Vrai si les tours CITÉS par le signal (au moins deux, existants) ne tiennent dans aucun bloc.
+
+    Les passages mis en regard sont ceux des citations : un `turn_ids` qui annonce deux tours éloignés
+    sans citer chacun d'eux ne suffit pas. Un turn_id inexistant est laissé à la validation des preuves."""
+    cited = list(dict.fromkeys(e.get("turn_id") for e in signal.get("evidence", [])))
+    if any(t not in position for t in [*cited, *signal.get("turn_ids", [])]):
+        return len(set(cited) | set(signal.get("turn_ids", []))) >= 2
+    if len(cited) < 2:
         return False
-    if any(t not in position for t in turn_ids):
-        return True
-    return not any(all(c.contains(position[t]) for t in turn_ids) for c in chunks)
+    return not any(all(c.contains(position[t]) for t in cited) for c in chunks)
 
 
 # --- Fusion -------------------------------------------------------------------------------
@@ -310,7 +321,9 @@ def merge_signals(sources: list[dict], chunks: list[Chunk], transcript: dict) ->
         seen = {(e.get("turn_id"), e.get("quote")) for e in evidence}
         evidence += [e for e in signal.get("evidence", []) if (e.get("turn_id"), e.get("quote")) not in seen]
         merged["evidence"] = evidence
-        merged["turn_ids"] = sorted(dict.fromkeys([*merged.get("turn_ids", []), *signal.get("turn_ids", [])]),
+        # tours cités compris : toute citation ajoutée par la fusion a son tour dans turn_ids
+        cited = [e.get("turn_id") for e in evidence if e.get("turn_id") in position]
+        merged["turn_ids"] = sorted(dict.fromkeys([*merged.get("turn_ids", []), *signal.get("turn_ids", []), *cited]),
                                     key=lambda t: position.get(t, unknown))
         merged["needs_human_review"] = bool(merged.get("needs_human_review") or signal.get("needs_human_review"))
         for key in ("explicit_affect", "cross_turn_reference", "topic"):

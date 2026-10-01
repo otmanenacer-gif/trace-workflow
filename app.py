@@ -167,21 +167,27 @@ def render_analysis_launcher(run: dict, eligible: list[dict], settings: LLMSetti
     at_most = "" if plan["exact"] else "au plus "
     chunk_plans = analysis.plan_interaction_chunking(run, selected, settings)
     long_plans = [p for p in chunk_plans if p["chunking_used"]]
+    practice_plans = analysis.plan_practice_chunking(run, selected, settings)
+    long_practice = [p for p in practice_plans if p["chunking_used"]]
     st.info(
         "Cette action effectue **2 appels LLM par entretien non présent dans le cache** (les deux agents), "
         "précédés d'**au plus 1 appel d'audit des locuteurs** par entretien, uniquement si des tours à "
         "l'attribution douteuse sont détectés (sinon aucun). "
-        + ("Un entretien long est lu par l'Interaction Reader en plusieurs blocs (un appel par bloc), "
-           "plus une lecture légère à longue distance. " if long_plans else "")
+        + ("Un entretien long est lu par chacun des deux agents en plusieurs blocs (un appel par bloc) ; "
+           "l'Interaction Reader ajoute une lecture légère à longue distance. " if long_plans or long_practice else "")
         + f"Pour cette sélection : **{at_most}{plan['calls']} appel(s) API** prévu(s), "
         f"{plan['cached']} résultat(s) déjà en cache (sans coût). "
         f"Présélection déterministe des locuteurs : {plan['candidate_turns']} tour(s) suspect(s), "
         f"{plan['audit_calls']} appel(s) d'audit."
     )
     st.caption(
+        f"Practice Extractor : au plus **{sum(p['max_calls'] for p in practice_plans)} appel(s)** · "
         f"Interaction Reader : au plus **{sum(p['max_calls'] for p in chunk_plans)} appel(s)** "
         "pour cette sélection (estimation maximale, avant prise en compte du cache)."
     )
+    for p in long_practice:
+        st.info(f"Practice Extractor — {p['interview_id']} : entretien long : analyse en **{p['chunk_count']} blocs** "
+                f"(chevauchement inclus), soit au plus **{p['max_calls']} appels** Practice Extractor.")
     for p in long_plans:
         st.info(f"Interaction Reader — {p['interview_id']} : entretien long : analyse en **{p['chunk_count']} blocs** "
                 f"(chevauchement inclus), puis 1 lecture à longue distance, soit au plus "
@@ -237,22 +243,41 @@ def chunk_label(agent: dict) -> str:
     return f"{chunking.get('chunks_succeeded') or 0}/{chunking.get('chunk_count')}"
 
 
-def render_chunking(agent: dict) -> None:
-    """Bilan de la lecture par blocs de l'Interaction Reader (entretien long)."""
+def render_chunking(agent: dict, label: str = "Interaction Reader") -> None:
+    """Bilan de la lecture par blocs d'un agent (entretien long)."""
     chunking = agent.get("chunking") or {}
     if not chunking.get("chunking_used"):
         return
-    line = (f"**Interaction Reader** — entretien long : analyse en {chunking['chunk_count']} blocs "
+    practice = label == "Practice Extractor"
+    noun, key = ("pratiques finales", "practices_before_dedup") if practice else ("signaux finaux", "signals_before_dedup")
+    line = (f"**{label}** — entretien long : analyse en {chunking['chunk_count']} blocs "
             f"(chevauchement inclus) · blocs réussis : **{chunking.get('chunks_succeeded') or 0}/"
-            f"{chunking['chunk_count']}** · signaux finaux : **{agent.get('item_count') or 0}**")
-    if chunking.get("signals_before_dedup") is not None:
-        line += f" (avant dédoublonnage : {chunking['signals_before_dedup']})"
-    line += f" · lecture à longue distance : {chunking.get('long_distance_status') or 'n/a'}"
+            f"{chunking['chunk_count']}** · {noun} : **{agent.get('item_count') or 0}**")
+    if chunking.get(key) is not None:
+        line += f" (avant dédoublonnage : {chunking[key]})"
+    if practice:
+        line += f" · statut : {agent.get('status')}"
+    else:
+        line += f" · lecture à longue distance : {chunking.get('long_distance_status') or 'n/a'}"
+        line += f" · anomalies de validation : {agent.get('validation_issue_count') or 0}"
     st.markdown(line)
     if chunking.get("truncated_chunks"):
-        st.error("Bloc(s) tronqué(s) (limite de sortie atteinte) : "
+        st.error(f"{label} — Bloc(s) tronqué(s) (limite de sortie atteinte) : "
                  + ", ".join(str(c) for c in chunking["truncated_chunks"])
                  + ". Le résultat est INCOMPLET ; relancez l'analyse pour ne refaire que les blocs manquants.")
+
+
+def render_selectivity(agents: dict) -> None:
+    """Étape 3.7 : signaux écartés (visibles dans interaction_signals.json) et indices de non-usage à vérifier."""
+    selectivity = agents["interaction_signal_reader"].get("selectivity") or {}
+    if selectivity.get("signals_set_aside"):
+        reasons = ", ".join(f"{code} : {count}" for code, count in selectivity["set_aside_by_reason"].items())
+        st.caption(f"Interaction Reader : {selectivity['signals_set_aside']} signal(aux) écarté(s) avant validation "
+                   f"({reasons}) — conservés dans interaction_signals.json (set_aside_signals).")
+    cues = agents["practice_extractor"].get("non_use_cues") or {}
+    if cues.get("uncovered_count"):
+        st.caption(f"Practice Extractor : {cues['uncovered_count']} tour(s) contenant une formulation de non-usage "
+                   "sans pratique non_use / refusal associée (indice lexical, à vérifier ; voir non_use_cues).")
 
 
 def render_analysis_results(run: dict) -> None:
@@ -293,6 +318,8 @@ def render_analysis_results(run: dict) -> None:
             "Tokens facturés (entrée / sortie)": " / ".join(
                 format_count(sum(u.get(k) or 0 for u in billed)) for k in ("input_tokens", "output_tokens")),
             "Avertissements": "oui" if any(a.get("has_warnings") for a in agents.values()) else "non",
+            "Anomalies validation": sum(a.get("validation_issue_count") or 0 for a in agents.values()),
+            "Blocs (Practice)": chunk_label(practice),
             "Blocs (Interaction)": chunk_label(signals),
         })
     st.table(rows)
@@ -304,7 +331,9 @@ def render_analysis_results(run: dict) -> None:
             for name, agent in summary["agents"].items():
                 if agent.get("error"):
                     st.error(f"{AI_AGENTS[name].label} : {agent['error']['message']}")
+            render_chunking(summary["agents"]["practice_extractor"], "Practice Extractor")
             render_chunking(summary["agents"]["interaction_signal_reader"])
+            render_selectivity(summary["agents"])
             practice_json = read_analysis_file(summary, AI_AGENTS["practice_extractor"].output_filename)
             signals_json = read_analysis_file(summary, AI_AGENTS["interaction_signal_reader"].output_filename)
             validation_json = read_analysis_file(summary, config.EVIDENCE_VALIDATION_FILENAME)

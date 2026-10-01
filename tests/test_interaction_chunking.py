@@ -53,6 +53,12 @@ def of_type(document, signal_type):
     return [s for s in document["signals"] if s["signal_type"] == signal_type]
 
 
+def practice_blocks(run) -> int:
+    """Étape 3.7 : le Practice Extractor lit aussi un entretien long par blocs (un appel par bloc)."""
+    from core import practice_chunking
+    return len(practice_chunking.plan_chunks(transcript_of(run), fake_settings().practice_chunk_tokens))
+
+
 # --- Découpage ----------------------------------------------------------------------------
 
 def test_long_interview_is_split_on_turn_boundaries_with_overlap(long_run):
@@ -136,18 +142,23 @@ def test_long_interview_all_chunks_analyzed_and_merged(tmp_path, long_run):
     assert chunk_info["chunks_succeeded"] == 5 and chunk_info["failed_chunks"] == []
     assert chunk_info["overlap_turns"] == chunking.OVERLAP_TURNS and len(chunk_info["chunk_ranges"]) == 5
     assert chunk_info["llm_calls_this_run"] == 6 == manifest["api_calls"]
-    assert chunk_info["signals_after_dedup"] == doc["item_count"] == len(doc["signals"])
+    # étape 3.7 : les « Euh… » isolés du lecteur simulé (surcodage) sont écartés APRÈS la fusion, jamais perdus
+    set_aside = doc["selectivity"]["signals_set_aside"]
+    assert chunk_info["signals_after_dedup"] == doc["item_count"] + set_aside == len(doc["signals"]) + set_aside
     assert [s["signal_id"] for s in doc["signals"]] == [f"{L.LONG_INTERVIEW_ID}_S{i:03d}"
                                                          for i in range(1, len(doc["signals"]) + 1)]
     # ordre de l'entretien
     position = {t["turn_id"]: i for i, t in enumerate(transcript_of(run)["turns"])}
     firsts = [min(position[t] for t in s["turn_ids"]) for s in doc["signals"]]
     assert firsts == sorted(firsts)
-    # une hésitation par tour concerné, ni perdue ni dupliquée
+    # une hésitation par tour concerné, ni perdue ni dupliquée (étape 3.7 : écartée comme micro-marqueur isolé)
     expected = [t["turn_id"] for t in transcript_of(run)["turns"] if t["text"].startswith("Euh…")]
-    assert sorted(t for s in of_type(doc, "hesitation") for t in s["turn_ids"]) == sorted(expected)
+    hesitations = [s for s in doc["set_aside_signals"] if s["signal_type"] == "hesitation"]
+    assert sorted(t for s in hesitations for t in s["turn_ids"]) == sorted(expected) and not of_type(doc, "hesitation")
+    assert {s["set_aside_reason"] for s in hesitations} == {"ISOLATED_MICRO_MARKER"}
     usage = run["last_analysis"]["usage"]
-    assert usage["api_calls"] == 1 + 6 and usage["output_tokens"] == 300 + 5 * 900 + 300
+    blocks = practice_blocks(run)
+    assert usage["api_calls"] == blocks + 6 and usage["output_tokens"] == 300 * blocks + 5 * 900 + 300
     assert run["pipeline"]["Analyse interactionnelle"] == "terminé (1/1 entretien(s))"
 
 
@@ -159,7 +170,7 @@ def test_overlap_duplicate_is_merged_once(tmp_path, long_run):
     info = doc["chunking"]
     assert info["signals_before_dedup"] - info["signals_after_dedup"] == info["duplicates_removed"] >= 2
     overlap_turn = L.ltid(154)  # T0150–T0155 : fin du bloc 2 et début du bloc 3
-    signals = [s for s in doc["signals"] if s["turn_ids"] == [overlap_turn]]
+    signals = [s for s in doc["signals"] + doc["set_aside_signals"] if s["turn_ids"] == [overlap_turn]]
     assert len(signals) == 1
     assert signals[0]["provenance"] == {"pass": "local", "chunks": [2, 3], "merged_duplicates": 1}
     assert len(signals[0]["evidence"]) == 1 and signals[0]["evidence"][0]["validation"]["valid"]
@@ -328,11 +339,12 @@ def test_all_chunks_failing_is_a_failure_without_output(tmp_path, long_run):
 def test_identical_relaunch_makes_no_call(tmp_path, long_run):
     cache = AnalysisCache(tmp_path / "cache")
     before = plan_analysis(long_run, [L.LONG_INTERVIEW_ID], fake_settings(), cache)
-    assert before["calls"] == 1 + 6 and before["exact"] is False
+    blocks = practice_blocks(long_run)
+    assert before["calls"] == blocks + 6 and before["exact"] is False
     run = analyze(tmp_path, long_run, FakeTransport(responders()))
     first = outputs(run)["document"]
     assert plan_analysis(run, [L.LONG_INTERVIEW_ID], fake_settings(), cache) == {
-        "interviews": 1, "calls": 0, "cached": 7, "audit_calls": 0, "candidate_turns": 0, "exact": True}
+        "interviews": 1, "calls": 0, "cached": blocks + 6, "audit_calls": 0, "candidate_turns": 0, "exact": True}
     second = FakeTransport(responders())
     run = analyze(tmp_path, run, second)
     assert second.calls == []
