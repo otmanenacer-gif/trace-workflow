@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -256,8 +257,17 @@ def test_injection_text_stays_inside_the_transcript_data(tmp_path):
 
 # --- Hygiène du dépôt : aucune donnée réelle ni clé versionnée ----------------------------
 
+# Forme d'une vraie clé Anthropic (sk-ant-api03-…, sk-ant-admin01-…) : préfixe, type, version, partie secrète longue.
+# Les clés factices des tests (« sk-ant-test-FAKE-KEY-000 ») n'y correspondent pas, et ce motif ne peut pas
+# se reconnaître lui-même dans ce fichier (« [ » suit immédiatement le préfixe).
+REAL_ANTHROPIC_KEY = re.compile(r"sk-ant-[a-z]+\d{2}-[A-Za-z0-9_\-]{20,}")
+
+
 @pytest.mark.skipif(shutil.which("git") is None or not (ROOT / ".git").exists(), reason="git indisponible")
 def test_no_real_data_or_secret_is_versioned():
+    # Le détecteur reconnaît une clé réelle (construite à l'exécution) et ignore les clés factices
+    assert REAL_ANTHROPIC_KEY.search("ANTHROPIC_API_KEY=" + "sk-ant-api03-" + "Ab1_-" * 20)
+    assert not REAL_ANTHROPIC_KEY.search("sk-ant-test-FAKE-KEY-000 sk-ant-fake-browser-test sk-ant-x")
     tracked = subprocess.run(["git", "ls-files"], cwd=ROOT, capture_output=True, text=True, check=True).stdout.split()
     data_files = [f for f in tracked if f.startswith(("data/", "logs/"))]
     assert all(f.endswith(".gitkeep") for f in data_files), data_files
@@ -268,4 +278,4 @@ def test_no_real_data_or_secret_is_versioned():
     for name in tracked:
         path = ROOT / name
         if path.is_file() and path.suffix in {".py", ".md", ".txt", ".example", ".ini", ".json"}:
-            assert "sk-ant-api" not in path.read_text(encoding="utf-8", errors="ignore"), name
+            assert not REAL_ANTHROPIC_KEY.search(path.read_text(encoding="utf-8", errors="ignore")), name
