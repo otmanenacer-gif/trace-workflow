@@ -17,7 +17,12 @@ D. étape 3.6 (LLM simulé) : entretien long synthétique (349 tours), annonce d
 E. étape 3.7 (LLM simulé) : entretien long synthétique saturé de remplisseurs (330 tours),
    Practice Extractor en 4 blocs et Interaction Reader en 3 blocs annoncés avant exécution,
    lecteur Interaction qui surcode, bilan (blocs, pratiques/signaux avant et après
-   dédoublonnage, anomalies de validation), téléchargements JSON, relance depuis le cache.
+   dédoublonnage, anomalies de validation), téléchargements JSON, relance depuis le cache ;
+F. étape 4 (LLM simulé) : entretien synthétique de référence, étape 3 puis épisodes d'accountability
+   (6 candidats annoncés, 1 appel), tableau accountability / ordinaires / incertains, aperçu,
+   téléchargements JSON vérifiés, relance depuis le cache (0 appel) ;
+G. étape 4 sur l'entretien long synthétique (320 tours) : 8 candidats pour 31 pratiques, 1 appel,
+   5 épisodes, 3 pratiques ordinaires examinées, 20 sans marqueur.
 
 Non collecté par pytest (nécessite Playwright et un navigateur). Les runs
 créés dans data/ pendant le test sont supprimés à la fin.
@@ -47,6 +52,8 @@ sys.path.insert(0, str(ROOT))
 from tests import synthetic_interviews as si  # noqa: E402
 from tests import synthetic_long_interview as long_interview  # noqa: E402
 from tests import synthetic_stage37 as stage37  # noqa: E402
+from tests import synthetic_stage4 as stage4  # noqa: E402
+from tests import synthetic_stage4_long as stage4_long  # noqa: E402
 
 TIMEOUT_MS = 30_000
 
@@ -287,6 +294,76 @@ def scenario_stage37(browser, url: str, interview: Path, shots: Path) -> None:
     print("   second lancement : 0 appel API (tous les blocs en cache)")
 
 
+def stage4_row(page) -> list[str]:
+    wait_idle(page)
+    table = page.locator("[data-testid=stTable]").last
+    return [c.strip() for c in table.locator("tbody tr").first.locator("td").all_inner_texts()]
+
+
+def run_stage3_then_stage4(page, interview: Path, stage3_label: str, candidates: int) -> None:
+    upload_and_ingest(page, interview)
+    page.get_by_role("button", name=stage3_label).click()
+    expect(page.get_by_text("Analyse IA terminée.")).to_be_visible(timeout=TIMEOUT_MS)
+    wait_idle(page)
+    expect(page.get_by_role("heading", name="Étape 4 — Épisodes d'accountability")).to_be_visible(timeout=TIMEOUT_MS)
+    expect(page.get_by_text(f"Candidats d'épisodes (déterministes, sans IA) : {candidates}").first).to_be_visible()
+    launch = page.get_by_role("button", name="Construire les épisodes d'accountability (1 appel(s) API payant(s))")
+    expect(launch).to_be_enabled()
+    launch.click()
+    expect(page.get_by_text("Étape 4 terminée.")).to_be_visible(timeout=TIMEOUT_MS)
+
+
+def scenario_stage4(browser, url: str, interview: Path, shots: Path) -> None:
+    page = browser.new_page(viewport={"width": 1400, "height": 1300})
+    page.goto(url)
+    run_stage3_then_stage4(page, interview, "Lancer les deux analyses IA (au plus 3 appel(s) API payant(s))", 6)
+    expect(page.get_by_text("Dernière exécution (étape 4) : 1 appel(s) API").first).to_be_visible()
+    row = stage4_row(page)
+    print("   ligne étape 4 :", row)
+    # Entretien, statut étape 3, étape 4, candidats, accountability, ordinaires examinées, sans marqueur, incertains,
+    # rejetés, avertissements, appels
+    assert row == [stage4.INTERVIEW_ID, "COMPLETE", "✅ SUCCESS", "6", "4", "1", "4", "1", "0", "0", "1"], row
+    label = f"Épisodes d'accountability — {stage4.INTERVIEW_ID} — aperçu"
+    page.get_by_text(label).click()
+    expect(page.get_by_text("Épisodes (6) — 3 premiers")).to_be_visible(timeout=TIMEOUT_MS)
+    page.screenshot(path=str(shots / "F1_etape_4_resultats.png"), full_page=True)
+    episodes = download_json(page, label, "accountability_episodes.json")
+    validation = download_json(page, label, "accountability_episode_validation.json")
+    statuses = sorted(e["episode_status"] for e in episodes["episodes"])
+    assert statuses == ["accountability_episode"] * 4 + ["ordinary_practice", "uncertain"], statuses
+    assert episodes["analysis_complete"] is True and episodes["unmarked_practice_count"] == 4
+    assert all(x["validation"]["valid"] for e in episodes["episodes"] for x in e["evidence"])
+    [uncertain] = [e for e in episodes["episodes"] if e["episode_status"] == "uncertain"]
+    assert uncertain["speaker_warnings"] and uncertain["needs_review"] is True
+    assert validation["status"] == "SUCCESS" and validation["error_count"] == validation["warning_count"] == 0
+    assert_no_exception(page)
+    print("F. étape 4 : 6 candidats, 1 appel, 4 épisodes / 1 ordinaire examinée + 4 sans marqueur / 1 incertain, "
+          "téléchargements JSON OK")
+
+    relaunch = page.get_by_role("button", name="Construire les épisodes d'accountability (0 appel(s) API payant(s))")
+    expect(relaunch).to_be_visible(timeout=TIMEOUT_MS)
+    relaunch.click()
+    expect(page.get_by_text("Dernière exécution (étape 4) : 0 appel(s) API").first).to_be_visible(timeout=TIMEOUT_MS)
+    row = stage4_row(page)
+    assert row[2] == "♻️ CACHED" and row[-1] == "0", row
+    assert_no_exception(page)
+    page.screenshot(path=str(shots / "F2_etape_4_cache.png"), full_page=True)
+    print("   relance étape 4 : CACHED, 0 appel API")
+
+
+def scenario_stage4_long(browser, url: str, interview: Path, shots: Path) -> None:
+    page = browser.new_page(viewport={"width": 1400, "height": 1300})
+    page.goto(url)
+    run_stage3_then_stage4(page, interview, "Lancer les deux analyses IA (au plus 7 appel(s) API payant(s))", 8)
+    row = stage4_row(page)
+    print("   ligne étape 4 :", row)
+    assert row == [stage4_long.INTERVIEW_ID, "COMPLETE", "✅ SUCCESS", "8", "5", "3", "20", "0", "0", "0", "1"], row
+    assert_no_exception(page)
+    page.screenshot(path=str(shots / "G_etape_4_long.png"), full_page=True)
+    print("G. étape 4, entretien long : 31 pratiques → 8 candidats, 1 appel, 5 épisodes, 3 ordinaires examinées, "
+          "20 sans marqueur")
+
+
 def run_dirs() -> set[Path]:
     return {p for base in (ROOT / "data" / "inputs", ROOT / "data" / "outputs") for p in base.glob("run_*")}
 
@@ -307,6 +384,10 @@ def main() -> int:
     long_file.write_text(long_interview.long_text(), encoding="utf-8")
     stage37_file = work / stage37.FILENAME
     stage37_file.write_text(stage37.text(), encoding="utf-8")
+    stage4_file = work / stage4.FILENAME
+    stage4_file.write_text(stage4.TEXT, encoding="utf-8")
+    stage4_long_file = work / stage4_long.FILENAME
+    stage4_long_file.write_text(stage4_long.text(), encoding="utf-8")
     base_env = {k: v for k, v in os.environ.items() if not k.startswith(("ANTHROPIC_", "TRACE_"))}
     before = run_dirs()
     try:
@@ -321,6 +402,8 @@ def main() -> int:
                 scenario_stage35(browser, url, stage35, args.screenshots)
                 scenario_long_interview(browser, url, long_file, args.screenshots)
                 scenario_stage37(browser, url, stage37_file, args.screenshots)
+                scenario_stage4(browser, url, stage4_file, args.screenshots)
+                scenario_stage4_long(browser, url, stage4_long_file, args.screenshots)
             browser.close()
     finally:
         for path in run_dirs() - before:

@@ -13,7 +13,13 @@ des entretiens semi-directifs. **Version actuelle :**
 3. **étape 3.5** — *Speaker Attribution Auditor* : avant les deux agents,
    signale les tours dont le locuteur semble mal attribué (règles
    déterministes, puis au plus un appel LLM par entretien, aucun s'il n'y a
-   pas de tour suspect). La transcription n'est **jamais** modifiée.
+   pas de tour suspect). La transcription n'est **jamais** modifiée ;
+4. **étape 4** — *épisodes d'accountability* : à partir des sorties de l'étape 3
+   (jamais de l'entretien entier), un programme déterministe propose des
+   candidats, l'*Accountability Episode Builder* (au plus un appel LLM par
+   entretien) les classe en épisodes d'accountability, pratiques ordinaires ou
+   cas incertains, puis un validateur déterministe vérifie chaque citation.
+   Lancée uniquement sur action explicite, après l'étape 3.
 
 ## Installation
 
@@ -58,10 +64,15 @@ python -m pytest tests/test_practice_chunking.py      # étape 3.7 : Practice Ex
 python -m pytest tests/test_signal_selectivity.py     # étape 3.7 : pertinence, micro-marqueurs
 python -m pytest tests/test_stage3_7_warnings.py      # étape 3.7 : les 5 avertissements du vrai run
 python -m pytest tests/test_stage3_7_synthetic.py     # étape 3.7 : entretien long synthétique (330 tours)
+python -m pytest tests/test_accountability_candidates.py  # étape 4 : candidats déterministes
+python -m pytest tests/test_accountability_validator.py   # étape 4 : validateur des épisodes
+python -m pytest tests/test_stage4_pipeline.py        # étape 4 : référence, cache, FAILED / PARTIAL
+python -m pytest tests/test_stage4_long.py            # étape 4 : entretien long synthétique (320 tours)
+python -m pytest tests/test_app_stage4.py             # étape 4 : interface (AppTest)
 ```
 
 Les tests n'utilisent que des documents **synthétiques** générés à la volée
-(`tests/synthetic_docs.py`, `tests/synthetic_interviews.py`) : aucun vrai
+(`tests/synthetic_docs.py`, `tests/synthetic_interviews.py`, `tests/synthetic_stage4.py`…) : aucun vrai
 entretien n'est versionné. **Aucun test n'appelle l'API Anthropic** : le LLM
 est simulé et `tests/conftest.py` interdit le transport réel et toute
 connexion réseau.
@@ -73,8 +84,10 @@ nécessite `pip install playwright` et un Chromium, hors `requirements.txt`) :
 python tests/e2e/browser_check.py
 ```
 
-Démonstration locale du parcours complet de l'étape 3 **sans clé ni appel
-réel** (LLM simulé) : `streamlit run tests/e2e/fake_llm_app.py`.
+Démonstration locale du parcours complet des étapes 3 et 4 **sans clé ni appel
+réel** (LLM simulé) : `streamlit run tests/e2e/fake_llm_app.py` (pour l'étape 4,
+importer l'entretien synthétique `Entretien_etape_4.txt`, écrit par
+`tests/synthetic_stage4.py`, ou laisser le test navigateur le faire).
 
 Test **réel** de l'étape 3 sur l'entretien synthétique (2 appels API,
 **consomme des tokens**, exige une option explicite) ; `--stage35` utilise
@@ -106,8 +119,18 @@ python scripts/smoke_test_stage3.py --confirm-api-cost --stage35
    aperçu, les avertissements de locuteur (« Ces suggestions ne modifient pas
    la transcription originale. ») et les téléchargements JSON.
 
+6. **Étape 4 (facultative, sur action explicite, après l'étape 3)** : dans la
+   section « Étape 4 — Épisodes d'accountability », choisir un entretien (ou
+   tous), lire l'estimation (candidats déterministes, au plus 1 appel par
+   entretien, résultats en cache, entretiens bloqués), puis cliquer sur
+   « Construire les épisodes d'accountability ». L'interface affiche le statut
+   de l'étape 3, le nombre de candidats, d'épisodes d'accountability, de
+   pratiques ordinaires (examinées et sans marqueur), d'incertains et
+   d'avertissements, un aperçu des 3 premiers épisodes et les téléchargements
+   `accountability_episodes.json` et `accountability_episode_validation.json`.
+
 L'ingestion ne déclenche jamais d'appel IA. Les étapes du pipeline au-delà
-de l'extraction des pratiques et de l'analyse interactionnelle restent inactives.
+de la construction des épisodes d'accountability restent inactives.
 
 Chaque run produit :
 
@@ -127,6 +150,9 @@ data/outputs/<run_id>/interviews/<interview_id>/
         practice_manifest.json              agent, versions, empreintes, modèle, cache, tokens
         interaction_manifest.json
         evidence_validation.json            validation déterministe des citations
+        accountability_episodes.json        étape 4 : candidats, épisodes, pratiques sans marqueur
+        accountability_episode_manifest.json  étape 4 : version, empreintes des sources, modèle, cache, tokens
+        accountability_episode_validation.json  étape 4 : validation déterministe des épisodes
 data/cache/analysis/<agent>/<clé>.json      cache global des réponses validées
 ```
 
@@ -250,6 +276,35 @@ pour l'audit des locuteurs, [`docs/speaker_attribution_audit.md`](docs/speaker_a
   `TRACE_INTERACTION_CHUNK_TOKENS` (défaut 5 000) et `TRACE_PRACTICE_CHUNK_TOKENS`
   (défaut 4 000) fixent la taille d'un bloc de chaque agent.
 
+## Étape 4 — épisodes d'accountability
+
+Documentation complète : [`docs/stage4_accountability_episodes.md`](docs/stage4_accountability_episodes.md).
+
+- **Sens du terme** : accountability au sens ethnométhodologique — rendre une
+  conduite descriptible, intelligible, reconnaissable. Aucune motivation cachée,
+  aucune « stratégie » : on décrit ce que le texte fait (« l'étudiant limite
+  explicitement l'usage à la reformulation »).
+- **Candidats déterministes** (`core/accountability_candidates.py`, sans LLM) :
+  pratique + signal proche (même tour, ≤ 2 positions, même échange), contradiction
+  entre tours rattachée aux seuls tours cités, usage / non-usage d'une même tâche,
+  frontière explicite (« mais pas », « à ma place », « moi-même », « sauf »…).
+  Jamais à partir d'un « euh », d'une intensification isolée ou de la seule question
+  de l'enquêteur.
+- **Accountability Episode Builder** (prompt versionné 1.0) : pour chaque candidat,
+  `accountability_episode`, `ordinary_practice` (racontée comme allant de soi) ou
+  `uncertain` ; opérations (`restriction`, `exception`, `general_rule`, `distinction`,
+  `refusal`, `appeal_to_external_judgment`, `self_evaluation`…) et frontières
+  explicites (« faire / faire faire »). Une pratique sans aucun marqueur n'est pas
+  envoyée au modèle (pratique ordinaire « sans marqueur »).
+- **Validateur déterministe** : identifiants, citations mot pour mot, voix de
+  l'enquêté·e, opérations, pratiques ordinaires « étoffées », fusions abusives,
+  avertissements de locuteur propagés, vocabulaire psychologisant interdit.
+- **Étape 3 incomplète** : FAILED → étape 4 `BLOCKED` (aucun appel) ; PARTIAL →
+  étape 4 `PARTIAL`, `analysis_complete: false`.
+- **Coût et cache** : 0 appel sans candidat, sinon 1 par entretien ; cache propre à
+  l'étape 4 (modifier l'étape 4 ne relance qu'elle). Seuil d'un appel unique :
+  24 000 tokens estimés ou 60 candidats (signalé au-delà, pas de découpage implémenté).
+
 ## Architecture
 
 ```
@@ -270,19 +325,25 @@ core/speaker_attribution_auditor.py  étape 3.5 : audit des locuteurs (règles, 
 core/interaction_chunking.py   étape 3.6 : blocs, sélection à longue distance, fusion (Interaction Reader)
 core/practice_chunking.py      étape 3.7 : blocs et fusion déterministe des pratiques (Practice Extractor)
 core/signal_selectivity.py     étape 3.7 : turn_ids complétés, micro-marqueurs et appuis « enquêteur » écartés
+core/accountability_candidates.py  étape 4 : candidats d'épisodes déterministes, représentation compacte
+core/accountability_episode_validator.py  étape 4 : validation déterministe des épisodes
+core/accountability.py         étape 4 : orchestration, états de l'étape 3, cache, sorties
 agents/base.py                 citation, identité versionnée d'un agent, entretien compact
 agents/practice_extractor.py   agent 1 : version, schéma de sortie
 agents/interaction_signal_reader.py  agent 2 : version, schéma de sortie
+agents/accountability_episode_builder.py  étape 4 : version, schéma d'un épisode, taxonomie des opérations
 prompts/practice_extractor.md  consignes de l'agent 1
 prompts/interaction_signal_reader.md  consignes de l'agent 2
 prompts/speaker_attribution_auditor.md  consignes de l'auditeur des locuteurs
 prompts/interaction_long_distance_reader.md  consignes de la lecture à longue distance (entretien long)
+prompts/accountability_episode_builder.md  consignes de l'Accountability Episode Builder (étape 4, v1.0)
 scripts/smoke_test_stage3.py   test réel (payant, sur confirmation) sur l'entretien synthétique
 docs/data_model.md             format des données transmis aux agents
 docs/agents_stage3.md          étape 3 : méthode, schémas, validation, cache, configuration
 docs/speaker_attribution_audit.md  étape 3.5 : audit de l'attribution des locuteurs
 docs/interaction_chunking.md   étape 3.6 : Interaction Reader sur les entretiens longs
 docs/stage3_7.md               étape 3.7 : Practice Extractor par blocs, sélectivité, avertissements
+docs/stage4_accountability_episodes.md  étape 4 : épisodes d'accountability
 data/inputs|outputs/   données des runs (non versionnées)
 logs/                  journal trace.log (non versionné)
 tests/                 tests automatiques (pytest), documents synthétiques uniquement
