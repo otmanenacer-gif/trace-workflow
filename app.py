@@ -9,14 +9,64 @@ Lancement : streamlit run app.py
 
 import json
 import logging
+import os
+import sys
+import time
 from pathlib import Path
 
 import streamlit as st
 
-from core import analysis, config
-from core.ingestion import ingest_run
-from core.llm_client import LLMError, LLMSettings
-from core.run_manager import TraceError, get_extension, init_run, load_problematique, save_problematique
+
+PROJECT_PACKAGES = ("core", "agents")
+
+
+def _project_modules() -> list:
+    return [(name, module) for name, module in list(sys.modules.items())
+            if name.split(".")[0] in PROJECT_PACKAGES and getattr(module, "__file__", None)]
+
+
+def _process_start_time() -> float | None:
+    try:
+        return os.stat(f"/proc/{os.getpid()}").st_ctime  # Linux (Streamlit Cloud)
+    except OSError:
+        return None
+
+
+def _purge_stale_project_modules() -> None:
+    """Oublie les modules du projet (core, agents) modifiés sur disque depuis leur chargement.
+
+    Streamlit ré-exécute app.py dans le même processus : après un redéploiement à chaud
+    (git pull sur Streamlit Cloud), un ancien core.analysis resté dans sys.modules masquait
+    le code à jour (AttributeError: analysis.AUDITOR). Ces modules sont alors réimportés.
+    """
+    process_start = _process_start_time()
+    stale = False
+    for _, module in _project_modules():
+        loaded_at = getattr(module, "_trace_loaded_at", process_start)
+        try:
+            stale |= loaded_at is not None and os.path.getmtime(module.__file__) > loaded_at
+        except OSError:
+            stale = True
+    if stale:
+        for name, _ in _project_modules():
+            del sys.modules[name]
+
+
+def _stamp_project_modules() -> None:
+    now = time.time()
+    for _, module in _project_modules():
+        if not hasattr(module, "_trace_loaded_at"):
+            module._trace_loaded_at = now
+
+
+_purge_stale_project_modules()
+
+from core import analysis, config  # noqa: E402
+from core.ingestion import ingest_run  # noqa: E402
+from core.llm_client import LLMError, LLMSettings  # noqa: E402
+from core.run_manager import TraceError, get_extension, init_run, load_problematique, save_problematique  # noqa: E402
+
+_stamp_project_modules()
 
 config.LOGS_DIR.mkdir(parents=True, exist_ok=True)
 logging.basicConfig(
