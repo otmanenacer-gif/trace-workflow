@@ -25,6 +25,9 @@ Pour l'entretien de régression de l'étape 4.1 (Regression_otmane.txt, 388 tour
 tests/synthetic_stage4_otmane.py. Pour les entretiens synthétiques de l'étape 5 (tests/synthetic_stage5.py : A à H, et
 tests/synthetic_stage5_long.py : Etape5_long.txt, 190 tours), les étapes 3 et 4 et le Trajectory Mapper sont simulés par ces
 modules ; pour l'entretien de référence de l'étape 4, le Trajectory Mapper suit synthetic_stage5.REFERENCE_PLAN.
+Pour l'étape 6, le Cross-Interview Comparator simulé suit tests/synthetic_stage6.GOOD_PLAN (corpus synthétique
+ENT_A … ENT_Q, sorties d'étape 5 produites par le vrai orchestrateur) ; un entretien hors de ce plan n'est cité par
+aucune affirmation.
 Pour tout autre entretien, les agents simulés de l'étape 3 ne renvoient rien, l'étape 4 simulée
 classe chaque candidat « incertain » et l'étape 5 simulée ne décrit aucune configuration.
 """
@@ -54,11 +57,14 @@ from tests import synthetic_stage4_long as stage4_long  # noqa: E402
 from tests import synthetic_stage4_otmane as otmane  # noqa: E402
 from tests import synthetic_stage5 as stage5  # noqa: E402
 from tests import synthetic_stage5_long as stage5_long  # noqa: E402
-from tests.fake_llm import (ACCOUNTABILITY, AUDITOR, INTERACTION, LONG_DISTANCE, PRACTICE, TRAJECTORY,  # noqa: E402
-                            FakeTransport, text_response)
+from tests import synthetic_stage6 as stage6  # noqa: E402
+from tests.fake_llm import (ACCOUNTABILITY, AUDITOR, COMPARATOR, INTERACTION, LONG_DISTANCE, PRACTICE,  # noqa: E402
+                            TRAJECTORY, FakeTransport, text_response)
 
 if os.environ.get("TRACE_E2E_CACHE_DIR"):
     config.CACHE_DIR = Path(os.environ["TRACE_E2E_CACHE_DIR"])
+if os.environ.get("TRACE_E2E_CROSS_DIR"):
+    config.CROSS_INTERVIEW_DIR = Path(os.environ["TRACE_E2E_CROSS_DIR"])
 
 
 def _is_synthetic(params: dict) -> bool:
@@ -213,6 +219,7 @@ def _trajectory(params):
 
 llm_client.AnthropicTransport = lambda settings: FakeTransport(
     {PRACTICE: _practices, INTERACTION: _signals, AUDITOR: _audit, LONG_DISTANCE: _long_distance,
-     ACCOUNTABILITY: _accountability, TRAJECTORY: _trajectory})
+     ACCOUNTABILITY: _accountability, TRAJECTORY: _trajectory,
+     COMPARATOR: stage6.scripted_comparator(stage6.GOOD_PLAN)})
 
 runpy.run_path(str(ROOT / "app.py"), run_name="__main__")

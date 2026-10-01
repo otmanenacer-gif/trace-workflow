@@ -4,7 +4,8 @@ Ingestion déterministe des entretiens (sans IA), puis, uniquement sur action
 explicite de l'utilisateur, l'étape 3 : deux agents IA indépendants
 (Practice Extractor et Interaction Signal Reader), puis l'étape 4 : épisodes
 d'accountability (candidats déterministes, au plus un appel LLM par entretien), puis
-l'étape 5 : configuration et trajectoire intra-entretien (au plus un appel LLM par entretien).
+l'étape 5 : configuration et trajectoire intra-entretien (au plus un appel LLM par entretien), puis
+l'étape 6 : comparaison inter-entretiens, sur les seules sorties de l'étape 5 importées (un appel LLM par corpus).
 
 Lancement : streamlit run app.py
 """
@@ -64,6 +65,7 @@ def _stamp_project_modules() -> None:
 _purge_stale_project_modules()
 
 from core import accountability, analysis, config, stage3_restore, stage4_restore, trajectory  # noqa: E402
+from core import cross_interview, cross_interview_corpus  # noqa: E402
 from core.ingestion import ingest_run  # noqa: E402
 from core.llm_client import LLMError, LLMSettings  # noqa: E402
 from core.run_manager import TraceError, get_extension, init_run, load_problematique, save_problematique  # noqa: E402
@@ -138,6 +140,16 @@ def render_pipeline(run: dict | None, llm_enabled: bool) -> None:
             state = run["pipeline"][step] if run else "prête"
             icon = "🟢" if run and "échec" not in state else ("🟠" if run else "🔵")
             st.markdown(f"{icon} **{index}. {step}** — {state}")
+        elif step == config.CROSS_INTERVIEW_STEP:
+            last = st.session_state.get("stage6_last")
+            if last:
+                warn = last["status"] not in cross_interview.DONE_STATUSES
+                st.markdown(f"{'🟠' if warn else '🟢'} **{index}. {step}** (IA) — {last['status']} "
+                            f"({last['corpus_n_usable']}/{last['corpus_n_total']} entretien(s) exploitable(s))")
+            elif llm_enabled:
+                st.markdown(f"🔵 **{index}. {step}** (IA) — prête, sur import des sorties de l'étape 5")
+            else:
+                st.markdown(f"⚪ **{index}. {step}** (IA) — _désactivée (clé API ou modèle absent)_")
         elif step in ai_steps:
             state = run["pipeline"].get(step, "inactive") if run else "inactive"
             if state != "inactive":
@@ -882,6 +894,221 @@ def render_stage5_section(run: dict) -> None:
     render_stage5_results(st.session_state.get("last_run") or run)
 
 
+# --- Étape 6 — comparaison inter-entretiens -----------------------------------------------------------------
+
+MODE_LABELS = {cross_interview_corpus.MODE_BLOCKED: "bloqué (moins de deux entretiens exploitables)",
+               cross_interview_corpus.MODE_EXPLORATORY: "EXPLORATOIRE (deux entretiens)",
+               cross_interview_corpus.MODE_COMPARATIVE: "comparatif"}
+CROSS_TYPE_LABELS = {
+    "recurring_boundary": "frontière récurrente", "divergent_boundary": "frontières divergentes",
+    "recurring_accounting_move": "manière de rendre compte récurrente",
+    "divergent_accounting_move": "manières de rendre compte divergentes",
+    "recurring_student_role_criterion": "critère du métier d'étudiant récurrent",
+    "divergent_student_role_criterion": "critères du métier d'étudiant divergents",
+    "ordinary_zone_pattern": "zone ordinaire", "exception_pattern": "exception", "contextual_association":
+    "association contextuelle (observée, non causale)", "temporal_pattern": "changement temporel validé",
+    "unresolved_cross_case_contrast": "contraste non résolu", "minority_configuration": "configuration minoritaire",
+    "negative_case": "cas négatif"}
+POSITION_LABELS = {"explicit_presence": "présence explicite", "explicit_refusal": "refus explicite",
+                   "contrary_case": "cas contraire", "divergent_variant": "variante", "not_observed": "non observé",
+                   "negative_case": "cas négatif"}
+DIFFERENCE_KEYS = ("divergent_boundaries", "divergent_accounting_moves", "divergent_student_role_criteria",
+                   "contextual_associations", "unresolved_cross_case_contrasts", "minority_configurations")
+
+
+def _stage6_uploads(run: dict | None) -> list[tuple[str, bytes]]:
+    uploads = st.file_uploader("Sorties de l'étape 5 (3 JSON par entretien : student_trajectory, validation, manifest)",
+                               type=["json"], accept_multiple_files=True, key="stage6_files")
+    files = [(u.name, u.getvalue()) for u in uploads or []]
+    run_files = cross_interview_corpus.run_stage5_uploads(run) if run else []
+    if run_files and st.checkbox(f"Inclure les sorties de l'étape 5 du run en cours ({len(run_files)} fichier(s))",
+                                 value=True, key="stage6_include_run"):
+        files += run_files
+    return files
+
+
+def render_stage6_corpus(prepared) -> None:
+    checked = prepared.checked
+    st.markdown(f"**N importés : {checked['n_total']}** · **N exploitables : {checked['n_usable']}** · mode : "
+                f"**{MODE_LABELS[checked['mode']]}**")
+    st.table([{"interview_id": r["interview_id"],
+               "statut": ("✅ " if r["status"] == cross_interview_corpus.STATUS_USABLE else "❌ ") + r["status"],
+               "claims": r["claims"] if r["claims"] is not None else "—",
+               "needs_review": r["needs_review"] if r["needs_review"] is not None else "—",
+               "configuration": CONFIGURATION_LABELS.get(r["configuration"], r["configuration"] or "—"),
+               "importé": ", ".join(f["imported_name"] for f in r["files"].values())} for r in checked["rows"]])
+    for r in checked["rows"]:
+        if r["reasons"]:
+            st.error(f"{r['interview_id']} exclu : " + " ".join(r["reasons"]))
+        for warning in r["warnings"]:
+            st.caption(f"{r['interview_id']} : {warning}")
+    for item in checked["unrecognized"]:
+        st.warning(f"Fichier ignoré — {item['file']} : {item['reason']}")
+    for note in checked["notes"]:
+        st.caption(note)
+    if checked["mode"] == cross_interview_corpus.MODE_BLOCKED:
+        st.error("Étape 6 bloquée : moins de deux entretiens exploitables. Importez au moins deux triplets valides.")
+    elif checked["mode"] == cross_interview_corpus.MODE_EXPLORATORY:
+        st.warning("Deux entretiens exploitables seulement : la comparaison sera marquée EXPLORATOIRE (« présent dans "
+                   "les deux entretiens disponibles », jamais une généralité).")
+
+
+def render_stage6_launcher(files: list[tuple[str, bytes]], prepared) -> None:
+    settings = LLMSettings.from_env()
+    if not settings.enabled:
+        st.warning(settings.disabled_reason())
+        return
+    force = st.checkbox("Forcer une nouvelle comparaison (ignore le cache de l'étape 6)", key="stage6_force")
+    plan = cross_interview.plan_stage6(prepared, settings, force=force)
+    ratio = plan["payload_chars"] / plan["raw_stage5_chars"] if plan["raw_stage5_chars"] else 0
+    st.info(
+        f"**1 appel LLM pour tout le corpus** (aucun s'il est bloqué ou en cache), sur une représentation compacte "
+        f"préparée sans IA à partir des seules sorties de l'étape 5 : **{plan['calls']} appel(s) API** prévu(s)"
+        + (" — résultat en cache" if plan["cached"] else "")
+        + f" · ≈ {format_count(plan['estimated_input_tokens'])} tokens estimés en entrée · représentation "
+          f"{format_count(plan['payload_chars'])} caractères ({ratio:.0%} des JSON de l'étape 5) · aucune étape 3, 4 "
+          "ou 5 relancée.")
+    if plan["over_single_call_threshold"]:
+        st.warning(f"Représentation au-delà du seuil d'un appel unique ({cross_interview.SINGLE_CALL_MAX_INPUT_TOKENS} "
+                   "tokens) : l'appel aura lieu, signalé (PAYLOAD_OVER_THRESHOLD).")
+    clicked = st.button(f"Lancer la comparaison inter-entretiens ({plan['calls']} appel(s) API payant(s))",
+                        type="primary", key="stage6_launch", disabled=plan["blocked"])
+    if not clicked:
+        return
+    with st.spinner("Étape 6 en cours (contrôle du corpus, préparation déterministe, Comparator, validation)…"):
+        try:
+            st.session_state.stage6_last = cross_interview.run_stage6(files, settings=settings, force=force)
+        except LLMError as exc:
+            st.error(exc.user_message)
+            return
+        except (OSError, ValueError, KeyError) as exc:
+            logging.error("Étape 6 interrompue : %s", type(exc).__name__)
+            st.error(f"Étape 6 interrompue ({type(exc).__name__}).")
+            return
+    st.rerun()
+
+
+def _cross_row(claim: dict) -> dict:
+    label = CROSS_TYPE_LABELS.get(claim["claim_type"], claim["claim_type"])
+    if claim.get("model_claim_type"):
+        label += f" (requalifié : {CROSS_TYPE_LABELS.get(claim['model_claim_type'], claim['model_claim_type'])})"
+    return {"id": claim["cross_claim_id"], "type": label, "description": claim["description_display"],
+            "entretiens": f"{claim['n_supporting_interviews']}/{claim['corpus_n_usable']} : "
+                          + ", ".join(claim["interview_ids"]),
+            "contre-exemples": ", ".join(f"{c['interview_id']} ({POSITION_LABELS.get(c['relation'], c['relation'])})"
+                                         for c in claim["counterexamples"]),
+            "non observés": claim["n_not_observed_interviews"],
+            "appuis à revoir": ", ".join(claim["review_only_interview_ids"]),
+            "confiance": claim["confidence"],
+            "à revoir": ", ".join(claim["review_reasons"]) or ("oui" if claim["needs_review"] else "")}
+
+
+def render_stage6_results(last: dict | None, current_corpus_id: str | None = None) -> None:
+    if not last:
+        return
+    if current_corpus_id and last.get("corpus_id") != current_corpus_id:
+        st.warning(f"Résultat affiché : corpus précédent ({last.get('corpus_id')}), différent des fichiers actuellement "
+                   "importés — relancez la comparaison pour ce corpus.")
+    outputs = cross_interview.read_outputs(Path(last["corpus_dir"]))
+    manifest = json.loads(outputs["manifest"]) if outputs["manifest"] else last
+    st.markdown(f"**Dernière exécution (étape 6) :** {manifest.get('api_calls') or 0} appel(s) API — "
+                f"{'repris du cache TRACE' if manifest.get('cache_hit') else 'nouvel appel' if manifest.get('llm_called') else 'aucun appel'}"
+                f" — statut {ACC_STATUS_ICONS.get(manifest['status'], '')} **{manifest['status']}** — "
+                f"N importés : **{manifest['corpus_n_total']}** · N exploitables : **{manifest['corpus_n_usable']}**"
+                f" · aucun appel aux étapes 3, 4 ou 5")
+    if manifest.get("error"):
+        st.error(manifest["error"].get("message") or manifest["error"].get("code"))
+    if not outputs["comparison"]:
+        return
+    document = json.loads(outputs["comparison"])
+    if document["exploratory"]:
+        st.warning("Comparaison EXPLORATOIRE : deux entretiens seulement — rien n'est généralisable.")
+    kept = [c for c in document["cross_case_claims"] if c["usable_for_next_stages"]]
+    st.markdown(" · ".join([f"Affirmations retenues : **{len(kept)}**",
+                            f"frontières récurrentes : **{len(document['recurring_boundaries'])}**",
+                            f"différences : **{sum(len(document[k]) for k in DIFFERENCE_KEYS)}**",
+                            f"critères du métier d'étudiant : **{len(document['student_role_criterion_patterns'])}**",
+                            f"zones ordinaires : **{len(document['ordinary_zone_patterns'])}**",
+                            f"exceptions : **{len(document['exception_patterns'])}**",
+                            f"cas négatifs : **{len(document['negative_cases'])}**",
+                            f"à revoir : **{document['cross_claims_needing_review_count']}**"]))
+    st.markdown("**Configurations (étape 5), comptées en entretiens**")
+    st.dataframe([{"configuration": CONFIGURATION_LABELS.get(k, k), "entretiens": v["share"],
+                   "interview_ids": ", ".join(v["interview_ids"])}
+                  for k, v in document["configuration_distribution"].items()], hide_index=True)
+    st.markdown(f"**Synthèse** — {document['cross_case_summary_display']}")
+    if kept:
+        st.markdown(f"**Affirmations inter-entretiens** ({len(kept)})")
+        st.dataframe([_cross_row(c) for c in kept], hide_index=True)
+    if document["negative_cases"]:
+        st.markdown(f"**Cas négatifs** ({len(document['negative_cases'])})")
+        st.dataframe([{"id": n["negative_case_id"], "entretien": n["interview_id"],
+                       "relation": ", ".join(POSITION_LABELS.get(r, r) for r in n["relations"]),
+                       "complique": ", ".join(n["related_cross_claim_ids"]), "description": " / ".join(n["descriptions"]),
+                       "appuis (étape 5)": ", ".join(n["support_ids"]), "statut": n["validation_status"],
+                       "à revoir": "oui" if n["needs_review"] else ""} for n in document["negative_cases"]],
+                     hide_index=True)
+    with st.expander("Détail par catégorie (frontières, différences, critères, zones ordinaires, exceptions)"):
+        by_id = {c["cross_claim_id"]: c for c in document["cross_case_claims"]}
+        for title, keys in (("Frontières récurrentes", ("recurring_boundaries",)), ("Différences", DIFFERENCE_KEYS),
+                            ("Zones ordinaires", ("ordinary_zone_patterns",)),
+                            ("Exceptions", ("exception_patterns",)), ("Changements temporels validés", (
+                                "temporal_patterns",))):
+            ids = [i for k in keys for i in document[k]]
+            st.markdown(f"**{title}** ({len(ids)})")
+            for i in ids:
+                c = by_id[i]
+                st.caption(f"{i} — {c['description_display']} — {c['n_supporting_interviews']}/{c['corpus_n_usable']} "
+                           f"entretiens : {', '.join(c['interview_ids'])}")
+        patterns = document["student_role_criterion_patterns"]
+        st.markdown(f"**Critères du métier d'étudiant** ({len(patterns)})")
+        if patterns:
+            st.dataframe([{"id": p["cross_claim_id"], "critère": p["criterion_label"] or "",
+                           **{POSITION_LABELS[k]: ", ".join(v) for k, v in p["positions"].items()},
+                           "à revoir": ", ".join(p["review_reasons"])} for p in patterns], hide_index=True)
+    validation = json.loads(outputs["validation"]) if outputs["validation"] else {}
+    issues = [i for i in validation.get("issues", []) if i["severity"] != "info"]
+    if issues:
+        st.markdown(f"**Avertissements de validation** ({len(issues)})")
+        st.dataframe([{"objet": i["object_id"], "code": i["code"], "gravité": i["severity"], "message": i["message"]}
+                      for i in issues], hide_index=True)
+    cols = st.columns(3)
+    for col, key, filename in ((cols[0], "comparison", config.CROSS_INTERVIEW_COMPARISON_FILENAME),
+                               (cols[1], "validation", config.CROSS_INTERVIEW_VALIDATION_FILENAME),
+                               (cols[2], "manifest", config.CROSS_INTERVIEW_MANIFEST_FILENAME)):
+        if outputs[key]:
+            col.download_button(f"Télécharger {filename}", data=outputs[key], file_name=filename,
+                                mime="application/json", key=f"dl_stage6_{key}")
+
+
+def render_stage6_section(run: dict | None) -> None:
+    st.header("Étape 6 — Comparaison inter-entretiens")
+    st.markdown(
+        "Compare **plusieurs entretiens** à partir des seules sorties **validées de l'étape 5** (jamais les "
+        "transcriptions) : quelles **frontières**, quels **critères du métier d'étudiant**, quelles **manières de "
+        "rendre compte**, **zones ordinaires**, **exceptions** et **tensions** reviennent, varient ou s'opposent d'un "
+        "entretien à l'autre, et quels **cas négatifs** compliquent ces régularités. Les comptes portent sur des "
+        "**entretiens** (jamais des occurrences), un critère non mentionné est **non observé** (jamais « absent »), "
+        "et aucune typologie de personnes n'est construite.")
+    st.subheader("Constituer le corpus Stage 6")
+    st.markdown(
+        "Importez les **3 JSON de l'étape 5** de chaque entretien (`student_trajectory.json`, "
+        "`student_trajectory_validation.json`, `student_trajectory_manifest.json`, préfixés ou non). Ils sont reconnus "
+        "par leur contenu, regroupés par `interview_id` et vérifiés (versions, analyse complète, aucune erreur de "
+        "validation, empreintes et comptes cohérents, aucune altération, pas de doublon ambigu). Un entretien invalide "
+        "est exclu avec sa raison sans bloquer les autres. **Aucun appel API** pour cet import.")
+    files = _stage6_uploads(run)
+    prepared = None
+    if not files:
+        st.info("Aucune sortie de l'étape 5 importée.")
+    else:
+        prepared = cross_interview.prepare_stage6(files)
+        render_stage6_corpus(prepared)
+        if not prepared.blocked:
+            render_stage6_launcher(files, prepared)
+    render_stage6_results(st.session_state.get("stage6_last"), prepared.corpus_id if prepared else None)
+
+
 st.set_page_config(page_title="TRACE", layout="wide")
 
 # 1. Titre et 2. introduction
@@ -939,7 +1166,8 @@ st.header("Pipeline")
 st.caption(
     "Actives : la structuration des entretiens (sans IA) et, sur action explicite, "
     "l'extraction des pratiques et l'analyse interactionnelle (étape 3), puis la construction des épisodes "
-    "d'accountability (étape 4) et la configuration intra-entretien (étape 5). Les autres étapes restent inactives."
+    "d'accountability (étape 4), la configuration intra-entretien (étape 5) et la comparaison inter-entretiens "
+    "(étape 6). Les autres étapes restent inactives."
 )
 pipeline_area = st.container()
 
@@ -1066,6 +1294,9 @@ if run:
     render_stage5_section(st.session_state.get("last_run") or run)
 else:
     st.info("Aucun run lancé pendant cette session.")
+
+# 11. Étape 6 — comparaison inter-entretiens (sorties de l'étape 5 importées ; aucun run nécessaire)
+render_stage6_section(st.session_state.get("last_run"))
 
 # Le pipeline est rempli en dernier : il reflète aussi une analyse IA lancée pendant cette exécution.
 with pipeline_area:

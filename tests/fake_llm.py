@@ -21,6 +21,7 @@ AUDITOR = "speaker_attribution_auditor"
 LONG_DISTANCE = "interaction_signal_reader_long_distance"  # lecture à longue distance (entretien long)
 ACCOUNTABILITY = "accountability_episode_builder"  # étape 4 : épisodes d'accountability
 TRAJECTORY = "trajectory_mapper"  # étape 5 : configuration et trajectoire intra-entretien
+COMPARATOR = "cross_interview_comparator"  # étape 6 : comparaison inter-entretiens
 
 
 def text_response(payload, *, input_tokens=1200, output_tokens=300, stop_reason="end_turn", model="fake-model",
@@ -62,6 +63,8 @@ def agent_of(params: dict) -> str:
     properties = params["output_config"]["format"]["schema"]["properties"]
     if "assessments" in properties:
         return AUDITOR
+    if "cross_case_claims" in properties:
+        return COMPARATOR
     if "student_role_criteria" in properties:
         return TRAJECTORY
     if "episodes" in properties:
@@ -73,7 +76,7 @@ def agent_of(params: dict) -> str:
 
 class FakeTransport:
     """Répond selon l'agent (déduit du schéma demandé) : PRACTICE, INTERACTION, AUDITOR, LONG_DISTANCE,
-    ACCOUNTABILITY (étape 4) ou TRAJECTORY (étape 5).
+    ACCOUNTABILITY (étape 4), TRAJECTORY (étape 5) ou COMPARATOR (étape 6).
 
     Un appel à un agent sans réponse prévue échoue (KeyError) : un test qui ne prévoit
     pas d'audit des locuteurs vérifie donc aussi qu'aucun appel d'audit n'a lieu.
