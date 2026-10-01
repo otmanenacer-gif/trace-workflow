@@ -41,6 +41,7 @@ ENV_MAX_RETRIES = "TRACE_LLM_MAX_RETRIES"
 ENV_MAX_TOKENS = "TRACE_LLM_MAX_TOKENS"
 ENV_EFFORT = "TRACE_LLM_EFFORT"
 ENV_TEMPERATURE = "TRACE_LLM_TEMPERATURE"
+ENV_INTERACTION_CHUNK_TOKENS = "TRACE_INTERACTION_CHUNK_TOKENS"
 
 DEFAULT_MAX_CONCURRENCY = 2
 MAX_CONCURRENCY_LIMIT = 8
@@ -53,6 +54,9 @@ BACKOFF_BASE_SECONDS = 2.0
 BACKOFF_MAX_SECONDS = 30.0
 RETRY_AFTER_MAX_SECONDS = 60.0
 EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
+# Interaction Signal Reader : taille cible (tokens estimés) d'un bloc d'entretien long (voir core/interaction_chunking.py)
+DEFAULT_INTERACTION_CHUNK_TOKENS = 5000
+INTERACTION_CHUNK_TOKENS_MIN, INTERACTION_CHUNK_TOKENS_MAX = 500, 30000
 
 RETRYABLE_STATUS = {408, 409, 429}
 
@@ -100,6 +104,7 @@ class LLMSettings:
     max_tokens: int = DEFAULT_MAX_TOKENS
     effort: str | None = None
     temperature: float | None = None
+    interaction_chunk_tokens: int = DEFAULT_INTERACTION_CHUNK_TOKENS
     problems: tuple[str, ...] = ()
 
     @classmethod
@@ -123,6 +128,8 @@ class LLMSettings:
             max_tokens=_int_env(env, ENV_MAX_TOKENS, DEFAULT_MAX_TOKENS, 1024, 128000, problems),
             effort=effort,
             temperature=_float_env(env, ENV_TEMPERATURE, None, problems),
+            interaction_chunk_tokens=_int_env(env, ENV_INTERACTION_CHUNK_TOKENS, DEFAULT_INTERACTION_CHUNK_TOKENS,
+                                              INTERACTION_CHUNK_TOKENS_MIN, INTERACTION_CHUNK_TOKENS_MAX, problems),
             problems=tuple(problems),
         )
 
