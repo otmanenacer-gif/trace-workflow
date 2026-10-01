@@ -34,7 +34,7 @@ PIPELINE_STEPS = (
     "Extraction des pratiques",
     "Analyse interactionnelle",
     "Construction des épisodes d'accountability",
-    "Trajectoires individuelles",
+    "Configuration et trajectoire intra-entretien",
     "Comparaison transversale",
     "Construction des régimes",
     "Challenger",
@@ -63,6 +63,12 @@ ACCOUNTABILITY_STEP = PIPELINE_STEPS[3]
 ACCOUNTABILITY_EPISODES_FILENAME = "accountability_episodes.json"
 ACCOUNTABILITY_MANIFEST_FILENAME = "accountability_episode_manifest.json"
 ACCOUNTABILITY_VALIDATION_FILENAME = "accountability_episode_validation.json"
+
+# Étape 5 : configuration et trajectoire intra-entretien (consomme les sorties de l'étape 4), mêmes dossiers
+TRAJECTORY_STEP = PIPELINE_STEPS[4]
+STUDENT_TRAJECTORY_FILENAME = "student_trajectory.json"
+STUDENT_TRAJECTORY_VALIDATION_FILENAME = "student_trajectory_validation.json"
+STUDENT_TRAJECTORY_MANIFEST_FILENAME = "student_trajectory_manifest.json"
 
 
 def load_env_file(path: Path | None = None) -> list[str]:
