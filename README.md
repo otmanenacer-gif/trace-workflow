@@ -8,8 +8,12 @@ des entretiens semi-directifs. **Version actuelle :**
 1. ingestion **déterministe** des entretiens (sans IA) ;
 2. **étape 3** — deux agents IA **indépendants**, lancés **en parallèle** et
    uniquement sur action explicite : *Practice Extractor* (ce que l'étudiant·e
-   fait, avec ou sans IAG) et *Interaction Signal Reader* (comment il ou elle
-   le raconte). Aucune synthèse, aucune analyse théorique à ce stade.
+   fait, ou ne fait pas, avec ou sans IAG) et *Interaction Signal Reader*
+   (comment il ou elle le raconte). Aucune synthèse, aucune analyse théorique à ce stade ;
+3. **étape 3.5** — *Speaker Attribution Auditor* : avant les deux agents,
+   signale les tours dont le locuteur semble mal attribué (règles
+   déterministes, puis au plus un appel LLM par entretien, aucun s'il n'y a
+   pas de tour suspect). La transcription n'est **jamais** modifiée.
 
 ## Installation
 
@@ -46,6 +50,9 @@ python -m pytest tests/test_evidence_validator.py     # validation des citations
 python -m pytest tests/test_analysis_cache.py         # cache des analyses
 python -m pytest tests/test_analysis_pipeline.py      # indépendance, parallélisme, échecs isolés
 python -m pytest tests/test_app_stage3.py             # interface de l'étape 3 (AppTest)
+python -m pytest tests/test_speaker_attribution_auditor.py  # étape 3.5 : audit des locuteurs
+python -m pytest tests/test_interpretation_guard.py   # étape 3.5 : « réparation » en contexte
+python -m pytest tests/test_stage3_5_synthetic.py     # étape 3.5 : scénario global synthétique
 ```
 
 Les tests n'utilisent que des documents **synthétiques** générés à la volée
@@ -65,10 +72,12 @@ Démonstration locale du parcours complet de l'étape 3 **sans clé ni appel
 réel** (LLM simulé) : `streamlit run tests/e2e/fake_llm_app.py`.
 
 Test **réel** de l'étape 3 sur l'entretien synthétique (2 appels API,
-**consomme des tokens**, exige une option explicite) :
+**consomme des tokens**, exige une option explicite) ; `--stage35` utilise
+l'entretien synthétique de l'étape 3.5 (3 appels : audit des locuteurs + 2 agents) :
 
 ```bash
 python scripts/smoke_test_stage3.py --confirm-api-cost
+python scripts/smoke_test_stage3.py --confirm-api-cost --stage35
 ```
 
 ## Fonctionnement
@@ -85,9 +94,12 @@ python scripts/smoke_test_stage3.py --confirm-api-cost
    « Analyse IA — Étape 3 », choisir « Test — un entretien » ou « Corpus
    complet » (confirmation supplémentaire), puis cliquer sur « Lancer les deux
    analyses IA ». Le bouton indique le nombre d'appels API payants prévus
-   (2 par entretien absent du cache). L'interface affiche ensuite les statuts
-   des deux agents, le nombre de pratiques, de signaux et de citations
-   invalides, les tokens consommés, un aperçu et les téléchargements JSON.
+   (2 par entretien absent du cache, plus 1 d'audit des locuteurs seulement si
+   des tours suspects sont détectés). L'interface affiche ensuite les statuts
+   de l'audit et des deux agents, le nombre de tours suspects et à vérifier, de
+   pratiques, de signaux et de citations invalides, les tokens consommés, un
+   aperçu, les avertissements de locuteur (« Ces suggestions ne modifient pas
+   la transcription originale. ») et les téléchargements JSON.
 
 L'ingestion ne déclenche jamais d'appel IA. Les étapes du pipeline au-delà
 de l'extraction des pratiques et de l'analyse interactionnelle restent inactives.
@@ -103,6 +115,8 @@ data/outputs/<run_id>/interviews/<interview_id>/
     structured_transcript.json              tours de parole
     ingestion_report.json                   rapport de qualité
     analysis/                               étape 3 (si lancée)
+        speaker_attribution_audit.json      audit des locuteurs (étape 3.5) : tours suspects, suggestions
+        speaker_audit_manifest.json         version, empreintes, modèle, cache, tokens de l'audit
         practice_extractor.json             pratiques, citations annotées
         interaction_signals.json            signaux interactionnels, citations annotées
         practice_manifest.json              agent, versions, empreintes, modèle, cache, tokens
@@ -181,15 +195,24 @@ avertissements et le statut `PASS`, `PASS_WITH_WARNINGS` ou `FAIL`. Aucune
 
 ## Étape 3 — analyse IA
 
-Documentation complète : [`docs/agents_stage3.md`](docs/agents_stage3.md).
+Documentation complète : [`docs/agents_stage3.md`](docs/agents_stage3.md) et,
+pour l'audit des locuteurs, [`docs/speaker_attribution_audit.md`](docs/speaker_attribution_audit.md).
 
 - **Indépendance** : chaque agent reçoit ses propres consignes, son propre
   schéma et le même entretien compact ; jamais la sortie de l'autre.
+- **Speaker Attribution Auditor** (étape 3.5) : règles déterministes puis, s'il
+  y a des tours suspects, UN appel sur un extrait (candidats + voisins) ; ne
+  modifie jamais la transcription ; les tours douteux sont signalés aux deux
+  agents par un `speaker_warning`, le locuteur officiel restant inchangé.
 - **Practice Extractor** : descriptif et « aveugle » à la théorie ; reprend
-  les raisons données par l'enquêté·e, n'en invente pas.
+  les raisons données par l'enquêté·e, n'en invente pas. Cherche les usages ET
+  les non-usages / refus (`non_use_reason`), y compris contradictoires sur un
+  même thème, sans les fusionner ; décrit aussi les usages personnels et
+  professionnels (`practice_domain`).
 - **Interaction Signal Reader** : relève des marques observables (hésitation,
   autocorrection, minimisation, affect explicitement nommé, référence au
-  jugement d'un·e enseignant·e, contradiction entre tours…) sans inférer
+  jugement d'un·e enseignant·e, contradiction entre tours, préférence,
+  évaluation métadiscursive de sa propre formulation…) sans inférer
   d'état psychologique.
 - **Preuves** : chaque pratique et chaque signal cite l'entretien ; un
   validateur déterministe vérifie que chaque citation est une sous-chaîne
@@ -199,8 +222,12 @@ Documentation complète : [`docs/agents_stage3.md`](docs/agents_stage3.md).
 - **Sécurité** : la transcription est une donnée, jamais une instruction ;
   elle est encadrée et échappée ; la sortie est contrainte par un schéma JSON
   puis revalidée.
+- **Garde-fou** : vocabulaire interprétatif signalé dans les champs rédigés ;
+  « réparation » est examinée en contexte (la réparation d'un lave-vaisselle
+  n'est pas signalée, une « réparation discursive » l'est).
 - **Cache** : une analyse n'est repayée que si le fichier, le transcript, le
-  prompt, la version de l'agent, le schéma, le modèle ou les paramètres changent.
+  prompt, la version de l'agent, le schéma, le modèle ou les paramètres
+  changent ; modifier un agent ou l'auditeur ne relance que lui.
 - **Coût** : tokens d'entrée / sortie et nombre d'appels affichés ; aucun
   montant inventé.
 - **Configuration** : `ANTHROPIC_API_KEY` et `ANTHROPIC_MODEL` (environnement
@@ -222,14 +249,17 @@ core/analysis.py               étape 3 : deux agents en parallèle, sorties, ma
 core/analysis_cache.py         cache déterministe des analyses
 core/evidence_validator.py     validation déterministe des citations
 core/interpretation_guard.py   détection du vocabulaire interprétatif dans les sorties
+core/speaker_attribution_auditor.py  étape 3.5 : audit des locuteurs (règles, extrait, revalidation)
 agents/base.py                 citation, identité versionnée d'un agent, entretien compact
 agents/practice_extractor.py   agent 1 : version, schéma de sortie
 agents/interaction_signal_reader.py  agent 2 : version, schéma de sortie
 prompts/practice_extractor.md  consignes de l'agent 1
 prompts/interaction_signal_reader.md  consignes de l'agent 2
+prompts/speaker_attribution_auditor.md  consignes de l'auditeur des locuteurs
 scripts/smoke_test_stage3.py   test réel (payant, sur confirmation) sur l'entretien synthétique
 docs/data_model.md             format des données transmis aux agents
 docs/agents_stage3.md          étape 3 : méthode, schémas, validation, cache, configuration
+docs/speaker_attribution_audit.md  étape 3.5 : audit de l'attribution des locuteurs
 data/inputs|outputs/   données des runs (non versionnées)
 logs/                  journal trace.log (non versionné)
 tests/                 tests automatiques (pytest), documents synthétiques uniquement

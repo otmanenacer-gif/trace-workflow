@@ -8,7 +8,9 @@ A. app.py sans clé API : l'ingestion fonctionne, l'analyse IA est désactivée
 B. tests/e2e/fake_llm_app.py (LLM simulé) : import de l'entretien synthétique,
    ingestion, puis étape 3 en mode test (2 appels simulés), statuts, comptes,
    citation inventée détectée, second lancement repris du cache, mode corpus
-   soumis à confirmation.
+   soumis à confirmation ;
+C. étape 3.5 (LLM simulé) : entretien synthétique dont un tour est mal attribué,
+   1 appel d'audit + 2 agents, avertissement affiché, transcription inchangée.
 
 Non collecté par pytest (nécessite Playwright et un navigateur). Les runs
 créés dans data/ pendant le test sont supprimés à la fin.
@@ -110,7 +112,8 @@ def scenario_fake_llm(browser, url: str, interview: Path, shots: Path) -> None:
     row = table.locator("tbody tr").first
     cells = [c.strip() for c in row.locator("td").all_inner_texts()]
     print("   ligne de résultats :", cells)
-    assert cells[3:6] == ["6", "10", "1"], cells  # pratiques, signaux, citations invalides
+    assert cells[1:4] == ["✅ SUCCESS", "0", "0"], cells  # audit des locuteurs : aucun tour suspect, aucun appel
+    assert cells[6:9] == ["6", "10", "1"], cells  # pratiques, signaux, citations invalides
     page.get_by_text("Analyse IA — ENTRETIEN_SYNTHETIQUE — aperçu").click()
     expect(page.get_by_text("Anomalies de validation")).to_be_visible()
     for name in ("practice_extractor.json", "interaction_signals.json", "evidence_validation.json"):
@@ -137,6 +140,24 @@ def scenario_fake_llm(browser, url: str, interview: Path, shots: Path) -> None:
     print("   mode corpus : bouton désactivé tant que la case de confirmation n'est pas cochée")
 
 
+def scenario_stage35(browser, url: str, interview: Path, shots: Path) -> None:
+    page = browser.new_page(viewport={"width": 1400, "height": 1000})
+    page.goto(url)
+    upload_and_ingest(page, interview)
+    expect(page.get_by_text("1 tour(s) suspect(s), 1 appel(s) d'audit").first).to_be_visible(timeout=TIMEOUT_MS)
+    launch = page.get_by_role("button", name="Lancer les deux analyses IA (au plus 3 appel(s) API payant(s))")
+    expect(launch).to_be_enabled()
+    launch.click()
+    expect(page.get_by_text("Analyse IA terminée.")).to_be_visible(timeout=TIMEOUT_MS)
+    expect(page.get_by_text("3 appel(s) API — 4 900 tokens entrée — 2 250 tokens sortie")).to_be_visible()
+    title = f"Audit d'attribution des locuteurs — {si.STAGE35_INTERVIEW_ID} — 1 tour(s) suspect(s), 1 à vérifier"
+    page.get_by_text(title).click()
+    expect(page.get_by_text("Ces suggestions ne modifient pas la transcription originale.")).to_be_visible()
+    expect(page.get_by_role("button", name="Télécharger speaker_attribution_audit.json")).to_be_visible()
+    page.screenshot(path=str(shots / "C_etape_3_5_audit_locuteurs.png"), full_page=True)
+    print("C. étape 3.5 : 1 appel d'audit + 2 agents, tour mal attribué signalé, transcription non modifiable")
+
+
 def run_dirs() -> set[Path]:
     return {p for base in (ROOT / "data" / "inputs", ROOT / "data" / "outputs") for p in base.glob("run_*")}
 
@@ -151,6 +172,8 @@ def main() -> int:
     work = Path(tempfile.mkdtemp(prefix="trace_e2e_data_"))
     interview = work / si.FILENAME
     interview.write_text(si.TEXT, encoding="utf-8")
+    stage35 = work / si.STAGE35_FILES[0][0]
+    stage35.write_bytes(si.STAGE35_FILES[0][1])
     base_env = {k: v for k, v in os.environ.items() if not k.startswith(("ANTHROPIC_", "TRACE_"))}
     before = run_dirs()
     try:
@@ -162,6 +185,7 @@ def main() -> int:
             env = {**base_env, "TRACE_E2E_CACHE_DIR": str(work / "cache")}
             with streamlit_server(ROOT / "tests" / "e2e" / "fake_llm_app.py", env) as url:
                 scenario_fake_llm(browser, url, interview, args.screenshots)
+                scenario_stage35(browser, url, stage35, args.screenshots)
             browser.close()
     finally:
         for path in run_dirs() - before:

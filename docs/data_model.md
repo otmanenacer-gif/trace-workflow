@@ -161,3 +161,10 @@ Les agents ne reçoivent pas ces fichiers tels quels, mais une représentation
 compacte d'UN entretien : `interview_id`, puis pour chaque tour `turn_id`,
 `speaker`, `text` et, pour un PDF, `page`. Voir
 [`docs/agents_stage3.md`](agents_stage3.md#5-données-envoyées).
+
+Depuis l'étape 3.5, un tour dont l'attribution du locuteur paraît douteuse
+peut aussi porter `speaker_warning` (`suggested_speaker`, `confidence`),
+produit par l'auditeur des locuteurs. **`structured_transcript.json` n'est
+jamais modifié** : `speaker`, `text`, `turn_id` et `source` restent ceux de
+l'ingestion, et le locuteur officiel reste `speaker`. Voir
+[`docs/speaker_attribution_audit.md`](speaker_attribution_audit.md).

@@ -188,7 +188,8 @@ def test_ingestion_outputs_are_never_modified(tmp_path):
     assert digest() == before
     produced = sorted(p.name for p in (interview_dir / "analysis").iterdir())
     assert produced == ["evidence_validation.json", "interaction_manifest.json", "interaction_signals.json",
-                        "practice_extractor.json", "practice_manifest.json"]
+                        "practice_extractor.json", "practice_manifest.json", "speaker_attribution_audit.json",
+                        "speaker_audit_manifest.json"]
 
 
 def test_metadata_tracks_analysis_and_other_steps_stay_inactive(tmp_path):

@@ -17,11 +17,22 @@ from agents.base import AgentSpec, Evidence, Explicitness
 from core import config
 
 AGENT_NAME = "practice_extractor"
-PRACTICE_EXTRACTOR_VERSION = "1.1"
-PRACTICE_SCHEMA_VERSION = "1.1"  # 1.1 : ajout de scope_qualifier, stated_frequency réservé aux fréquences
+PRACTICE_EXTRACTOR_VERSION = "1.2"  # 1.2 : recherche explicite des non-usages et refus, usages hors études
+# Schéma 1.1 : ajout de scope_qualifier, stated_frequency réservé aux fréquences.
+# Schéma 1.2 : ajout de non_use_reason (forme du non-usage déclaré) et practice_domain (études, vie personnelle…).
+PRACTICE_SCHEMA_VERSION = "1.2"
 
 UseStatus = Literal["use", "non_use", "refusal", "hypothetical", "past_use"]
 AssessmentContext = Literal["graded", "ungraded", "exam", "class", "personal", "unknown"]
+
+# Statuts qui décrivent un non-usage : eux seuls portent un non_use_reason (sinon null).
+NON_USE_STATUSES = ("non_use", "refusal")
+# Ce sur quoi l'enquêté·e fait reposer le non-usage, tel qu'il ou elle le formule (jamais un motif supposé).
+NON_USE_REASONS = ("not_stated", "preference", "personal_rule", "external_rule", "technical_limitation", "other")
+NonUseReason = Literal[NON_USE_REASONS]  # type: ignore[valid-type]
+# Domaine de la situation : les usages personnels et professionnels sont décrits aussi, pas filtrés.
+PRACTICE_DOMAINS = ("academic", "personal", "professional", "mixed", "unknown")
+PracticeDomain = Literal[PRACTICE_DOMAINS]  # type: ignore[valid-type]
 
 # Qualificatifs de portée (« je l'utilise surtout pour… ») : ce ne sont pas des fréquences.
 # Leur présence dans stated_frequency rend la sortie non conforme au schéma.
@@ -36,6 +47,11 @@ class Practice(BaseModel):
     turn_start: str
     turn_end: str
     use_status: UseStatus
+    non_use_reason: NonUseReason | None = Field(
+        description="Pour non_use / refusal uniquement : ce sur quoi l'enquêté·e fait reposer le non-usage "
+                    "(not_stated si aucune raison n'est formulée) ; null pour les autres statuts.")
+    practice_domain: PracticeDomain = Field(
+        description="Domaine de la situation : academic, personal, professional, mixed ou unknown.")
     academic_task: str | None
     discipline: str | None
     context: str

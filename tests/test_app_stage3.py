@@ -100,3 +100,29 @@ def test_force_option_is_reset_after_each_launch(tmp_path, fake_api):
     at.button(key="ai_launch").click().run()
     assert len(fake_api.calls) == 4 and not at.checkbox(key="ai_force").value
     assert "(0 appel(s) API payant(s))" in at.button(key="ai_launch").label
+
+
+def test_speaker_audit_is_shown_and_never_editable(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-FAKE-KEY-000")
+    monkeypatch.setenv("ANTHROPIC_MODEL", "fake-model")
+    from tests.fake_llm import AUDITOR
+    transport = FakeTransport({PRACTICE: lambda p: text_response({"practices": [], "extraction_notes": None}),
+                               INTERACTION: lambda p: text_response({"signals": [], "reading_notes": None}),
+                               AUDITOR: lambda p: text_response(si.AUDIT_ASSESSMENTS)})
+    monkeypatch.setattr(llm_client, "AnthropicTransport", lambda settings: transport)
+    at = app_with_run(si.make_ingested_run(tmp_path, si.AUDIT_FILES))
+    assert "2 tour(s) suspect(s), 1 appel(s) d'audit" in texts(at.info)
+    assert "(au plus 3 appel(s) API payant(s))" in at.button(key="ai_launch").label
+    at.button(key="ai_launch").click().run()
+    assert not at.exception and len(transport.calls) == 3
+    table = at.table[-1].value
+    assert list(table["Audit locuteurs"]) == ["✅ SUCCESS"]
+    assert list(table["Tours suspects"]) == [2] and list(table["Locuteurs à vérifier"]) == [2]
+    assert "Ces suggestions ne modifient pas la transcription originale." in texts(at.info)
+    assert "Audit d'attribution des locuteurs — ENTRETIEN_LOCUTEURS — 2 tour(s) suspect(s), 2 à vérifier" in [
+        e.label for e in at.expander]
+    assert "Télécharger speaker_attribution_audit.json" in [b.label for b in at.get("download_button")]
+    # aucun champ de saisie ne permet de modifier la transcription (seule la problématique est éditable)
+    assert not at.text_input and [t.key for t in at.text_area] == ["problematique"]
+    # relance : tout vient du cache, y compris l'audit
+    assert "(0 appel(s) API payant(s))" in at.button(key="ai_launch").label

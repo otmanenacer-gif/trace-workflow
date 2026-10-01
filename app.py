@@ -34,11 +34,13 @@ AI_STATUS_ICONS = {
     analysis.STATUS_SUCCESS_WITH_WARNINGS: "⚠️", analysis.STATUS_CACHED: "♻️", analysis.STATUS_FAILED: "❌",
 }
 AI_AGENTS = {spec.name: spec for spec in analysis.AGENTS}
+AUDITOR = analysis.AUDITOR
 MODE_TEST = "Test — un entretien"
 MODE_CORPUS = "Corpus complet"
 PREVIEW_TURNS = 10
 PREVIEW_PRACTICES = 3
 PREVIEW_SIGNALS = 5
+SPEAKER_AUDIT_NOTICE = "Ces suggestions ne modifient pas la transcription originale."
 
 
 def format_size(size_bytes: int) -> str:
@@ -110,16 +112,21 @@ def render_analysis_launcher(run: dict, eligible: list[dict], settings: LLMSetti
     except (OSError, ValueError, KeyError) as exc:
         st.error(f"Transcriptions structurées illisibles : {exc}")
         return
+    at_most = "" if plan["exact"] else "au plus "
     st.info(
-        "Cette action effectue **2 appels LLM par entretien non présent dans le cache**. "
-        f"Pour cette sélection : **{plan['calls']} appel(s) API** prévu(s), "
-        f"{plan['cached']} résultat(s) déjà en cache (sans coût)."
+        "Cette action effectue **2 appels LLM par entretien non présent dans le cache** (les deux agents), "
+        "précédés d'**au plus 1 appel d'audit des locuteurs** par entretien, uniquement si des tours à "
+        "l'attribution douteuse sont détectés (sinon aucun). "
+        f"Pour cette sélection : **{at_most}{plan['calls']} appel(s) API** prévu(s), "
+        f"{plan['cached']} résultat(s) déjà en cache (sans coût). "
+        f"Présélection déterministe des locuteurs : {plan['candidate_turns']} tour(s) suspect(s), "
+        f"{plan['audit_calls']} appel(s) d'audit."
     )
     confirmed = True
     if mode == MODE_CORPUS:
         confirmed = st.checkbox("Je confirme lancer l'analyse IA sur tout le corpus.", key="ai_confirm_corpus")
     clicked = st.button(
-        f"Lancer les deux analyses IA ({plan['calls']} appel(s) API payant(s))",
+        f"Lancer les deux analyses IA ({at_most}{plan['calls']} appel(s) API payant(s))",
         type="primary", key="ai_launch", disabled=not confirmed,
     )
     if not clicked:
@@ -132,12 +139,12 @@ def render_analysis_launcher(run: dict, eligible: list[dict], settings: LLMSetti
         states[(interview_id, agent)] = status
         status_area.table([
             {"Entretien": iid,
-             **{AI_AGENTS[name].label: f"{AI_STATUS_ICONS.get(states.get((iid, name)), '')} {states.get((iid, name), '')}"
-                for name in AI_AGENTS}}
+             **{spec.label: f"{AI_STATUS_ICONS.get(states.get((iid, name)), '')} {states.get((iid, name), '')}"
+                for name, spec in ((AUDITOR.name, AUDITOR), *AI_AGENTS.items())}}
             for iid in dict.fromkeys(i for i, _ in states)
         ])
 
-    with st.spinner("Analyse IA en cours (deux agents en parallèle par entretien)…"):
+    with st.spinner("Analyse IA en cours (audit des locuteurs, puis deux agents en parallèle par entretien)…"):
         try:
             st.session_state.last_run = analysis.analyze_run(
                 run, selected, settings=settings, force=force, on_status=on_status)
@@ -179,8 +186,14 @@ def render_analysis_results(run: dict) -> None:
         agents = f["analysis"]["agents"]
         practice, signals = agents["practice_extractor"], agents["interaction_signal_reader"]
         billed = [a["usage"] for a in agents.values() if a.get("billed_this_run") and a.get("usage")]
+        audit = f["analysis"].get("speaker_audit") or {}
+        if audit.get("billed_this_run") and audit.get("usage"):
+            billed.append(audit["usage"])
         rows.append({
             "Entretien": f["analysis"]["interview_id"],
+            "Audit locuteurs": f"{AI_STATUS_ICONS.get(audit.get('status'), '')} {audit.get('status') or 'n/a'}",
+            "Tours suspects": audit.get("candidate_count") or 0,
+            "Locuteurs à vérifier": audit.get("review_count") or 0,
             "Practice Extractor": f"{AI_STATUS_ICONS.get(practice['status'], '')} {practice['status']}",
             "Interaction Reader": f"{AI_STATUS_ICONS.get(signals['status'], '')} {signals['status']}",
             "Pratiques": practice.get("item_count") or 0,
@@ -239,6 +252,39 @@ def render_analysis_results(run: dict) -> None:
                 if content:
                     col.download_button(f"Télécharger {filename}", data=content, file_name=f"{iid}_{filename}",
                                         mime="application/json", key=f"dl_{iid}_{filename}")
+        render_speaker_audit(summary)
+
+
+def render_speaker_audit(summary: dict) -> None:
+    """Audit d'attribution des locuteurs : comptes, avertissements, téléchargement. Rien n'est modifiable ici."""
+    audit_json = read_analysis_file(summary, AUDITOR.output_filename)
+    if not audit_json:
+        return
+    audit = json.loads(audit_json)
+    iid = summary["interview_id"]
+    title = (f"Audit d'attribution des locuteurs — {iid} — {audit['candidate_count']} tour(s) suspect(s), "
+             f"{audit['review_count']} à vérifier")
+    with st.expander(title):
+        st.info(SPEAKER_AUDIT_NOTICE + " Le locuteur officiel reste celui de structured_transcript.json ; "
+                "les agents reçoivent seulement un avertissement sur les tours douteux.")
+        mode = ("aucun tour suspect : aucun appel API" if audit["audit_mode"] == "heuristics_only"
+                else "audit par le modèle en échec : candidats déterministes seuls" if audit["status"] == "FAILED"
+                else "repris du cache TRACE" if audit.get("cache_hit") else "1 appel d'audit")
+        st.markdown(f"Statut : **{audit['status']}** · Tours suspects (règles déterministes) : "
+                    f"**{audit['candidate_count']}** · À vérifier : **{audit['review_count']}** · {mode}")
+        if audit["items"]:
+            st.dataframe([
+                {"tour": i["turn_id"], "locuteur officiel": i["current_speaker"],
+                 "locuteur suggéré": i["suggested_speaker"] or "—", "confiance": i["confidence"],
+                 "raison": i["reason"], "règles": ", ".join(i["heuristics"]), "source": i["source"],
+                 "à vérifier": "oui" if i["needs_review"] else "non",
+                 "citations": " | ".join(("✓ " if e["validation"]["valid"] else "✗ ") + e["quote"]
+                                         for e in i["evidence"])}
+                for i in audit["items"]
+            ], hide_index=True)
+        st.download_button(f"Télécharger {AUDITOR.output_filename}", data=audit_json,
+                           file_name=f"{iid}_{AUDITOR.output_filename}", mime="application/json",
+                           key=f"dl_{iid}_{AUDITOR.output_filename}")
 
 
 def render_analysis_section(run: dict) -> None:
@@ -248,7 +294,10 @@ def render_analysis_section(run: dict) -> None:
         "**Practice Extractor** (ce que l'étudiant·e fait, avec ou sans IAG) et "
         "**Interaction Signal Reader** (comment il ou elle le raconte). Aucun des deux ne voit la sortie "
         "de l'autre ; aucune synthèse ni analyse théorique n'est produite à cette étape. "
-        "Chaque citation est vérifiée mot pour mot dans l'entretien."
+        "Chaque citation est vérifiée mot pour mot dans l'entretien. "
+        "Au préalable, un **audit de l'attribution des locuteurs** signale les tours dont le locuteur "
+        "semble douteux (règles déterministes, puis un appel LLM seulement s'il y a des tours suspects) ; "
+        "il ne modifie jamais la transcription."
     )
     eligible = analysis.eligible_files(run)
     settings = LLMSettings.from_env()
