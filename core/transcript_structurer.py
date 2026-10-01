@@ -15,6 +15,20 @@ Règle 2 — marqueur récurrent non reconnu.
     moins MIN_UNKNOWN_LABEL_OCCURRENCES lignes du document. Le libellé est
     conservé dans speaker_raw, jamais converti en rôle. Avertissement émis.
 
+Règle 1 bis — marqueur explicite en milieu de ligne (correctif « OTMANE »).
+    Un paragraphe DOCX ou une ligne de PDF peut contenir toute une suite
+    d'échanges (« … ? Enquêté : Oui. Enquêteur : Et pour… »). Un libellé SANS
+    AMBIGUÏTÉ (INLINE_SPLIT_LABELS : enquêteur, enquêté, interviewer, interviewé
+    et leurs variantes de casse, d'accents et de genre — pas « Q », « R »,
+    « Question », « Réponse », « Participant », trop fréquents dans le discours)
+    suivi de « : » ouvre alors aussi un nouveau tour, si :
+    - il suit une fin de phrase (« . ! ? … » guillemet, parenthèse), ou
+    - il commence par une majuscule et suit un blanc (« ok Enquêteur : »).
+    La ligne est coupée juste avant le libellé ; chaque morceau garde le numéro
+    de ligne d'origine. Le texte n'est ni corrigé ni déplacé, et le libellé écrit
+    décide seul du locuteur, même s'il semble faux (l'audit des locuteurs le
+    signalera). Un libellé ambigu en milieu de ligne reste signalé, pas découpé.
+
 Règle 3 — continuation.
     Toute autre ligne prolonge le tour en cours (prise de parole multilignes).
 
@@ -71,6 +85,21 @@ INLINE_LABEL_RE = re.compile(
     rf"(?<=[.!?…»\"”])[ \t]+(?P<label>{_KNOWN_ALTERNATION}){_QUALIFIER}{_COLON}", re.IGNORECASE
 )
 
+# Règle 1 bis : libellés sans ambiguïté, découpés aussi en milieu de ligne.
+AMBIGUOUS_INLINE_LABELS = frozenset({"question", "q", "réponse", "reponse", "r", "participant", "participante"})
+INLINE_SPLIT_LABELS = tuple(label for label in LABEL_TO_SPEAKER if label not in AMBIGUOUS_INLINE_LABELS)
+_SPLIT_ALTERNATION = "|".join(sorted(map(re.escape, INLINE_SPLIT_LABELS), key=len, reverse=True))
+INLINE_SPLIT_RE = re.compile(
+    rf"(?<![\w'’\-])(?P<label>{_SPLIT_ALTERNATION})(?![\w'’\-]){_QUALIFIER}{_COLON}", re.IGNORECASE
+)
+_SENTENCE_END = ".!?…»\"”)"
+# Garde-fou (core/ingestion_validator.py) : marqueurs de locuteur restés À L'INTÉRIEUR d'un tour.
+_INTERNAL_ALTERNATION = "|".join(sorted(map(re.escape, (l for l in LABEL_TO_SPEAKER if len(l) > 1)),
+                                        key=len, reverse=True))
+INTERNAL_MARKER_RE = re.compile(
+    rf"(?<![\w'’\-])(?P<label>{_INTERNAL_ALTERNATION})(?![\w'’\-]){_QUALIFIER}{_COLON}", re.IGNORECASE
+)
+
 
 def make_interview_id(filename: str) -> str:
     """Identifiant d'entretien lisible et stable, dérivé du nom de fichier.
@@ -111,6 +140,27 @@ def _split_marker(line: str, match: re.Match, probe: str) -> tuple[str, str]:
     """Sépare (marqueur, reste) dans la ligne d'origine, même si elle n'est pas en NFC."""
     end = match.end() if probe == line else _nfc_prefix_to_original(line, match.end())
     return line[:end].strip(), line[end:]
+
+
+def split_inline_markers(line: str) -> list[str]:
+    """Règle 1 bis : coupe une ligne avant chaque marqueur explicite situé en milieu de ligne.
+
+    Renvoie les morceaux dans l'ordre ; leur concaténation est EXACTEMENT la ligne d'origine
+    (aucun caractère ajouté, retiré ou modifié). Une ligne sans tel marqueur donne [line].
+    """
+    probe = unicodedata.normalize("NFC", line)
+    cuts = []
+    for match in INLINE_SPLIT_RE.finditer(probe):
+        start = match.start()
+        before = probe[:start].rstrip(" \t")
+        if not before:
+            continue  # marqueur en début de ligne : règle 1
+        if before[-1] in _SENTENCE_END or (match.group("label")[0].isupper() and probe[start - 1] in " \t"):
+            cuts.append(start if probe == line else _nfc_prefix_to_original(line, start))
+    if not cuts:
+        return [line]
+    bounds = [0, *cuts, len(line)]
+    return [line[a:b] for a, b in zip(bounds, bounds[1:]) if line[a:b]]
 
 
 def _candidate_label(probe: str) -> str | None:
@@ -172,21 +222,26 @@ def structure_transcript(pages: list[dict], interview_id: str, source_file: str)
         if current is not None:
             segments.append(current)
 
-    for number, (page, text) in enumerate(lines, start=1):
-        label = match_speaker_label(text, recurrent)
-        if label:
-            close()
-            current = {**label, "labeled": True, "lines": [(number, page, label["rest"])]}
-        elif current is not None and current["labeled"]:
-            current["lines"].append((number, page, text))  # règle 3
-        elif not text.strip():
-            close()  # règle 4 : une ligne vide sépare les segments sans marqueur
-            current = None
-        elif current is None:
-            current = {"speaker": SPEAKER_UNKNOWN, "speaker_raw": None, "marker": None,
-                       "labeled": False, "lines": [(number, page, text)]}
-        else:
-            current["lines"].append((number, page, text))
+    inline_splits = []  # (numéro de ligne, nombre de marqueurs découpés)
+    for number, (page, line) in enumerate(lines, start=1):
+        pieces = split_inline_markers(line)
+        if len(pieces) > 1:
+            inline_splits.append((number, len(pieces) - 1))
+        for text in pieces:  # règle 1 bis : chaque morceau garde le numéro de la ligne d'origine
+            label = match_speaker_label(text, recurrent)
+            if label:
+                close()
+                current = {**label, "labeled": True, "lines": [(number, page, label["rest"])]}
+            elif current is not None and current["labeled"]:
+                current["lines"].append((number, page, text))  # règle 3
+            elif not text.strip():
+                close()  # règle 4 : une ligne vide sépare les segments sans marqueur
+                current = None
+            elif current is None:
+                current = {"speaker": SPEAKER_UNKNOWN, "speaker_raw": None, "marker": None,
+                           "labeled": False, "lines": [(number, page, text)]}
+            else:
+                current["lines"].append((number, page, text))
     close()
 
     turns, warnings = [], []
@@ -241,6 +296,13 @@ def structure_transcript(pages: list[dict], interview_id: str, source_file: str)
             "UNRECOGNIZED_SPEAKER_LABEL",
             f"Libellé « {shown} » ({count} occurrences) non reconnu : tours attribués à « unknown ».",
             label=shown, count=count, turn_ids=ids[:20],
+        ))
+    if inline_splits:
+        warnings.append(make_warning(
+            "INLINE_SPEAKER_LABELS_SPLIT",
+            f"{sum(c for _, c in inline_splits)} marqueur(s) de locuteur en milieu de ligne ({len(inline_splits)} "
+            "ligne(s)) : un nouveau tour a été ouvert à chacun, texte inchangé.",
+            count=sum(c for _, c in inline_splits), lines=[n for n, _ in inline_splits][:20],
         ))
     roles = {t["speaker"] for t in labeled} - {SPEAKER_UNKNOWN}
     if len(roles) == 1:

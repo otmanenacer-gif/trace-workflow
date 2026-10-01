@@ -16,6 +16,8 @@ sans vérité terrain, TRACE ne prétend pas mesurer une précision.
 import difflib
 import re
 
+from core.transcript_structurer import INTERNAL_MARKER_RE
+
 from core.schemas import (
     SCHEMA_VERSION,
     SEVERITY_ERROR,
@@ -33,6 +35,11 @@ from core.schemas import (
 MIN_TOKEN_COVERAGE = 0.99
 # Au-delà de cette part de mots ajoutés : contenu inventé (FAIL)
 MAX_ADDED_TOKEN_RATIO = 0.01
+
+# Garde-fou de segmentation : un tour plus long que ce seuil (caractères) qui contient au moins
+# OVERSIZED_TURN_MIN_MARKERS marqueurs de locuteur internes n'est jamais envoyé à un modèle (statut FAIL).
+OVERSIZED_TURN_CHARS = 4000
+OVERSIZED_TURN_MIN_MARKERS = 2
 
 _BLANKS = re.compile(r"\s+")
 
@@ -100,6 +107,23 @@ def check_turn_sequence(turns: list[dict]) -> list[dict]:
     return []
 
 
+def check_oversized_turns(turns: list[dict]) -> list[dict]:
+    """Tours géants contenant plusieurs marqueurs de locuteur internes (segmentation manquée)."""
+    warnings = []
+    for turn in turns:
+        if len(turn["text"]) <= OVERSIZED_TURN_CHARS:
+            continue
+        markers = INTERNAL_MARKER_RE.findall(turn["text"])
+        if len(markers) >= OVERSIZED_TURN_MIN_MARKERS:
+            warnings.append(make_warning(
+                "OVERSIZED_TURN_WITH_INTERNAL_MARKERS",
+                f"Tour {turn['turn_id']} : {len(turn['text'])} caractères et {len(markers)} marqueur(s) de locuteur "
+                "internes. La segmentation semble avoir échoué : l'analyse IA est bloquée pour cet entretien "
+                "plutôt que d'envoyer un tour géant au modèle.",
+                turn_id=turn["turn_id"], char_count=len(turn["text"]), internal_marker_count=len(markers)))
+    return warnings
+
+
 def compute_status(warnings: list[dict]) -> str:
     severities = {w["severity"] for w in warnings}
     if SEVERITY_ERROR in severities:
@@ -164,6 +188,7 @@ def build_report(
         coverage, coverage_warnings = check_coverage(raw_text, turns)
         warnings.extend(coverage_warnings)
         warnings.extend(check_turn_sequence(turns))
+        warnings.extend(check_oversized_turns(turns))
 
     status = compute_status(warnings)
     return {

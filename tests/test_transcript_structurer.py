@@ -125,8 +125,17 @@ def test_single_unknown_label_does_not_split():
     assert len(turns) == 1 and turns[0]["text"] == "Bon.\nMarc : il m'a dit ça."
 
 
-def test_inline_label_is_flagged_not_split():
+def test_explicit_inline_label_opens_a_new_turn():
+    """Correctif « OTMANE » : un marqueur explicite en milieu de ligne ouvre un tour (ancien comportement :
+    simple avertissement, tour non découpé)."""
     result = structure("Enquêteur : Tu viens ? Enquêté : Oui.\nEnquêté : Enfin non.")
+    assert [(t["speaker"], t["text"]) for t in result["turns"]] == [
+        (SPEAKER_INTERVIEWER, "Tu viens ?"), (SPEAKER_INTERVIEWEE, "Oui."), (SPEAKER_INTERVIEWEE, "Enfin non.")]
+    assert "INLINE_SPEAKER_LABELS_SPLIT" in codes(result) and "POSSIBLE_INLINE_SPEAKER_LABEL" not in codes(result)
+
+
+def test_ambiguous_inline_label_is_flagged_not_split():
+    result = structure("Enquêteur : Tu viens ? Réponse : oui.\nEnquêté : Enfin non.")
     assert len(result["turns"]) == 2
     assert "POSSIBLE_INLINE_SPEAKER_LABEL" in codes(result)
 
