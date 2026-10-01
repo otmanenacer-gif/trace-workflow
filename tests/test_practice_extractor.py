@@ -32,8 +32,8 @@ def run_practices(tmp_path, output, files=None):
 def test_agent_identity_is_versioned():
     identity = SPEC.identity()
     assert identity["agent"] == "practice_extractor"
-    assert identity["agent_version"] == PRACTICE_EXTRACTOR_VERSION == "1.0"
-    assert identity["schema_version"] == PRACTICE_SCHEMA_VERSION == "1.0"
+    assert identity["agent_version"] == PRACTICE_EXTRACTOR_VERSION == "1.1"
+    assert identity["schema_version"] == PRACTICE_SCHEMA_VERSION == "1.1"
     assert len(identity["prompt_sha256"]) == 64 and len(identity["schema_sha256"]) == 64
 
 
@@ -72,6 +72,7 @@ def test_api_schema_requires_every_field_and_forbids_extras():
     assert practice["additionalProperties"] is False
     assert set(practice["required"]) == set(practice["properties"])
     assert practice["properties"]["use_status"]["enum"] == ["use", "non_use", "refusal", "hypothetical", "past_use"]
+    assert {"stated_frequency", "scope_qualifier"} <= set(practice["required"])
 
 
 def test_good_output_is_valid_with_multiple_evidence(tmp_path):
@@ -81,6 +82,7 @@ def test_good_output_is_valid_with_multiple_evidence(tmp_path):
     reformulation = document["practices"][2]
     assert reformulation["practice_id"] == "ENTRETIEN_SYNTHETIQUE_P003"
     assert len(reformulation["evidence"]) == 2 and all(e["validation"]["valid"] for e in reformulation["evidence"])
+    assert reformulation["stated_frequency"] is None and reformulation["scope_qualifier"] == "surtout"
 
 
 def test_non_use_and_hypothetical_are_kept(tmp_path):
@@ -127,3 +129,59 @@ def test_interpretive_vocabulary_is_flagged(tmp_path):
     terms = {i["term"] for i in validation["agents"]["practice_extractor"]["issues"]
              if i["code"] == "INTERPRETIVE_VOCABULARY"}
     assert {"triche", "identité", "éviter l'effort"} <= terms
+
+
+# --- stated_frequency / scope_qualifier ------------------------------------------------------
+
+def _with_practice_fields(**fields) -> dict:
+    output = copy.deepcopy(si.GOOD_PRACTICES)
+    output["practices"][2].update(fields)
+    return output
+
+
+def test_prompt_separates_frequency_from_scope_qualifier():
+    prompt = SPEC.system_prompt
+    assert "`scope_qualifier`" in prompt
+    assert "« je l'utilise surtout pour reformuler » → `stated_frequency` : `null`, `scope_qualifier` : « surtout »" in prompt
+
+
+@pytest.mark.parametrize("frequency", ["parfois", "souvent", "rarement", "une fois", "jamais", "toujours", None])
+def test_real_frequencies_are_accepted(frequency):
+    PracticeExtractorOutput.model_validate(_with_practice_fields(stated_frequency=frequency, scope_qualifier=None))
+
+
+@pytest.mark.parametrize("value", ["surtout", "Surtout", "SURTOUT", "souvent, surtout pour reformuler",
+                                   "principalement", "essentiellement", "notamment", "en particulier"])
+def test_surtout_can_never_be_a_stated_frequency(value):
+    with pytest.raises(ValidationError, match="stated_frequency"):
+        PracticeExtractorOutput.model_validate(_with_practice_fields(stated_frequency=value))
+
+
+def test_scope_qualifier_is_explicit_and_nullable():
+    PracticeExtractorOutput.model_validate(_with_practice_fields(stated_frequency=None, scope_qualifier="surtout"))
+    PracticeExtractorOutput.model_validate(_with_practice_fields(stated_frequency=None, scope_qualifier=None))
+    bad = copy.deepcopy(si.GOOD_PRACTICES)
+    del bad["practices"][0]["scope_qualifier"]  # null doit être explicite
+    with pytest.raises(ValidationError):
+        PracticeExtractorOutput.model_validate(bad)
+
+
+def test_surtout_as_frequency_is_never_recorded(tmp_path):
+    """Une réponse qui range « surtout » dans stated_frequency est rejetée : rien n'est écrit ni mis en cache."""
+    run = si.make_ingested_run(tmp_path)
+    transport = FakeTransport({PRACTICE: text_response(_with_practice_fields(stated_frequency="surtout")),
+                               INTERACTION: text_response(EMPTY_SIGNALS)})
+    cache = AnalysisCache(tmp_path / "cache")
+    run = analyze_run(run, settings=fake_settings(), transport=transport, cache=cache)
+    summary = run["files"][0]["analysis"]
+    agent = summary["agents"]["practice_extractor"]
+    assert agent["status"] == "FAILED" and agent["error"]["code"] == "SCHEMA_VALIDATION"
+    assert "practices.2.stated_frequency" in agent["error"]["message"]
+    assert not (Path(summary["analysis_dir"]) / SPEC.output_filename).exists()
+    assert not list((tmp_path / "cache" / "practice_extractor").glob("*.json"))
+    assert summary["agents"]["interaction_signal_reader"]["status"] == "SUCCESS"  # l'autre agent n'est pas affecté
+
+
+def test_scope_qualifier_is_scanned_by_the_guard(tmp_path):
+    _, document = run_practices(tmp_path, _with_practice_fields(scope_qualifier="par paresse"))
+    assert "INTERPRETIVE_VOCABULARY" in document["practices"][2]["review_reasons"]

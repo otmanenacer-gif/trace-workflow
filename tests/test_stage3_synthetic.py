@@ -72,3 +72,35 @@ def test_forbidden_conclusions_are_flagged_by_the_guard(tmp_path):
     for agent in ("practice_extractor", "interaction_signal_reader"):
         report = validation["agents"][agent]
         assert report["objects_needing_review"] and any(i["code"] == "INTERPRETIVE_VOCABULARY" for i in report["issues"])
+
+
+def test_patch_scope_qualifier_and_preference_statement(tmp_path):
+    """Correctif de l'étape 3 sur un mini-entretien synthétique (LLM simulé) :
+    « je l'utilise surtout pour reformuler » → scope_qualifier, pas stated_frequency ;
+    « je préfère faire mes plans moi-même » → preference_statement, pas other."""
+    run = si.make_ingested_run(tmp_path, si.PATCH_FILES)
+    assert run["files"][0]["ingestion"]["status"] == "PASS"
+    transport = FakeTransport({PRACTICE: text_response(si.PATCH_PRACTICES),
+                               INTERACTION: text_response(si.PATCH_SIGNALS)})
+    run = analyze_run(run, settings=fake_settings(), transport=transport, cache=AnalysisCache(tmp_path / "cache"))
+    out = Path(run["files"][0]["analysis"]["analysis_dir"])
+    load = lambda name: json.loads((out / name).read_text(encoding="utf-8"))  # noqa: E731
+    practices, signals = load("practice_extractor.json"), load("interaction_signals.json")
+    assert load("evidence_validation.json")["total_invalid_evidence"] == 0
+
+    # Les consignes et schémas réellement envoyés portent les deux corrections
+    practice_call, = transport.calls_for(PRACTICE)
+    interaction_call, = transport.calls_for(INTERACTION)
+    assert "`scope_qualifier`" in practice_call["params"]["system"][0]["text"]
+    assert "scope_qualifier" in practice_call["params"]["output_config"]["format"]["schema"]["$defs"]["Practice"]["required"]
+    assert "`preference_statement`" in interaction_call["params"]["system"][0]["text"]
+    assert "preference_statement" in json.dumps(interaction_call["params"]["output_config"]["format"]["schema"])
+
+    surtout = next(p for p in practices["practices"] if "surtout" in p["evidence"][0]["quote"])
+    assert surtout["stated_frequency"] is None and surtout["scope_qualifier"] == "surtout"
+    assert all(p["stated_frequency"] is None for p in practices["practices"])
+
+    prefere = [s for s in signals["signals"] if "je préfère" in s["evidence"][0]["quote"]]
+    assert [s["signal_type"] for s in prefere] == ["preference_statement"]
+    assert not [s for s in signals["signals"] if s["signal_type"] == "other"]
+    assert all(not s["needs_review"] for s in signals["signals"])

@@ -17,7 +17,7 @@ from __future__ import annotations
 import re
 import unicodedata
 
-GUARD_VERSION = "1.0"
+GUARD_VERSION = "1.1"  # 1.1 : champ scope_qualifier, lecture de la personne (signaux)
 
 # Concepts théoriques réservés à l'étape interprétative ultérieure (les deux agents).
 THEORETICAL_TERMS = {
@@ -62,9 +62,16 @@ FUNCTION_TERMS = {
     "gêné (rire gêné…)": r"gene(?:e|s|es)?\b",
 }
 
+# Lecture de la personne à partir d'une formulation, p. ex. d'une préférence énoncée (Interaction Signal Reader).
+PERSON_READING_TERMS = {
+    "autonomie": r"autonom\w*",
+    "résistance": r"resistan\w*",
+    "position morale": r"positions? morales?",
+}
+
 AGENT_TERM_SETS = {
     "practice_extractor": (THEORETICAL_TERMS, JUDGMENT_TERMS),
-    "interaction_signal_reader": (THEORETICAL_TERMS, JUDGMENT_TERMS, FUNCTION_TERMS),
+    "interaction_signal_reader": (THEORETICAL_TERMS, JUDGMENT_TERMS, FUNCTION_TERMS, PERSON_READING_TERMS),
 }
 
 # Champs rédigés par l'agent (les citations sont exclues).
@@ -72,7 +79,7 @@ AUTHORED_FIELDS = {
     "practice_extractor": (
         "summary", "academic_task", "discipline", "context", "ai_tool", "student_action_before",
         "ai_action", "student_action_after", "stated_reason", "explicit_constraints",
-        "verification_or_control", "stated_frequency", "other_actors", "uncertainty_note",
+        "verification_or_control", "stated_frequency", "scope_qualifier", "other_actors", "uncertainty_note",
     ),
     "interaction_signal_reader": (
         "surface_form", "description", "topic", "explicit_affect", "cross_turn_reference",

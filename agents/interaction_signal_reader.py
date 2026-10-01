@@ -17,8 +17,8 @@ from agents.base import AgentSpec, Evidence, Explicitness
 from core import config
 
 AGENT_NAME = "interaction_signal_reader"
-INTERACTION_SIGNAL_READER_VERSION = "1.0"
-INTERACTION_SCHEMA_VERSION = "1.0"
+INTERACTION_SIGNAL_READER_VERSION = "1.1"
+INTERACTION_SCHEMA_VERSION = "1.1"  # 1.1 : ajout du type preference_statement
 
 SIGNAL_TYPES = (
     "explicit_emotion",
@@ -44,6 +44,7 @@ SIGNAL_TYPES = (
     "transcribed_silence",
     "significant_repetition",
     "pronoun_shift",
+    "preference_statement",
     "other",
 )
 SignalType = Literal[SIGNAL_TYPES]  # type: ignore[valid-type]
