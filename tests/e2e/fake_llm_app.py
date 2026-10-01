@@ -18,7 +18,11 @@ bloc et la lecture à longue distance sont simulés par tests/synthetic_long_int
 Pour l'entretien long synthétique de l'étape 3.7 (Entretien_etape_3_7.txt, 330 tours), les blocs
 Practice Extractor et Interaction Reader (lecteur qui SURCODE : un signal par remplisseur) et la
 lecture à longue distance sont simulés par tests/synthetic_stage37.py.
-Pour tout autre entretien, les agents simulés ne renvoient rien.
+Pour les entretiens synthétiques de l'étape 4 (Entretien_etape_4.txt, 25 tours, et
+Entretien_etape_4_long.txt, 320 tours), l'étape 3 et l'Accountability Episode Builder sont simulés par
+tests/synthetic_stage4.py et tests/synthetic_stage4_long.py (lecteur déterministe des candidats envoyés).
+Pour tout autre entretien, les agents simulés de l'étape 3 ne renvoient rien et l'étape 4 simulée
+classe chaque candidat « incertain ».
 """
 
 import os
@@ -37,7 +41,10 @@ from core import config  # noqa: E402
 from tests import synthetic_interviews as si  # noqa: E402
 from tests import synthetic_long_interview as long_interview  # noqa: E402
 from tests import synthetic_stage37 as stage37  # noqa: E402
-from tests.fake_llm import AUDITOR, INTERACTION, LONG_DISTANCE, PRACTICE, FakeTransport, text_response  # noqa: E402
+from tests import synthetic_stage4 as stage4  # noqa: E402
+from tests import synthetic_stage4_long as stage4_long  # noqa: E402
+from tests.fake_llm import (ACCOUNTABILITY, AUDITOR, INTERACTION, LONG_DISTANCE, PRACTICE, FakeTransport,  # noqa: E402
+                            text_response)
 
 if os.environ.get("TRACE_E2E_CACHE_DIR"):
     config.CACHE_DIR = Path(os.environ["TRACE_E2E_CACHE_DIR"])
@@ -56,7 +63,22 @@ def _is_stage37(params: dict) -> bool:
     return stage37.INTERVIEW_ID in params["messages"][0]["content"]
 
 
+def _is_stage4(params: dict) -> bool:
+    return stage4.INTERVIEW_ID + "_T" in params["messages"][0]["content"]
+
+
+def _is_stage4_long(params: dict) -> bool:
+    return stage4_long.INTERVIEW_ID in params["messages"][0]["content"]
+
+
+_STAGE4_REFERENCE = stage4.stage3_responders()
+
+
 def _practices(params):
+    if _is_stage4_long(params):
+        return stage4_long.practice_reader(params)
+    if _is_stage4(params):
+        return _STAGE4_REFERENCE[PRACTICE](params)
     if _is_stage37(params):
         return stage37.practice_reader(params)
     if _is_stage35(params):
@@ -72,6 +94,10 @@ def _is_long(params: dict) -> bool:
 
 
 def _signals(params):
+    if _is_stage4_long(params):
+        return stage4_long.signal_reader(params)
+    if _is_stage4(params):
+        return _STAGE4_REFERENCE[INTERACTION](params)
     if _is_stage37(params):
         return stage37.naive_reader(params)
     if _is_long(params):
@@ -84,18 +110,34 @@ def _signals(params):
 
 
 def _audit(params):
+    if _is_stage4(params):
+        return _STAGE4_REFERENCE[AUDITOR](params)
     if _is_stage35(params):
         return text_response(si.STAGE35_AUDIT, input_tokens=600, output_tokens=150)
     return text_response({"assessments": [], "audit_notes": None}, input_tokens=300, output_tokens=20)
 
 
 def _long_distance(params):
+    if _is_stage4_long(params):
+        return stage4_long.long_distance_reader(params)
     if _is_stage37(params):
         return stage37.long_distance_reader(params)
     return long_interview.simulated_long_distance_reader(params)
 
 
+_GENERIC_STAGE4 = stage4.scripted_builder({})
+
+
+def _accountability(params):
+    if _is_stage4_long(params):
+        return stage4_long.BUILDER(params)
+    if _is_stage4(params):
+        return stage4.REFERENCE_BUILDER(params)
+    return _GENERIC_STAGE4(params)
+
+
 llm_client.AnthropicTransport = lambda settings: FakeTransport(
-    {PRACTICE: _practices, INTERACTION: _signals, AUDITOR: _audit, LONG_DISTANCE: _long_distance})
+    {PRACTICE: _practices, INTERACTION: _signals, AUDITOR: _audit, LONG_DISTANCE: _long_distance,
+     ACCOUNTABILITY: _accountability})
 
 runpy.run_path(str(ROOT / "app.py"), run_name="__main__")

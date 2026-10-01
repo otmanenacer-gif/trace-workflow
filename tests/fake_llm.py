@@ -19,6 +19,7 @@ PRACTICE = "practice_extractor"
 INTERACTION = "interaction_signal_reader"
 AUDITOR = "speaker_attribution_auditor"
 LONG_DISTANCE = "interaction_signal_reader_long_distance"  # lecture à longue distance (entretien long)
+ACCOUNTABILITY = "accountability_episode_builder"  # étape 4 : épisodes d'accountability
 
 
 def text_response(payload, *, input_tokens=1200, output_tokens=300, stop_reason="end_turn", model="fake-model",
@@ -60,13 +61,16 @@ def agent_of(params: dict) -> str:
     properties = params["output_config"]["format"]["schema"]["properties"]
     if "assessments" in properties:
         return AUDITOR
+    if "episodes" in properties:
+        return ACCOUNTABILITY
     if params["system"][0]["text"].startswith("# Interaction Signal Reader — lecture à longue distance"):
         return LONG_DISTANCE
     return PRACTICE if "practices" in properties else INTERACTION
 
 
 class FakeTransport:
-    """Répond selon l'agent (déduit du schéma demandé) : PRACTICE, INTERACTION, AUDITOR ou LONG_DISTANCE.
+    """Répond selon l'agent (déduit du schéma demandé) : PRACTICE, INTERACTION, AUDITOR, LONG_DISTANCE ou
+    ACCOUNTABILITY (étape 4).
 
     Un appel à un agent sans réponse prévue échoue (KeyError) : un test qui ne prévoit
     pas d'audit des locuteurs vérifie donc aussi qu'aucun appel d'audit n'a lieu.

@@ -2,7 +2,8 @@
 
 Ingestion déterministe des entretiens (sans IA), puis, uniquement sur action
 explicite de l'utilisateur, l'étape 3 : deux agents IA indépendants
-(Practice Extractor et Interaction Signal Reader).
+(Practice Extractor et Interaction Signal Reader), puis l'étape 4 : épisodes
+d'accountability (candidats déterministes, au plus un appel LLM par entretien).
 
 Lancement : streamlit run app.py
 """
@@ -61,7 +62,7 @@ def _stamp_project_modules() -> None:
 
 _purge_stale_project_modules()
 
-from core import analysis, config  # noqa: E402
+from core import accountability, analysis, config  # noqa: E402
 from core.ingestion import ingest_run  # noqa: E402
 from core.llm_client import LLMError, LLMSettings  # noqa: E402
 from core.run_manager import TraceError, get_extension, init_run, load_problematique, save_problematique  # noqa: E402
@@ -92,6 +93,11 @@ PREVIEW_TURNS = 10
 PREVIEW_PRACTICES = 3
 PREVIEW_SIGNALS = 5
 SPEAKER_AUDIT_NOTICE = "Ces suggestions ne modifient pas la transcription originale."
+ACC_STATUS_ICONS = {**AI_STATUS_ICONS, accountability.STATUS_BLOCKED: "⛔"}
+ACC_ALL = "Tous les entretiens analysés"
+PREVIEW_EPISODES = 3
+EPISODE_STATUS_LABELS = {"accountability_episode": "épisode d'accountability", "ordinary_practice": "pratique ordinaire",
+                         "uncertain": "incertain"}
 
 
 def format_size(size_bytes: int) -> str:
@@ -115,7 +121,7 @@ def format_count(value: int | None) -> str:
 
 def render_pipeline(run: dict | None, llm_enabled: bool) -> None:
     """Affiche les étapes : structuration, puis les deux agents de l'étape 3 ; le reste est inactif."""
-    ai_steps = (config.PRACTICE_STEP, config.INTERACTION_STEP)
+    ai_steps = (config.PRACTICE_STEP, config.INTERACTION_STEP, config.ACCOUNTABILITY_STEP)
     for index, step in enumerate(config.PIPELINE_STEPS, start=1):
         if step == config.INGESTION_STEP:
             state = run["pipeline"][step] if run else "prête"
@@ -124,7 +130,7 @@ def render_pipeline(run: dict | None, llm_enabled: bool) -> None:
         elif step in ai_steps:
             state = run["pipeline"].get(step, "inactive") if run else "inactive"
             if state != "inactive":
-                warn = "échec" in state or "incomplet" in state
+                warn = "échec" in state or "incomplet" in state or "bloqué" in state
                 st.markdown(f"{'🟠' if warn else '🟢'} **{index}. {step}** (IA) — {state}")
             elif llm_enabled:
                 st.markdown(f"🔵 **{index}. {step}** (IA) — prête, sur action explicite")
@@ -434,6 +440,155 @@ def render_analysis_section(run: dict) -> None:
     render_analysis_results(st.session_state.get("last_run") or run)
 
 
+# --- Étape 4 — épisodes d'accountability ----------------------------------------------------------
+
+def render_stage4_launcher(run: dict, analyzed: list[dict], settings: LLMSettings) -> None:
+    """Choix des entretiens, estimation des appels (0 ou 1 par entretien), lancement explicite."""
+    if st.session_state.pop("acc_reset", False):
+        st.session_state.acc_force = False
+    flash = st.session_state.pop("acc_flash", None)
+    if flash:
+        (st.warning if flash[0] == "warning" else st.success)(flash[1])
+    ids = [f["ingestion"]["interview_id"] for f in analyzed]
+    choice = st.selectbox("Entretien(s) pour l'étape 4", ids + ([ACC_ALL] if len(ids) > 1 else []), key="acc_interview")
+    selected = ids if choice == ACC_ALL else [choice]
+    force = st.checkbox("Forcer une nouvelle construction des épisodes (ignore le cache de l'étape 4)", key="acc_force")
+    try:
+        plan = accountability.plan_stage4(run, selected, settings, force=force)
+    except (OSError, ValueError, KeyError) as exc:
+        st.error(f"Sorties de l'étape 3 illisibles : {exc}")
+        return
+    st.dataframe([{"Entretien": row["interview_id"], "Statut étape 3": row["stage3_status"],
+                   "Candidats": row["candidate_count"],
+                   "Appel prévu": "en cache" if row["cached"] else row["call"],
+                   "Tokens estimés (entrée)": row["estimated_input_tokens"]} for row in plan["per_interview"]],
+                 hide_index=True)
+    st.info(
+        f"Candidats d'épisodes (déterministes, sans IA) : **{plan['candidates']}**. "
+        "Au plus **1 appel LLM par entretien** (aucun s'il n'y a pas de candidat). "
+        f"Pour cette sélection : **{plan['calls']} appel(s) API** prévu(s), {plan['cached']} résultat(s) en cache, "
+        f"{plan['blocked']} entretien(s) bloqué(s) (étape 3 en échec ou absente)"
+        + (f", {plan['partial']} entretien(s) à l'étape 3 incomplète (résultat PARTIAL)" if plan["partial"] else "") + "."
+    )
+    clicked = st.button(f"Construire les épisodes d'accountability ({plan['calls']} appel(s) API payant(s))",
+                        type="primary", key="acc_launch")
+    if not clicked:
+        return
+    with st.spinner("Étape 4 en cours (candidats déterministes, Accountability Episode Builder, validation)…"):
+        try:
+            st.session_state.last_run = accountability.analyze_run_stage4(run, selected, settings=settings, force=force)
+        except LLMError as exc:
+            st.error(exc.user_message)
+            return
+        except (OSError, ValueError, KeyError) as exc:
+            logging.error("Étape 4 interrompue : %s", type(exc).__name__)
+            st.error(f"Étape 4 interrompue ({type(exc).__name__}) : vérifiez les fichiers du run.")
+            return
+    usage = st.session_state.last_run["last_accountability"]["usage"]
+    if usage["failed"] or usage["partial"] or usage["blocked"]:
+        st.session_state.acc_flash = ("warning", f"Étape 4 terminée : {usage['failed']} échec(s), {usage['partial']} "
+                                      f"incomplète(s), {usage['blocked']} bloquée(s) — voir le détail ci-dessous.")
+    else:
+        st.session_state.acc_flash = ("success", "Étape 4 terminée.")
+    st.session_state.acc_reset = True
+    st.rerun()
+
+
+def render_stage4_results(run: dict) -> None:
+    done = [f for f in run["files"] if "accountability" in f]
+    if not done:
+        return
+    usage = (run.get("last_accountability") or {}).get("usage")
+    if usage:
+        st.markdown(f"**Dernière exécution (étape 4) :** {usage['api_calls']} appel(s) API — "
+                    f"{format_count(usage['input_tokens'])} tokens entrée — {format_count(usage['output_tokens'])} "
+                    f"tokens sortie — {usage['cached_results']} résultat(s) repris du cache TRACE")
+    st.table([{
+        "Entretien": s["interview_id"],
+        "Statut étape 3": s.get("stage3_status") or "n/a",
+        "Étape 4": f"{ACC_STATUS_ICONS.get(s['status'], '')} {s['status']}",
+        "Candidats": s.get("candidate_count") or 0,
+        "Épisodes accountability": s.get("accountability_episode_count") or 0,
+        "Pratiques ordinaires (examinées)": s.get("ordinary_practice_count") or 0,
+        "Pratiques sans marqueur": s.get("unmarked_practice_count") or 0,
+        "Incertains": s.get("uncertain_count") or 0,
+        "Rejetés": s.get("rejected_episode_count") or 0,
+        "Avertissements": (s.get("validation_warning_count") or 0) + (s.get("validation_error_count") or 0),
+        "Appels API": s.get("api_calls") or 0,
+    } for s in (f["accountability"] for f in done)])
+    for f in done:
+        summary = f["accountability"]
+        iid = summary["interview_id"]
+        with st.expander(f"Épisodes d'accountability — {iid} — aperçu"):
+            if summary["status"] == accountability.STATUS_BLOCKED:
+                st.error((summary.get("error") or {}).get("message") or "Étape 4 bloquée.")
+            elif summary.get("error"):
+                st.error(f"Accountability Episode Builder : {summary['error']['message']}")
+            if summary["status"] == analysis.STATUS_PARTIAL:
+                st.warning("Analyse INCOMPLÈTE : les sorties de l'étape 3 sont partielles (analysis_complete = false). "
+                           "Relancez l'étape 3 pour compléter les blocs manquants, puis l'étape 4.")
+            episodes_json = read_analysis_file(summary, config.ACCOUNTABILITY_EPISODES_FILENAME)
+            validation_json = read_analysis_file(summary, config.ACCOUNTABILITY_VALIDATION_FILENAME)
+            if episodes_json:
+                document = json.loads(episodes_json)
+                episodes = document["episodes"]
+                st.markdown(
+                    f"Statut étape 3 : **{document['stage3_status']}** · candidats : **{document['candidate_count']}** · "
+                    f"épisodes d'accountability : **{document['accountability_episode_count']}** · pratiques ordinaires : "
+                    f"**{document['ordinary_practice_count']}** examinée(s) + **{document['unmarked_practice_count']}** "
+                    f"sans marqueur · incertains : **{document['uncertain_count']}** · rejetés : "
+                    f"**{document['rejected_episode_count']}** · "
+                    + ("repris du cache TRACE" if document["cache_hit"] else
+                       "1 appel" if document["llm_called"] else "aucun appel (aucun candidat)"))
+                if episodes:
+                    st.markdown(f"**Épisodes** ({len(episodes)}) — {min(PREVIEW_EPISODES, len(episodes))} premiers")
+                    st.dataframe([
+                        {"id": e["episode_id"], "statut": EPISODE_STATUS_LABELS.get(e["episode_status"], e["episode_status"]),
+                         "opérations": ", ".join(m["type"] for m in e["accounting_moves"]),
+                         "frontières": ", ".join(e["boundary_objects"]),
+                         "tours": f"{e['turn_start']} → {e['turn_end']}", "résumé": e["episode_summary"],
+                         "citations": " | ".join(("✓ " if x["validation"]["valid"] else "✗ ") + x["quote"]
+                                                 for x in e["evidence"]),
+                         "validation": e["validation_status"], "à revoir": ", ".join(e["review_reasons"])}
+                        for e in episodes[:PREVIEW_EPISODES]], hide_index=True)
+            if validation_json:
+                validation = json.loads(validation_json)
+                issues = [i for i in validation.get("issues", []) if i["severity"] != "info"]
+                if issues:
+                    st.markdown(f"**Avertissements de validation** ({len(issues)})")
+                    st.dataframe([{"objet": i["object_id"], "code": i["code"], "gravité": i["severity"],
+                                   "message": i["message"]} for i in issues], hide_index=True)
+            cols = st.columns(2)
+            for col, content, filename in ((cols[0], episodes_json, config.ACCOUNTABILITY_EPISODES_FILENAME),
+                                           (cols[1], validation_json, config.ACCOUNTABILITY_VALIDATION_FILENAME)):
+                if content:
+                    col.download_button(f"Télécharger {filename}", data=content, file_name=f"{iid}_{filename}",
+                                        mime="application/json", key=f"dl_acc_{iid}_{filename}")
+
+
+def render_stage4_section(run: dict) -> None:
+    st.header("Étape 4 — Épisodes d'accountability")
+    st.markdown(
+        "À partir des sorties de l'étape 3 (jamais de l'entretien entier), un programme **déterministe** propose "
+        "des candidats : pratiques accompagnées de signaux proches, contradictions entre tours, usage et non-usage "
+        "d'une même tâche, frontières explicites (« je fais X mais pas Y »). L'**Accountability Episode Builder** "
+        "dit ensuite, pour chaque candidat, s'il s'agit d'un épisode d'accountability (une conduite rendue "
+        "descriptible et intelligible), d'une **pratique ordinaire** (racontée comme allant de soi) ou d'un cas "
+        "**incertain** ; un validateur déterministe vérifie chaque citation et identifiant. Une pratique sans aucun "
+        "marqueur n'est pas envoyée au modèle."
+    )
+    analyzed = [f for f in analysis.eligible_files(run) if "analysis" in f]
+    if not analyzed:
+        st.info("Lancez d'abord l'étape 3 : l'étape 4 en consomme les sorties.")
+        return
+    settings = LLMSettings.from_env()
+    if not settings.enabled:
+        st.warning(settings.disabled_reason())
+    else:
+        render_stage4_launcher(run, analyzed, settings)
+    render_stage4_results(st.session_state.get("last_run") or run)
+
+
 st.set_page_config(page_title="TRACE", layout="wide")
 
 # 1. Titre et 2. introduction
@@ -490,7 +645,8 @@ else:
 st.header("Pipeline")
 st.caption(
     "Actives : la structuration des entretiens (sans IA) et, sur action explicite, "
-    "l'extraction des pratiques et l'analyse interactionnelle (étape 3). Les autres étapes restent inactives."
+    "l'extraction des pratiques et l'analyse interactionnelle (étape 3), puis la construction des épisodes "
+    "d'accountability (étape 4). Les autres étapes restent inactives."
 )
 pipeline_area = st.container()
 
@@ -611,6 +767,8 @@ if run:
 
     # 8. Étape 3 — analyse IA (jamais automatique)
     render_analysis_section(run)
+    # 9. Étape 4 — épisodes d'accountability (jamais automatique, après l'étape 3)
+    render_stage4_section(st.session_state.get("last_run") or run)
 else:
     st.info("Aucun run lancé pendant cette session.")
 

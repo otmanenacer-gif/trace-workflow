@@ -58,6 +58,12 @@ INTERACTION_STEP = PIPELINE_STEPS[2]
 ANALYSIS_SUBDIR = "analysis"
 EVIDENCE_VALIDATION_FILENAME = "evidence_validation.json"
 
+# Étape 4 : épisodes d'accountability, mêmes dossiers analysis/ (consomme les sorties de l'étape 3)
+ACCOUNTABILITY_STEP = PIPELINE_STEPS[3]
+ACCOUNTABILITY_EPISODES_FILENAME = "accountability_episodes.json"
+ACCOUNTABILITY_MANIFEST_FILENAME = "accountability_episode_manifest.json"
+ACCOUNTABILITY_VALIDATION_FILENAME = "accountability_episode_validation.json"
+
 
 def load_env_file(path: Path | None = None) -> list[str]:
     """Charge les variables d'un fichier .env (KEY=VALUE) dans l'environnement.
