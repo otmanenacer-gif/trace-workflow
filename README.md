@@ -27,7 +27,16 @@ des entretiens semi-directifs. **Version actuelle :**
    stable, varie selon les tâches, fait exception, reste en tension, change
    explicitement dans le temps, ou est raconté sans justification ; un validateur
    déterministe requalifie toute « évolution » fondée sur le seul ordre de
-   l'entretien. Un entretien à la fois, aucune comparaison entre entretiens.
+   l'entretien. Un entretien à la fois, aucune comparaison entre entretiens ;
+6. **étape 6** — *comparaison inter-entretiens* : à partir des seules sorties
+   validées de l'étape 5 de plusieurs entretiens (importées depuis des fichiers
+   ou reprises du run, jamais les transcriptions), un contrôle du corpus, une
+   préparation déterministe puis le *Cross-Interview Comparator* (1 appel LLM
+   pour tout le corpus) décrivent régularités, variantes, contrastes, cas
+   négatifs et configurations minoritaires des frontières, critères du métier
+   d'étudiant et manières de rendre compte. Comptes en entretiens, non-observation
+   distinguée de l'absence, aucune typologie de personnes ; un validateur
+   déterministe vérifie chaque appui.
 
 ## Installation
 
@@ -86,6 +95,13 @@ python -m pytest tests/test_stage5_pipeline.py        # étape 5 : blocages, cac
 python -m pytest tests/test_stage5_long.py            # étape 5 : entretien long « OTMANE-like »
 python -m pytest tests/test_stage4_restore.py         # restauration de sorties de l'étape 4 téléchargées
 python -m pytest tests/test_app_stage5.py             # étape 5 : interface (AppTest)
+python -m pytest tests/test_cross_interview_corpus.py    # étape 6 : import du corpus, contrôles d'intégrité
+python -m pytest tests/test_cross_interview_material.py  # étape 6 : préparation déterministe, représentation, tailles
+python -m pytest tests/test_cross_interview_validator.py # étape 6 : validateur (appuis, comptes, revues, vocabulaire)
+python -m pytest tests/test_stage6_sociological.py    # étape 6 : cas A à J (régularité, cas négatif, non-observation…)
+python -m pytest tests/test_stage6_pipeline.py        # étape 6 : cache, invalidation, échecs, 17 entretiens
+python -m pytest tests/test_app_stage6.py             # étape 6 : interface (AppTest)
+python scripts/stage6_payload_report.py              # étape 6 : tailles de la représentation (2 / 8 / 17), 0 appel
 ```
 
 Les tests n'utilisent que des documents **synthétiques** générés à la volée
@@ -98,7 +114,8 @@ Test navigateur (Playwright + Chromium, LLM simulé, lancé à la main ;
 nécessite `pip install playwright` et un Chromium, hors `requirements.txt`) :
 
 ```bash
-python tests/e2e/browser_check.py
+python tests/e2e/browser_check.py               # scénarios A à P
+python tests/e2e/browser_check.py --only-stage6  # étape 6 seulement (N à P)
 ```
 
 Démonstration locale du parcours complet des étapes 3 et 4 **sans clé ni appel
@@ -352,6 +369,29 @@ Documentation complète : [`docs/stage5_trajectory.md`](docs/stage5_trajectory.m
 - **Coût et cache** : 0 appel sans matériau suffisant, sinon 1 par entretien ; cache propre à l'étape 5.
 - **Sorties** : `student_trajectory.json`, `student_trajectory_validation.json`, `student_trajectory_manifest.json`.
 
+## Étape 6 — comparaison inter-entretiens
+
+Documentation complète : [`docs/stage6_cross_interview.md`](docs/stage6_cross_interview.md).
+
+- **Constituer le corpus Stage 6** (section « Étape 6 », disponible même sans run) : importer les 3 JSON de
+  l'étape 5 de chaque entretien et/ou reprendre ceux du run courant. Reconnaissance par le contenu, regroupement
+  par `interview_id`, contrôles (versions, analyse complète, `validation_error_count = 0`, empreintes, comptes et
+  revues recalculés, doublons ambigus) ; un entretien invalide est exclu avec sa raison. Tableau
+  `interview_id | statut | claims | needs_review | configuration | importé`, N importés / N exploitables.
+  Moins de 2 entretiens exploitables : bloqué ; 2 : exploratoire ; 3 et plus : comparatif. Aucun appel.
+- **Préparation déterministe** (`core/cross_interview_material.py`) : affirmations et critères utilisables,
+  `review_reasons`, index (familles présentes / non observées, opérations, contextes, frontières, exceptions,
+  tensions, zones ordinaires), regroupements à formulation identique seulement ; représentation normalisée
+  (≈ 15 % des JSON de l'étape 5 ; ≈ 9 400 tokens pour 17 entretiens synthétiques).
+- **Validateur** (`core/cross_interview_validator.py`) : aucun appui inventé, comptes recalculés en entretiens,
+  positions `explicit_presence` / `explicit_refusal` / `contrary_case` / `not_observed`, éléments à revoir
+  secondaires (jamais une régularité forte), cas négatifs toujours conservés, régularité sur un seul entretien
+  requalifiée, pas de typologie, de causalité ni de généralisation au-delà du N observé.
+- **Coût et cache** : 1 appel par corpus (pas de MAP → REDUCE : non justifié par la mesure) ; même corpus → 0 appel ;
+  ajouter ou modifier un entretien n'invalide que l'étape 6.
+- **Sorties** (`data/outputs/cross_interview/<corpus_id>/analysis/`) : `cross_interview_comparison.json`,
+  `cross_interview_validation.json`, `cross_interview_manifest.json`.
+
 ## Restaurer une étape 4 déjà calculée
 
 Après avoir restauré l'étape 3 (section suivante), la section « Étape 5 » propose « Restaurer des résultats
@@ -423,17 +463,24 @@ core/trajectory_candidates.py  étape 5 : préparation déterministe (ancrages t
 core/trajectory_validator.py   étape 5 : validation déterministe (requalifications, propagation, vocabulaire)
 core/trajectory.py             étape 5 : orchestration, état de l'étape 4, cache, sorties
 core/stage4_restore.py         restauration validée de sorties de l'étape 4 téléchargées (0 appel)
+core/cross_interview_corpus.py    étape 6 : import et contrôle des triplets de l'étape 5 (0 appel)
+core/cross_interview_material.py  étape 6 : préparation déterministe (index, représentation normalisée)
+core/cross_interview_validator.py étape 6 : validation déterministe (appuis, comptes, revues, cas négatifs)
+core/cross_interview.py        étape 6 : orchestration, seuil, cache, sorties par corpus
 agents/base.py                 citation, identité versionnée d'un agent, entretien compact
 agents/practice_extractor.py   agent 1 : version, schéma de sortie
 agents/interaction_signal_reader.py  agent 2 : version, schéma de sortie
 agents/accountability_episode_builder.py  étape 4 : version, schéma d'un épisode, taxonomie des opérations
 agents/trajectory_mapper.py    étape 5 : version, schéma des affirmations et des critères
+agents/cross_interview_comparator.py  étape 6 : version, schéma des affirmations inter-entretiens
 prompts/practice_extractor.md  consignes de l'agent 1
 prompts/interaction_signal_reader.md  consignes de l'agent 2
 prompts/speaker_attribution_auditor.md  consignes de l'auditeur des locuteurs
 prompts/interaction_long_distance_reader.md  consignes de la lecture à longue distance (entretien long)
 prompts/accountability_episode_builder.md  consignes de l'Accountability Episode Builder (étape 4, v1.0)
 prompts/trajectory_mapper.md   consignes du Trajectory Mapper (étape 5, v1.0)
+prompts/cross_interview_comparator.md  consignes du Cross-Interview Comparator (étape 6, v1.0)
+scripts/stage6_payload_report.py  mesure de la représentation de l'étape 6 (aucun appel)
 scripts/smoke_test_stage3.py   test réel (payant, sur confirmation) sur l'entretien synthétique
 docs/data_model.md             format des données transmis aux agents
 docs/agents_stage3.md          étape 3 : méthode, schémas, validation, cache, configuration
@@ -442,6 +489,7 @@ docs/interaction_chunking.md   étape 3.6 : Interaction Reader sur les entretien
 docs/stage3_7.md               étape 3.7 : Practice Extractor par blocs, sélectivité, avertissements
 docs/stage4_accountability_episodes.md  étape 4 : épisodes d'accountability
 docs/stage5_trajectory.md      étape 5 : configuration et trajectoire intra-entretien
+docs/stage6_cross_interview.md étape 6 : comparaison inter-entretiens
 data/inputs|outputs/   données des runs (non versionnées)
 logs/                  journal trace.log (non versionné)
 tests/                 tests automatiques (pytest), documents synthétiques uniquement

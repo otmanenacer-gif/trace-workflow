@@ -70,6 +70,15 @@ STUDENT_TRAJECTORY_FILENAME = "student_trajectory.json"
 STUDENT_TRAJECTORY_VALIDATION_FILENAME = "student_trajectory_validation.json"
 STUDENT_TRAJECTORY_MANIFEST_FILENAME = "student_trajectory_manifest.json"
 
+# Étape 6 : comparaison inter-entretiens. Elle consomme UNIQUEMENT les triplets de l'étape 5 (importés depuis des
+# fichiers ou repris du run courant) ; sorties par corpus dans data/outputs/cross_interview/<corpus_id>/analysis/
+CROSS_INTERVIEW_STEP = PIPELINE_STEPS[5]
+CROSS_INTERVIEW_DIR = OUTPUTS_DIR / "cross_interview"
+CROSS_INTERVIEW_CORPUS_FILENAME = "cross_interview_corpus.json"
+CROSS_INTERVIEW_COMPARISON_FILENAME = "cross_interview_comparison.json"
+CROSS_INTERVIEW_VALIDATION_FILENAME = "cross_interview_validation.json"
+CROSS_INTERVIEW_MANIFEST_FILENAME = "cross_interview_manifest.json"
+
 
 def load_env_file(path: Path | None = None) -> list[str]:
     """Charge les variables d'un fichier .env (KEY=VALUE) dans l'environnement.

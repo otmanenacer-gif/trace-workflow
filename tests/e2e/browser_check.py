@@ -35,7 +35,14 @@ J. étape 5 après l'étape 4 (entretien de référence, sans temporalité) : 1 
 K. étape 5 sur un entretien à vraie temporalité (« Au lycée » / « Maintenant ») : trajectoire temporelle explicite ;
 L. restauration des étapes 3 PUIS 4 (serveur neuf, cache vide) : « Stage 4 restauré depuis fichiers — 0 appel API »,
    puis étape 5 directement : 1 appel, aucune exécution des étapes 3 et 4 ;
-M. étape 5 sur l'entretien long « OTMANE-like » (190 tours, 50 pratiques, 20 épisodes) : 1 appel, configuration mixte.
+M. étape 5 sur l'entretien long « OTMANE-like » (190 tours, 50 pratiques, 20 épisodes) : 1 appel, configuration mixte ;
+N. étape 6, sans run : import de 2 triplets d'étape 5 → comparaison EXPLORATOIRE (1 appel) ;
+O. étape 6 sur le corpus synthétique de 17 entretiens + un entretien invalide + un fichier illisible : tableau du corpus
+   (18 entretiens, 17 exploitables, raison d'exclusion), 1 appel, cas négatifs et éléments à revoir visibles,
+   3 téléchargements JSON vérifiés ;
+P. relance de l'étape 6 sur le même corpus : 0 appel (cache).
+
+`--only-stage6` n'exécute que les scénarios N à P.
 
 Non collecté par pytest (nécessite Playwright et un navigateur). Les runs
 créés dans data/ pendant le test sont supprimés à la fin.
@@ -71,6 +78,7 @@ from tests import synthetic_stage4_long as stage4_long  # noqa: E402
 from tests import synthetic_stage4_otmane as otmane  # noqa: E402
 from tests import synthetic_stage5 as stage5  # noqa: E402
 from tests import synthetic_stage5_long as stage5_long  # noqa: E402
+from tests import synthetic_stage6 as stage6  # noqa: E402
 
 TIMEOUT_MS = 30_000
 
@@ -110,8 +118,13 @@ def streamlit_server(script: Path, env: dict):
             process.kill()
 
 
+def file_input(page, label: str):
+    """Champ d'import désigné par son libellé (la page en compte plusieurs : corpus, restaurations, étape 6)."""
+    return page.get_by_test_id("stFileUploader").filter(has_text=label).locator("input[type=file]")
+
+
 def upload_and_ingest(page, interview_path: Path) -> None:
-    page.locator("input[type=file]").set_input_files(str(interview_path))
+    file_input(page, "Importer des entretiens").set_input_files(str(interview_path))
     expect(page.get_by_text(interview_path.name).first).to_be_visible(timeout=TIMEOUT_MS)
     wait_idle(page)  # l'import relance le script : cliquer seulement une fois le rendu terminé
     page.get_by_role("button", name="Lancer l'analyse", exact=True).click()
@@ -409,9 +422,9 @@ def scenario_restore(browser, url: str, interview: Path, downloads: list[Path], 
     expect(page.get_by_text("Restaurer des résultats Stage 3 existants")).to_be_visible(timeout=TIMEOUT_MS)
     restore = page.get_by_role("button", name="Restaurer l'étape 3 depuis ces fichiers (0 appel API)")
     expect(restore).to_be_disabled()
-    inputs = page.locator("input[type=file]")
-    expect(inputs).to_have_count(2, timeout=TIMEOUT_MS)  # import du corpus (haut de page), puis restauration
-    inputs.last.set_input_files([str(p) for p in downloads])  # noms affichés tronqués : on attend le bouton
+    restore_input = file_input(page, "Les 4 fichiers JSON de l'étape 3")
+    expect(restore_input).to_have_count(1, timeout=TIMEOUT_MS)
+    restore_input.set_input_files([str(p) for p in downloads])  # noms affichés tronqués : on attend le bouton
     wait_idle(page)
     expect(restore).to_be_enabled(timeout=TIMEOUT_MS)
     page.screenshot(path=str(shots / "H1_restauration_avant.png"), full_page=True)
@@ -574,9 +587,9 @@ def scenario_restore_stage4(browser, url: str, interview: Path, downloads: list[
     page = browser.new_page(viewport={"width": 1400, "height": 1300})
     page.goto(url)
     upload_and_ingest(page, interview)
-    inputs = page.locator("input[type=file]")
-    expect(inputs).to_have_count(2, timeout=TIMEOUT_MS)  # corpus, restauration de l'étape 3
-    inputs.last.set_input_files([str(p) for p in downloads[:4]])
+    stage3_input = file_input(page, "Les 4 fichiers JSON de l'étape 3")
+    expect(stage3_input).to_have_count(1, timeout=TIMEOUT_MS)
+    stage3_input.set_input_files([str(p) for p in downloads[:4]])
     wait_idle(page)
     page.get_by_role("button", name="Restaurer l'étape 3 depuis ces fichiers (0 appel API)").click()
     expect(page.get_by_text("Stage 3 restauré depuis fichiers — 0 appel API").first).to_be_visible(timeout=TIMEOUT_MS)
@@ -584,8 +597,9 @@ def scenario_restore_stage4(browser, url: str, interview: Path, downloads: list[
     expect(page.get_by_text("Restaurer des résultats Stage 4 existants")).to_be_visible(timeout=TIMEOUT_MS)
     restore = page.get_by_role("button", name="Restaurer l'étape 4 depuis ces fichiers (0 appel API)")
     expect(restore).to_be_disabled()
-    expect(inputs).to_have_count(2, timeout=TIMEOUT_MS)  # corpus, restauration de l'étape 4
-    inputs.last.set_input_files([str(p) for p in downloads[4:]])
+    stage4_input = file_input(page, "Les 2 fichiers JSON de l'étape 4")
+    expect(stage4_input).to_have_count(1, timeout=TIMEOUT_MS)
+    stage4_input.set_input_files([str(p) for p in downloads[4:]])
     wait_idle(page)
     expect(restore).to_be_enabled(timeout=TIMEOUT_MS)
     page.screenshot(path=str(shots / "L1_restauration_etape_4_avant.png"), full_page=True)
@@ -607,6 +621,105 @@ def scenario_restore_stage4(browser, url: str, interview: Path, downloads: list[
           "0 appel d'étape 3 ou 4")
 
 
+STAGE6_LAUNCH = "Lancer la comparaison inter-entretiens ({} appel(s) API payant(s))"
+STAGE6_LABEL = "Sorties de l'étape 5"
+
+
+def stage6_upload(page, paths: list[Path]) -> None:
+    expect(page.get_by_role("heading", name="Étape 6 — Comparaison inter-entretiens")).to_be_visible(
+        timeout=TIMEOUT_MS)
+    wait_idle(page)
+    file_input(page, STAGE6_LABEL).set_input_files([str(p) for p in paths])
+    wait_idle(page)
+
+
+def stage6_rows(page) -> list[list[str]]:
+    table = page.locator("[data-testid=stTable]").filter(has_text="importé").last
+    return [[c.strip() for c in row.locator("td").all_inner_texts()] for row in table.locator("tbody tr").all()]
+
+
+def stage6_download(page, name: str) -> dict:
+    wait_idle(page)
+    with page.expect_download(timeout=TIMEOUT_MS) as info:
+        page.get_by_role("button", name=f"Télécharger {name}").click()
+    return json.loads(Path(info.value.path()).read_text(encoding="utf-8"))
+
+
+def launch_stage6(page, calls: int) -> None:
+    launch = page.get_by_role("button", name=STAGE6_LAUNCH.format(calls))
+    expect(launch).to_be_enabled(timeout=TIMEOUT_MS)
+    launch.click()
+    expect(page.get_by_text(f"Dernière exécution (étape 6) : {calls} appel(s) API").first).to_be_visible(
+        timeout=TIMEOUT_MS)
+    wait_idle(page)
+    assert_no_exception(page)
+
+
+def scenario_stage6_exploratory(browser, url: str, corpus_dir: Path, shots: Path) -> None:
+    page = browser.new_page(viewport={"width": 1400, "height": 1300})
+    page.goto(url)
+    stage6_upload(page, [corpus_dir / name for iid in stage6.IDS_2 for name, _ in stage6.stage5_files(iid)])
+    rows = stage6_rows(page)
+    print("   corpus :", rows)
+    assert [r[:2] for r in rows] == [["ENT_A", "✅ exploitable"], ["ENT_B", "✅ exploitable"]], rows
+    expect(page.get_by_text("N exploitables : 2").first).to_be_visible()
+    expect(page.get_by_text("la comparaison sera marquée EXPLORATOIRE", exact=False)).to_be_visible()
+    launch_stage6(page, 1)
+    expect(page.get_by_text("Comparaison EXPLORATOIRE", exact=False).first).to_be_visible()
+    document = stage6_download(page, "cross_interview_comparison.json")
+    assert document["exploratory"] is True and (document["corpus_n_total"], document["corpus_n_usable"]) == (2, 2)
+    assert all(c["confidence"] != "high" for c in document["cross_case_claims"])
+    page.screenshot(path=str(shots / "N_etape_6_exploratoire.png"), full_page=True)
+    print("N. étape 6 exploratoire : 2 entretiens importés depuis fichiers, 1 appel, aucune confiance « high »")
+
+
+def scenario_stage6_corpus(browser, url: str, corpus_dir: Path, shots: Path) -> None:
+    page = browser.new_page(viewport={"width": 1400, "height": 1300})
+    page.goto(url)
+    garbage = corpus_dir / "notes_illisibles.json"
+    garbage.write_text("{pas du json", encoding="utf-8")
+    paths = [corpus_dir / name for iid in [*stage6.IDS_17, "ENT_X_INVALIDE"] for name, _ in stage6.stage5_files(iid)]
+    stage6_upload(page, [*paths, garbage])
+    rows = stage6_rows(page)
+    assert len(rows) == 18 and [r[0] for r in rows] == [*stage6.IDS_17, "ENT_X_INVALIDE"], rows
+    assert rows[-1][1] == "❌ exclu" and all(r[1] == "✅ exploitable" for r in rows[:-1]), rows
+    assert rows[14][:4] == ["ENT_O", "✅ exploitable", "4", "2"], rows[14]  # claims, needs_review
+    expect(page.get_by_text("N importés : 18").first).to_be_visible()
+    expect(page.get_by_text("N exploitables : 17").first).to_be_visible()
+    expect(page.get_by_text("ENT_X_INVALIDE exclu : validation_error_count = 2", exact=False)).to_be_visible()
+    expect(page.get_by_text("Fichier ignoré — notes_illisibles.json : JSON invalide.")).to_be_visible()
+    page.screenshot(path=str(shots / "O1_etape_6_corpus.png"), full_page=True)
+    launch_stage6(page, 1)
+    expect(page.get_by_text("Cas négatifs (3)")).to_be_visible(timeout=TIMEOUT_MS)
+    expect(page.get_by_text("cas négatifs : 3", exact=False).first).to_be_visible()
+    expect(page.get_by_text("Avertissements de validation", exact=False).first).to_be_visible()
+    page.get_by_text("Détail par catégorie", exact=False).click()
+    expect(page.get_by_text("Frontières récurrentes (2)")).to_be_visible(timeout=TIMEOUT_MS)
+    page.screenshot(path=str(shots / "O2_etape_6_resultats.png"), full_page=True)
+    document = stage6_download(page, "cross_interview_comparison.json")
+    validation = stage6_download(page, "cross_interview_validation.json")
+    manifest = stage6_download(page, "cross_interview_manifest.json")
+    assert (document["corpus_n_total"], document["corpus_n_usable"]) == (18, 17)
+    assert sorted(n["interview_id"] for n in document["negative_cases"]) == ["ENT_D", "ENT_H", "ENT_L"]
+    review = [c for c in document["cross_case_claims"] if "SUPPORTED_ONLY_BY_REVIEW_ITEMS" in c["review_reasons"]]
+    assert len(review) == 1 and review[0]["confidence"] == "low" and review[0]["needs_review"] is True
+    assert validation["error_count"] == 0 and validation["excluded_interviews"][0]["interview_id"] == "ENT_X_INVALIDE"
+    assert manifest["api_calls"] == 1 and manifest["map_reduce_used"] is False
+    assert manifest["upstream_stage_calls"] == 0 and manifest["estimated_input_tokens"] < 12_000
+    print(f"O. étape 6 sur 17 entretiens (+1 invalide, +1 illisible) : 1 appel, "
+          f"{manifest['estimated_input_tokens']} tokens estimés, {manifest['payload_chars']} caractères, "
+          "3 cas négatifs (ENT_D, ENT_H, ENT_L), 1 pattern à revoir, téléchargements JSON OK")
+
+    relaunch = page.get_by_role("button", name=STAGE6_LAUNCH.format(0))
+    expect(relaunch).to_be_visible(timeout=TIMEOUT_MS)
+    relaunch.click()
+    expect(page.get_by_text("Dernière exécution (étape 6) : 0 appel(s) API").first).to_be_visible(timeout=TIMEOUT_MS)
+    expect(page.get_by_text("repris du cache TRACE", exact=False).first).to_be_visible()
+    assert_no_exception(page)
+    page.screenshot(path=str(shots / "P_etape_6_cache.png"), full_page=True)
+    print("P. relance de l'étape 6 : CACHED, 0 appel API")
+
+
 def run_dirs() -> set[Path]:
     return {p for base in (ROOT / "data" / "inputs", ROOT / "data" / "outputs") for p in base.glob("run_*")}
 
@@ -615,6 +728,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--screenshots", type=Path, default=Path(tempfile.mkdtemp(prefix="trace_e2e_")))
     parser.add_argument("--chromium", default=os.environ.get("TRACE_CHROMIUM", "/opt/pw-browsers/chromium"))
+    parser.add_argument("--only-stage6", action="store_true", help="scénarios N à P seulement")
     args = parser.parse_args()
     args.screenshots.mkdir(parents=True, exist_ok=True)
 
@@ -637,12 +751,23 @@ def main() -> int:
     temporal_file.write_text(stage5.TEMPORAL.text, encoding="utf-8")
     stage5_long_file = work / stage5_long.FILENAME
     stage5_long_file.write_text(stage5_long.text(), encoding="utf-8")
+    stage6_dir = work / "stage6_corpus"
+    stage6.write_corpus(stage6_dir, [*stage6.IDS_17, "ENT_X_INVALIDE"])
     base_env = {k: v for k, v in os.environ.items() if not k.startswith(("ANTHROPIC_", "TRACE_"))}
     before = run_dirs()
     try:
         with sync_playwright() as pw:
             executable = args.chromium if Path(args.chromium).exists() else None
             browser = pw.chromium.launch(executable_path=executable, args=["--no-proxy-server"])
+            env6 = {**base_env, "TRACE_E2E_CACHE_DIR": str(work / "cache_stage6"),
+                    "TRACE_E2E_CROSS_DIR": str(work / "cross_interview")}
+            with streamlit_server(ROOT / "tests" / "e2e" / "fake_llm_app.py", env6) as url:
+                scenario_stage6_exploratory(browser, url, stage6_dir, args.screenshots)
+                scenario_stage6_corpus(browser, url, stage6_dir, args.screenshots)
+            if args.only_stage6:
+                browser.close()
+                print(f"Test navigateur (étape 6) réussi. Captures : {args.screenshots}")
+                return 0
             with streamlit_server(ROOT / "app.py", base_env) as url:
                 scenario_without_key(browser, url, interview, args.screenshots)
             env = {**base_env, "TRACE_E2E_CACHE_DIR": str(work / "cache")}
