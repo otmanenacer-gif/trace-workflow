@@ -109,7 +109,7 @@ def test_reference_interview_end_to_end(tmp_path):
 
     manifest = load(run, config.ACCOUNTABILITY_MANIFEST_FILENAME)
     validation = load(run, config.ACCOUNTABILITY_VALIDATION_FILENAME)
-    assert manifest["agent_version"] == "1.0" and manifest["model"] == "fake-model" and manifest["cache_hit"] is False
+    assert manifest["agent_version"] == accountability.SPEC.version and manifest["model"] == "fake-model" and manifest["cache_hit"] is False
     assert set(manifest["source_hashes"]) == {"source_sha256", "structured_transcript_sha256",
                                               "practice_extractor_sha256", "interaction_signals_sha256",
                                               "speaker_audit_sha256"}
@@ -124,12 +124,12 @@ def test_llm_receives_only_candidates_never_the_whole_interview(tmp_path):
     run, t4 = stage4(run, cache)
     params = t4.calls[0]["params"]
     payload = S.sent_payload(params)
-    sent_turns = {t["turn_id"] for t in payload["turns"]}
+    sent_turns = {payload["id_prefix"] + t for t in payload["turns_by_id"]}  # identifiants abrégés dans la requête
     assert len(sent_turns) < len(S.TURNS) and S.tid(2) not in sent_turns and S.tid(18) not in sent_turns
     assert params["system"][0]["text"].startswith("# Accountability Episode Builder")
     assert len(params["messages"]) == 1
-    warned = [t for t in payload["turns"] if "speaker_warning" in t]
-    assert [t["turn_id"] for t in warned] == [S.tid(22)] and warned[0]["speaker"] == "enqueteur"
+    warned = {tid: t for tid, t in payload["turns_by_id"].items() if "speaker_warning" in t}
+    assert list(warned) == ["T0022"] and warned["T0022"]["speaker"] == "enqueteur"
 
 
 # --- Cache ------------------------------------------------------------------------------------------
@@ -155,11 +155,11 @@ def test_identical_interview_is_served_from_cache_with_zero_call(tmp_path):
 def test_stage4_version_or_prompt_change_invalidates_only_stage4(tmp_path, monkeypatch):
     run, cache, _ = stage3(tmp_path)
     run, _ = stage4(run, cache)
-    monkeypatch.setattr(accountability, "SPEC", dataclasses.replace(accountability.SPEC, version="1.1"))
+    monkeypatch.setattr(accountability, "SPEC", dataclasses.replace(accountability.SPEC, version="9.9"))
     assert accountability.plan_stage4(run, [S.INTERVIEW_ID], fake_settings(), cache)["calls"] == 1
     run, after_version = stage4(run, cache)
     assert len(after_version.calls) == 1
-    assert load(run, config.ACCOUNTABILITY_MANIFEST_FILENAME)["agent_version"] == "1.1"
+    assert load(run, config.ACCOUNTABILITY_MANIFEST_FILENAME)["agent_version"] == "9.9"
     changed_prompt = dataclasses.replace(accountability.SPEC, user_template=accountability.SPEC.user_template + " ")
     monkeypatch.setattr(accountability, "SPEC", changed_prompt)
     run, after_prompt = stage4(run, cache)

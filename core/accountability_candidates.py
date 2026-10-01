@@ -22,7 +22,10 @@ Signaux :
 Règles de création d'un candidat :
 A. proximité : un signal déclencheur est rattaché à la ou aux pratiques les PLUS PROCHES, si
    leurs tours se chevauchent, sont distants d'au plus `PROXIMITY_MAX_GAP` positions, ou
-   appartiennent au même échange question/réponse ;
+   appartiennent au même échange question/réponse. Étape 4.1 : si le tour du signal porte
+   lui-même des pratiques (tour long, plusieurs pratiques), seules ces pratiques comptent, et
+   seulement si leurs citations sont à au plus `INTRA_TURN_MAX_GAP_CHARS` caractères de celles
+   du signal dans le texte du tour ; sinon le signal n'est rattaché à rien (`FAR_WITHIN_TURN`) ;
 B. contradiction entre tours : `cross_turn_contradiction` est rattachée aux pratiques ancrées
    sur les tours QU'ELLE CITE, même éloignés — jamais aux pratiques situées entre eux ;
 C. polarité : un non-usage / refus et l'usage le plus proche portant sur la même tâche
@@ -37,26 +40,45 @@ pratiques sont incluses dans celles d'UN SEUL autre candidat y est rattaché. Ri
 
 Les pratiques sans candidat sont « sans marqueur » (`unmarked_practice_ids`) : racontées sans
 aucun des indices ci-dessus, elles ne sont pas envoyées au modèle.
+
+Composantes (étape 4.1, `candidate_links` / `candidate_components`) : deux candidats sont reliés
+seulement par une relation EXPLICITE — pratique partagée, signal déclencheur partagé, mêmes tours
+cités ET même tâche, ou contradiction entre tours qui cite les tours de l'autre. Un épisode ne peut
+réunir que des candidats reliés (validé par core/accountability_episode_validator.py) ; un découpage
+de la requête en plusieurs appels ne coupe jamais une composante.
+
+Représentation envoyée (format 2, `build_payload`) : NORMALISÉE — chaque citation, pratique, signal
+et tour figure une seule fois (`evidence_by_id`, `practices_by_id`, `signals_by_id`,
+`turns_by_id`), les candidats ne portent que des identifiants ; le préfixe commun des identifiants
+(`id_prefix`, « <ENTRETIEN>_ ») est déclaré une fois et omis partout (`T0028`, `P005`, `S010`, `C001`) ;
+`expand_ids` le rétablit, sans ambiguïté, dans la réponse du modèle avant toute validation ; champs
+vides omis, JSON compact.
 """
 
 from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from dataclasses import dataclass, field
 
 from core import evidence_validator, interpretation_guard, signal_selectivity
 from core.interaction_chunking import estimate_tokens
 from core.schemas import SPEAKER_INTERVIEWER
 
-CANDIDATE_BUILDER_VERSION = "1.0"
+CANDIDATE_BUILDER_VERSION = "1.1"  # 1.1 : proximité intra-tour, composantes, représentation normalisée
+PAYLOAD_FORMAT_VERSION = "2"
 
 PROXIMITY_MAX_GAP = 2                  # positions : un tour de question entre deux réponses
+# Proximité dans un même tour : au plus 200 caractères (≈ 2 phrases, 35 mots) entre la citation du signal et
+# celle de la pratique. Au-delà, deux passages d'un long tour ne sont plus « proches » (tour T0028 du vrai run).
+INTRA_TURN_MAX_GAP_CHARS = 200
 MAX_CONTEXT_TURNS_PER_CANDIDATE = 8
 MAX_TURN_CHARS = 1200                  # au-delà, le tour est abrégé autour des citations
 QUOTE_WINDOW_CHARS = 250
-# Seuils d'un appel unique (documentés dans docs/stage4_accountability_episodes.md) : au-delà, la
-# requête part quand même en UN appel, mais le manifest le signale (découpage par candidats à prévoir).
+# Seuils d'un appel unique (documentés dans docs/stage4_accountability_episodes.md), mesurés sur la
+# représentation NORMALISÉE : au-delà, la requête est découpée par composantes de candidats (jamais au
+# milieu d'une composante), chaque bloc restant sous ces seuils autant que possible.
 SINGLE_CALL_MAX_INPUT_TOKENS = 24_000
 SINGLE_CALL_MAX_CANDIDATES = 60
 
@@ -92,6 +114,7 @@ REASON_INTERVIEWER_ONLY = "INTERVIEWER_ONLY_EVIDENCE"
 REASON_MICRO_MARKER = "MICRO_MARKER"
 REASON_NOT_A_TRIGGER = "NOT_A_TRIGGER_TYPE"
 REASON_NO_NEARBY_PRACTICE = "NO_NEARBY_PRACTICE"
+REASON_FAR_WITHIN_TURN = "FAR_WITHIN_TURN"
 
 _ARTICLES = frozenset("le la les l un une des de du d mes ses tes mon ma ton ta son sa leurs leur nos vos".split())
 
@@ -138,6 +161,26 @@ def _distance(a: set[int], b: set[int]) -> int:
     return min(abs(x - y) for x in a for y in b)
 
 
+def _spans(quotes: list[dict], turn_id: str, text: str) -> list[tuple[int, int]]:
+    """Positions (dans le texte NFC du tour) des citations d'un objet qui portent sur ce tour."""
+    spans = []
+    for e in quotes:
+        if e["turn_id"] != turn_id:
+            continue
+        quote = unicodedata.normalize("NFC", e["quote"])
+        start = text.find(quote)
+        if start >= 0:
+            spans.append((start, start + len(quote)))
+    return spans
+
+
+def intra_turn_gap(a: list[tuple[int, int]], b: list[tuple[int, int]]) -> int:
+    """Nombre de caractères entre les deux passages les plus proches (0 s'ils se chevauchent)."""
+    if not a or not b:
+        return 0  # citation non localisée (ne devrait pas arriver : citations valides) → pas d'exclusion
+    return min(max(0, max(s1, s2) - min(e1, e2)) for s1, e1 in a for s2, e2 in b)
+
+
 def boundary_matches(quotes: list[str]) -> list[str]:
     folded = interpretation_guard.fold(" ".join(quotes)).replace("'", " ")
     return [label for label, regex in _BOUNDARY_RES.items() if regex.search(folded)]
@@ -178,6 +221,7 @@ def build_candidates(transcript: dict, practices: list[dict], signals: list[dict
     turns = evidence_validator.index_turns(transcript)
     position = {turn_id: info["position"] for turn_id, info in turns.items()}
     ids = [t["turn_id"] for t in transcript["turns"]]
+    turn_text = [unicodedata.normalize("NFC", t["text"]) for t in transcript["turns"]]
     exchange = _exchanges(transcript)
 
     # --- Pratiques : appuis valides, voix de l'enquêté·e ---------------------------------
@@ -278,11 +322,24 @@ def build_candidates(transcript: dict, practices: list[dict], signals: list[dict
             else:
                 unattached.append({"signal_id": sid, "reason": REASON_NO_NEARBY_PRACTICE})
             continue
-        near = nearest(points, PROXIMITY_MAX_GAP, True)
+        hosts = [pid for pid in eligible if anchors[pid] & points]  # pratiques citées dans le tour du signal
+        if hosts:
+            # Tour portant des pratiques : proximité mesurée DANS le tour, sur les citations exactes
+            scored = []
+            for pid in hosts:
+                gap = min(intra_turn_gap(_spans(signal_quotes[sid], ids[i], turn_text[i]),
+                                         _spans(valid_quotes[pid], ids[i], turn_text[i]))
+                          for i in anchors[pid] & points)
+                if gap <= INTRA_TURN_MAX_GAP_CHARS:
+                    scored.append((gap, pid))
+            near = [pid for gap, pid in scored if gap == min(g for g, _ in scored)] if scored else []
+            reason = REASON_FAR_WITHIN_TURN
+        else:
+            near, reason = nearest(points, PROXIMITY_MAX_GAP, True), REASON_NO_NEARBY_PRACTICE
         if near:
             attached[sid] = near
         elif signal.get("signal_type") in TRIGGER_SIGNAL_TYPES:
-            unattached.append({"signal_id": sid, "reason": REASON_NO_NEARBY_PRACTICE})
+            unattached.append({"signal_id": sid, "reason": reason})
         else:
             ignored.append({"signal_id": sid, "reason": REASON_NOT_A_TRIGGER})
 
@@ -383,7 +440,21 @@ def build_candidates(transcript: dict, practices: list[dict], signals: list[dict
             "first_turn_id": ids[min(evidence_points)],
             "last_turn_id": ids[max(evidence_points)],
             "speaker_warning_turn_ids": [t for t in turn_ids if t in warnings],
+            # éléments des relations entre candidats (composantes, étape 4.1)
+            "evidence_turn_ids": [ids[i] for i in evidence_points],
+            "tasks": sorted({k for k in (normalize_task(practice_by_id[p].get("academic_task")) for p in practice_ids)
+                             if k}),
+            "substantive_signal_ids": [s for s in signal_ids
+                                       if signal_by_id[s].get("signal_type") in TRIGGER_SIGNAL_TYPES],
+            "contradiction_turn_ids": sorted({t for s in signal_ids
+                                              if signal_by_id[s].get("signal_type") == "cross_turn_contradiction"
+                                              for t in [*signal_by_id[s].get("turn_ids", []),
+                                                        *(e["turn_id"] for e in signal_quotes[s])]
+                                              if t in position}, key=position.get),
         })
+    components = candidate_components(candidates)
+    for cand in candidates:
+        cand["component_id"] = components[cand["candidate_id"]]
 
     unmarked = [pid for pid in eligible if pid not in in_candidate]
     ignored = sorted({(i["signal_id"], i["reason"]) for i in ignored if i["signal_id"] not in used_signals})
@@ -406,6 +477,8 @@ def build_candidates(transcript: dict, practices: list[dict], signals: list[dict
             "unattached_signal_count": len(unattached),
             "candidates_by_trigger": {t: sum(t in c["trigger_types"] for c in candidates) for t in sorted(
                 {t for c in candidates for t in c["trigger_types"]})},
+            "component_count": len(set(components.values())),
+            "far_within_turn_signal_count": sum(u["reason"] == REASON_FAR_WITHIN_TURN for u in unattached),
         },
         # usage interne (payload) : non sérialisé dans les sorties
         "_index": {"practices": practice_by_id, "signals": signal_by_id, "practice_quotes": valid_quotes,
@@ -413,64 +486,219 @@ def build_candidates(transcript: dict, practices: list[dict], signals: list[dict
     }
 
 
-# --- Représentation compacte envoyée au modèle --------------------------------------------
+# --- Relations entre candidats (étape 4.1) ------------------------------------------------
 
-def build_payload(transcript: dict, built: dict, speaker_warnings: dict | None = None) -> dict:
-    """Candidats, pratiques, signaux et tours strictement nécessaires (chacun une seule fois)."""
+def candidate_links(a: dict, b: dict) -> list[str]:
+    """Relations EXPLICITES entre deux candidats (vide : aucun lien, ils ne peuvent former un même épisode).
+
+    A. pratique partagée ; B. signal déclencheur partagé ; C. mêmes tours cités ET même tâche
+    normalisée ; D. contradiction entre tours de l'un qui cite un tour de l'autre. Jamais le seul
+    fait de parler du même outil ou d'un même thème."""
+    links = []
+    if set(a["practice_ids"]) & set(b["practice_ids"]):
+        links.append("shared_practice")
+    if set(a.get("substantive_signal_ids", [])) & set(b.get("substantive_signal_ids", [])):
+        links.append("shared_signal")
+    if (set(a.get("evidence_turn_ids", [])) & set(b.get("evidence_turn_ids", []))
+            and set(a.get("tasks", [])) & set(b.get("tasks", []))):
+        links.append("same_turns_same_task")
+    if (set(a.get("contradiction_turn_ids", [])) & set(b.get("evidence_turn_ids", []))
+            or set(b.get("contradiction_turn_ids", [])) & set(a.get("evidence_turn_ids", []))):
+        links.append("cross_turn_contradiction")
+    return links
+
+
+def connected_groups(candidates: list[dict]) -> list[list[str]]:
+    """Composantes connexes (graphe des relations explicites) d'un ensemble de candidats, dans l'ordre."""
+    ids = [c["candidate_id"] for c in candidates]
+    parent = {cid: cid for cid in ids}
+
+    def find(x: str) -> str:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for i, a in enumerate(candidates):
+        for b in candidates[i + 1:]:
+            if candidate_links(a, b):
+                parent[find(a["candidate_id"])] = find(b["candidate_id"])
+    groups: dict[str, list[str]] = {}
+    for cid in ids:
+        groups.setdefault(find(cid), []).append(cid)
+    return list(groups.values())
+
+
+def candidate_components(candidates: list[dict]) -> dict[str, str]:
+    """{candidate_id: identifiant de composante} (K01, K02… dans l'ordre de l'entretien)."""
+    return {cid: f"K{number:02d}" for number, group in enumerate(connected_groups(candidates), start=1)
+            for cid in group}
+
+
+# --- Représentation NORMALISÉE envoyée au modèle (format 2) --------------------------------------
+
+def _compact(item: dict) -> dict:
+    """Champs vides (None, [], "") omis : ils n'apportent rien au modèle."""
+    return {k: v for k, v in item.items() if v not in (None, [], "")}
+
+
+def build_payload(transcript: dict, built: dict, speaker_warnings: dict | None = None,
+                  candidate_ids: list[str] | None = None) -> dict:
+    """Candidats (identifiants seulement) + tables : chaque citation, pratique, signal et tour une seule fois.
+
+    `candidate_ids` : sous-ensemble (un bloc de composantes) ; par défaut tous les candidats."""
     warnings = speaker_warnings or {}
     index = built["_index"]
+    wanted = set(candidate_ids) if candidate_ids is not None else None
+    chosen = [c for c in built["candidates"] if wanted is None or c["candidate_id"] in wanted]
     turns_by_id = {t["turn_id"]: t for t in transcript["turns"]}
     order = {t["turn_id"]: i for i, t in enumerate(transcript["turns"])}
-    practice_ids = list(dict.fromkeys(p for c in built["candidates"] for p in c["practice_ids"]))
-    signal_ids = list(dict.fromkeys(s for c in built["candidates"] for s in c["signal_ids"]))
-    turn_ids = sorted({t for c in built["candidates"] for t in c["turn_ids"]}, key=order.get)
+    practice_ids = list(dict.fromkeys(p for c in chosen for p in c["practice_ids"]))
+    signal_ids = list(dict.fromkeys(s for c in chosen for s in c["signal_ids"]))
+    turn_ids = sorted({t for c in chosen for t in c["turn_ids"]}, key=order.get)
 
-    def quotes(items: list[dict]) -> list[dict]:
-        return [{"turn_id": e["turn_id"], "quote": e["quote"]} for e in items]
+    evidence_by_id: dict[str, dict] = {}
+    evidence_key: dict[tuple[str, str], str] = {}
 
-    practices = []
+    def refs(items: list[dict]) -> list[str]:
+        out = []
+        for e in items:
+            key = (e["turn_id"], e["quote"])
+            if key not in evidence_key:
+                evidence_key[key] = f"Q{len(evidence_key) + 1:03d}"
+                evidence_by_id[evidence_key[key]] = {"turn_id": e["turn_id"], "quote": e["quote"]}
+            out.append(evidence_key[key])
+        return list(dict.fromkeys(out))
+
+    practices = {}
     for pid in practice_ids:
         p = index["practices"][pid]
-        practices.append({
-            "practice_id": pid, "use_status": p.get("use_status"), "non_use_reason": p.get("non_use_reason"),
+        practices[pid] = _compact({
+            "use_status": p.get("use_status"), "non_use_reason": p.get("non_use_reason"),
             "practice_domain": p.get("practice_domain"), "academic_task": p.get("academic_task"),
             "summary": p.get("summary"), "turn_start": p.get("turn_start"), "turn_end": p.get("turn_end"),
-            "stated_reason": p.get("stated_reason") or [], "explicit_constraints": p.get("explicit_constraints") or [],
-            "stated_frequency": p.get("stated_frequency"), "quotes": quotes(index["practice_quotes"][pid]),
+            "stated_reason": p.get("stated_reason"), "explicit_constraints": p.get("explicit_constraints"),
+            "stated_frequency": p.get("stated_frequency"), "evidence": refs(index["practice_quotes"][pid]),
         })
-    signals = []
+    signals = {}
     for sid in signal_ids:
         s = index["signals"][sid]
-        signals.append({
-            "signal_id": sid, "signal_type": s.get("signal_type"), "surface_form": s.get("surface_form"),
-            "description": s.get("description"), "turn_ids": s.get("turn_ids", []),
-            "explicit_affect": s.get("explicit_affect"), "quotes": quotes(index["signal_quotes"][sid]),
+        signals[sid] = _compact({
+            "signal_type": s.get("signal_type"), "surface_form": s.get("surface_form"),
+            "explicit_affect": s.get("explicit_affect"), "evidence": refs(index["signal_quotes"][sid]),
         })
     cited: dict[str, list[str]] = {}
-    for item in [*(index["practice_quotes"][p] for p in practice_ids), *(index["signal_quotes"][s] for s in signal_ids)]:
-        for e in item:
-            cited.setdefault(e["turn_id"], []).append(e["quote"])
-    turns = []
+    for e in evidence_by_id.values():
+        cited.setdefault(e["turn_id"], []).append(e["quote"])
+    turns = {}
     for tid in turn_ids:
         turn = turns_by_id[tid]
-        item = {"turn_id": tid, "speaker": turn["speaker"], "text": excerpt(turn["text"], cited.get(tid, []))}
+        item = {"speaker": turn["speaker"], "text": excerpt(turn["text"], cited.get(tid, []))}
         if tid in warnings:
             item["speaker_warning"] = {"suggested_speaker": warnings[tid].get("suggested_speaker"),
                                        "confidence": warnings[tid].get("confidence")}
-        turns.append(item)
-    candidates = [{"candidate_id": c["candidate_id"], "triggers": c["trigger_types"], "practice_ids": c["practice_ids"],
-                   "signal_ids": c["signal_ids"], "turn_ids": c["turn_ids"]} for c in built["candidates"]]
-    return {"interview_id": transcript["interview_id"], "candidates": candidates, "practices": practices,
-            "signals": signals, "turns": turns}
+        turns[tid] = item
+    candidates = [{"candidate_id": c["candidate_id"], "component_id": c["component_id"],
+                   "trigger_types": c["trigger_types"], "practice_ids": c["practice_ids"],
+                   "signal_ids": c["signal_ids"], "turn_ids": c["turn_ids"]} for c in chosen]
+    prefix = id_prefix(transcript["interview_id"])
+    short = lambda value: value.removeprefix(prefix) if isinstance(value, str) else value  # noqa: E731
+    for c in candidates:
+        c.update(candidate_id=short(c["candidate_id"]), practice_ids=[short(x) for x in c["practice_ids"]],
+                 signal_ids=[short(x) for x in c["signal_ids"]], turn_ids=[short(x) for x in c["turn_ids"]])
+    for item in practices.values():
+        for key in ("turn_start", "turn_end"):
+            if key in item:
+                item[key] = short(item[key])
+    for e in evidence_by_id.values():
+        e["turn_id"] = short(e["turn_id"])
+    return {"interview_id": transcript["interview_id"], "payload_format": PAYLOAD_FORMAT_VERSION,
+            "id_prefix": prefix, "candidates": candidates,
+            "practices_by_id": {short(k): v for k, v in practices.items()},
+            "signals_by_id": {short(k): v for k, v in signals.items()},
+            "evidence_by_id": evidence_by_id, "turns_by_id": {short(k): v for k, v in turns.items()}}
+
+
+def id_prefix(interview_id: str) -> str:
+    return f"{interview_id}_"
+
+
+_SHORT_ID = re.compile(r"^[CPST]\d+$")
+
+
+def expand_ids(output: dict, interview_id: str) -> dict:
+    """Rétablit le préfixe des identifiants abrégés (T0028 → <ENTRETIEN>_T0028) dans la réponse du modèle.
+
+    Déterministe : seuls les identifiants de la forme lettre + chiffres sont complétés ; un identifiant
+    complet ou inattendu est laissé tel quel (la validation le contrôle ensuite)."""
+    prefix = id_prefix(interview_id)
+
+    def full(value):
+        return prefix + value if isinstance(value, str) and _SHORT_ID.match(value) else value
+
+    episodes = []
+    for episode in output.get("episodes", []):
+        episode = dict(episode)
+        for key in ("candidate_ids", "practice_ids", "signal_ids"):
+            episode[key] = [full(v) for v in episode.get(key, [])]
+        for key in ("turn_start", "turn_end"):
+            episode[key] = full(episode.get(key))
+        episode["evidence"] = [{**e, "turn_id": full(e.get("turn_id"))} for e in episode.get("evidence", [])]
+        episode["accounting_moves"] = [{**m, "evidence_turn_ids": [full(t) for t in m.get("evidence_turn_ids", [])]}
+                                       for m in episode.get("accounting_moves", [])]
+        episodes.append(episode)
+    return {**output, "episodes": episodes}
+
+
+PAYLOAD_SECTIONS = ("candidates", "practices_by_id", "signals_by_id", "evidence_by_id", "turns_by_id")
 
 
 def serialize_payload(payload: dict) -> str:
-    """JSON déterministe, un objet par ligne ; « </ » échappé (le texte ne peut pas fermer la balise)."""
-    parts = ['{"interview_id":' + json.dumps(payload["interview_id"], ensure_ascii=False)]
-    for key in ("candidates", "practices", "signals", "turns"):
-        lines = [json.dumps(item, ensure_ascii=False, sort_keys=True) for item in payload[key]]
-        parts.append(f'"{key}":[\n' + ",\n".join(lines) + "\n]")
+    """JSON compact et déterministe, une entrée par ligne ; « </ » échappé (le texte ne peut pas fermer la balise)."""
+    def dump(value) -> str:
+        return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+    parts = ['{"interview_id":' + dump(payload["interview_id"]),
+             '"payload_format":' + dump(payload["payload_format"]), '"id_prefix":' + dump(payload["id_prefix"])]
+    for key in PAYLOAD_SECTIONS:
+        value = payload[key]
+        if isinstance(value, list):
+            body = ",\n".join(dump(item) for item in value)
+            parts.append(f'"{key}":[\n{body}\n]')
+        else:
+            body = ",\n".join(f"{dump(k)}:{dump(v)}" for k, v in value.items())
+            parts.append(f'"{key}":{{\n{body}\n}}')
     return (",\n".join(parts) + "}").replace("</", "<\\/")
+
+
+def plan_payload_chunks(transcript: dict, built: dict, speaker_warnings: dict | None = None,
+                        max_tokens: int | None = None, max_candidates: int | None = None,
+                        overhead_tokens: int = 0) -> list[list[str]]:
+    """Blocs de candidats pour l'Accountability Episode Builder : UN seul si la représentation normalisée
+    tient sous les seuils ; sinon des composantes entières regroupées dans l'ordre de l'entretien (une
+    composante n'est jamais coupée, même si elle dépasse seule le seuil)."""
+    max_tokens = SINGLE_CALL_MAX_INPUT_TOKENS if max_tokens is None else max_tokens
+    max_candidates = SINGLE_CALL_MAX_CANDIDATES if max_candidates is None else max_candidates
+    all_ids = [c["candidate_id"] for c in built["candidates"]]
+    if not all_ids:
+        return []
+
+    def size(ids: list[str]) -> int:
+        return overhead_tokens + estimate_tokens(serialize_payload(build_payload(transcript, built, speaker_warnings, ids)))
+
+    if size(all_ids) <= max_tokens and len(all_ids) <= max_candidates:
+        return [all_ids]
+    chunks, current = [], []
+    for group in connected_groups(built["candidates"]):
+        trial = current + group
+        if current and (size(trial) > max_tokens or len(trial) > max_candidates):
+            chunks.append(current)
+            current = list(group)
+        else:
+            current = trial
+    if current:
+        chunks.append(current)
+    return chunks
 
 
 def public(built: dict) -> dict:

@@ -169,7 +169,7 @@ def stage3_responders(audit=True):
 # --- Étape 4 simulée : lecteur DÉTERMINISTE des candidats envoyés ----------------------------
 
 _CANDIDATES_RE = re.compile(r"<candidates>\n(.*)\n</candidates>", re.DOTALL)
-_TURN_NUMBER = re.compile(r"_T(\d+)$")
+_TURN_NUMBER = re.compile(r"T(\d+)$")  # identifiant complet ou abrégé (représentation normalisée)
 
 
 def sent_payload(params: dict) -> dict:
@@ -192,11 +192,15 @@ def decision(status: str, summary: str, moves=(), boundary=(), problem=None, ext
             "evidence": evidence}
 
 
+def practice_quotes(payload: dict, practice_id: str) -> list[dict]:
+    """Citations d'une pratique dans la représentation normalisée (format 2) : evidence → evidence_by_id."""
+    return [payload["evidence_by_id"][ref] for ref in payload["practices_by_id"][practice_id]["evidence"]]
+
+
 def build_episode(candidate: dict, payload: dict, rule: dict) -> dict:
     interview_id = payload["interview_id"]
-    practices = {p["practice_id"]: p for p in payload["practices"]}
     turn = lambda n: f"{interview_id}_T{n:04d}"  # noqa: E731
-    quotes = [q for pid in candidate["practice_ids"] for q in practices[pid]["quotes"]]
+    quotes = [q for pid in candidate["practice_ids"] for q in practice_quotes(payload, pid)]
     evidence = ([{"turn_id": turn(n), "quote": q} for n, q in rule["evidence"]] if rule.get("evidence")
                 else list({(q["turn_id"], q["quote"]): q for q in quotes}.values()))
     numbers = sorted(turn_number(t) for t in candidate["turn_ids"])
@@ -213,8 +217,7 @@ def build_episode(candidate: dict, payload: dict, rule: dict) -> dict:
 
 
 def anchor(candidate: dict, payload: dict) -> int:
-    practices = {p["practice_id"]: p for p in payload["practices"]}
-    return min(turn_number(q["turn_id"]) for pid in candidate["practice_ids"] for q in practices[pid]["quotes"])
+    return min(turn_number(q["turn_id"]) for pid in candidate["practice_ids"] for q in practice_quotes(payload, pid))
 
 
 UNKNOWN = decision("uncertain", "Le matériau de ce candidat n'a pas été prévu par le lecteur simulé.",

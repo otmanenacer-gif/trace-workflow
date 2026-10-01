@@ -26,7 +26,10 @@ G. étape 4 sur l'entretien long synthétique (320 tours) : 8 candidats pour 31 
 H. restauration (serveur neuf, cache vide, comme après un redéploiement) : l'entretien de l'étape 4 est
    réimporté, ses 4 JSON d'étape 3 (calculés au préalable par le LLM simulé) sont importés dans
    « Restaurer des résultats Stage 3 existants », puis l'étape 4 est lancée : 0 appel d'étape 3, 1 appel
-   d'étape 4, résultats identiques.
+   d'étape 4, résultats identiques ;
+I. étape 4.1 : entretien de régression « OTMANE » synthétique (388 tours, longs tours à plusieurs pratiques) :
+   26 candidats, représentation normalisée, 1 appel, 17 épisodes / 8 ordinaires examinées / 22 sans marqueur,
+   aucune fusion de composantes déconnectées, aucun avertissement.
 
 Non collecté par pytest (nécessite Playwright et un navigateur). Les runs
 créés dans data/ pendant le test sont supprimés à la fin.
@@ -58,6 +61,7 @@ from tests import synthetic_long_interview as long_interview  # noqa: E402
 from tests import synthetic_stage37 as stage37  # noqa: E402
 from tests import synthetic_stage4 as stage4  # noqa: E402
 from tests import synthetic_stage4_long as stage4_long  # noqa: E402
+from tests import synthetic_stage4_otmane as otmane  # noqa: E402
 
 TIMEOUT_MS = 30_000
 
@@ -422,6 +426,25 @@ def scenario_restore(browser, url: str, interview: Path, downloads: list[Path], 
           "0 appel d'étape 3, étape 4 : 1 appel, 4 épisodes / 1 ordinaire + 4 sans marqueur / 1 incertain")
 
 
+def scenario_otmane(browser, url: str, interview: Path, shots: Path) -> None:
+    page = browser.new_page(viewport={"width": 1400, "height": 1300})
+    page.goto(url)
+    run_stage3_then_stage4(page, interview, "Lancer les deux analyses IA (au plus 8 appel(s) API payant(s))", 26)
+    row = stage4_row(page)
+    print("   ligne étape 4 :", row)
+    assert row == [otmane.INTERVIEW_ID, "COMPLETE", "✅ SUCCESS", "26", "17", "8", "22", "0", "0", "0", "1"], row
+    label = f"Épisodes d'accountability — {otmane.INTERVIEW_ID} — aperçu"
+    page.get_by_text(label).click()
+    episodes = download_json(page, label, "accountability_episodes.json")
+    assert episodes["payload_format"] == "2" and episodes["usable_episode_count"] == episodes["episode_count"] == 25
+    assert not any("DISCONNECTED_MERGE" in e["review_reasons"] for e in episodes["episodes"])
+    assert "coupable" not in json.dumps(episodes["episodes"], ensure_ascii=False)
+    assert_no_exception(page)
+    page.screenshot(path=str(shots / "I_etape_4_1_otmane.png"), full_page=True)
+    print("I. étape 4.1 « OTMANE » synthétique : 26 candidats, 1 appel, 25 épisodes utilisables, aucune fusion "
+          "déconnectée, mot de l'enquêteur non attribué")
+
+
 def run_dirs() -> set[Path]:
     return {p for base in (ROOT / "data" / "inputs", ROOT / "data" / "outputs") for p in base.glob("run_*")}
 
@@ -446,6 +469,8 @@ def main() -> int:
     stage4_file.write_text(stage4.TEXT, encoding="utf-8")
     stage4_long_file = work / stage4_long.FILENAME
     stage4_long_file.write_text(stage4_long.text(), encoding="utf-8")
+    otmane_file = work / otmane.FILENAME
+    otmane_file.write_text(otmane.text(), encoding="utf-8")
     base_env = {k: v for k, v in os.environ.items() if not k.startswith(("ANTHROPIC_", "TRACE_"))}
     before = run_dirs()
     try:
@@ -462,6 +487,7 @@ def main() -> int:
                 scenario_stage37(browser, url, stage37_file, args.screenshots)
                 scenario_stage4(browser, url, stage4_file, args.screenshots)
                 scenario_stage4_long(browser, url, stage4_long_file, args.screenshots)
+                scenario_otmane(browser, url, otmane_file, args.screenshots)
             downloads = stage3_downloads(work)
             env_restore = {**base_env, "TRACE_E2E_CACHE_DIR": str(work / "cache_after_redeploy")}
             with streamlit_server(ROOT / "tests" / "e2e" / "fake_llm_app.py", env_restore) as url:
