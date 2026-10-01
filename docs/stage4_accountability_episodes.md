@@ -242,18 +242,59 @@ avertissements) + nom, version, empreinte du prompt et du schéma de l'agent + m
 ## Coût futur
 
 - **0 appel** si un entretien n'a aucun candidat ; **1 appel** sinon (tous les candidats dans une seule
-  requête) ; 0 depuis le cache.
-- Entretien de référence (25 tours, 6 candidats) : ≈ 3 500 tokens d'entrée estimés pour la requête
-  (consignes système en plus, mises en cache par l'API) ; la sortie réelle est à mesurer (≈ 250 tokens par épisode).
-- Entretien long synthétique (320 tours, 31 pratiques, 72 signaux, 8 candidats) : ≈ 4 700 tokens
-  d'entrée estimés, un seul appel.
-- **Seuil documenté d'un appel unique** : `SINGLE_CALL_MAX_INPUT_TOKENS = 24 000` tokens estimés
-  (longueur / 3,5) et `SINGLE_CALL_MAX_CANDIDATES = 60`. Au-delà, la requête part quand même en un
-  appel, mais le manifest (`over_single_call_threshold: true`) et la validation
-  (`PAYLOAD_OVER_THRESHOLD`) le signalent. Un découpage par groupes de candidats n'est **pas** implémenté :
-  les tests montrent qu'un entretien long synthétique tient largement dans un appel (≈ 5 fois sous le
-  seuil). À prévoir seulement si un vrai entretien dépasse le seuil.
+  requête normalisée) ; 0 depuis le cache. Plusieurs appels seulement au-delà des seuils (voir 4.1).
+- Estimations d'entrée (longueur du message / 3,5 ; consignes système en plus, mises en cache par l'API) :
+
+| Entretien synthétique | Candidats | Format 1 (4.0) | Format 2 normalisé (4.1) | Réduction | Appels |
+|---|---|---|---|---|---|
+| référence (25 tours) | 6 | ≈ 3 470 | ≈ 2 450 | −29 % | 1 |
+| long (320 tours, 31 pratiques, 72 signaux) | 8 | ≈ 4 670 | ≈ 3 000 | −36 % | 1 |
+| régression « OTMANE » (388 tours, 50 pratiques, 76 signaux) | 26 | ≈ 13 500 | ≈ 8 900 | −34 % | 1 |
+
+  Ces réductions comparent les deux formats sur les MÊMES candidats. Sur l'entretien « OTMANE »
+  synthétique, l'ancien pipeline complet (constructeur 4.0, qui rattachait un signal à toutes les
+  pratiques d'un long tour : 38 candidats) produisait ≈ 19 100 tokens, soit −53 % au total.
+- **Seuils documentés d'un appel unique** : `SINGLE_CALL_MAX_INPUT_TOKENS = 24 000` tokens estimés pour le
+  message complet et `SINGLE_CALL_MAX_CANDIDATES = 60`. Au-delà (entretiens réellement très gros
+  seulement), la requête est découpée en blocs de **composantes entières** (jamais au milieu d'une
+  composante), un appel et une entrée de cache par bloc ; un bloc en échec rend le résultat `PARTIAL`.
+  Une composante qui dépasse seule le seuil part en un bloc et est signalée (`PAYLOAD_OVER_THRESHOLD`).
+  `max_tokens` n'est jamais augmenté pour compenser.
 - Sortie : ≈ 250 tokens par épisode ; 60 candidats ≈ 15 000 tokens, sous `TRACE_LLM_MAX_TOKENS` (32 000).
+
+## Étape 4.1 — stabilisation après le premier run réel
+
+Le premier run réel (OTMANE_NACER, 388 tours) a révélé trois problèmes ; correctifs ciblés, sans refonte :
+
+1. **Proximité trop large dans un même tour.** Un signal était rattaché à toutes les pratiques d'un même tour,
+   même quand leurs citations étaient éloignées dans un long tour (T0028). Désormais, si le tour du signal porte
+   des pratiques, la proximité est mesurée sur les citations exactes, localisées dans le texte du tour :
+   au plus `INTRA_TURN_MAX_GAP_CHARS = 200` caractères (≈ 2 phrases, 35 mots) entre les deux passages ;
+   sinon aucun rattachement (`FAR_WITHIN_TURN`). Les déclencheurs explicites (frontière, usage / non-usage d'un
+   même passage, contradiction, polarité) ne dépendent pas de cette règle.
+2. **Fusions trop permissives.** Deux candidats ne sont reliés que par une relation explicite
+   (`candidate_links`) : A. pratique partagée ; B. signal déclencheur partagé ; C. mêmes tours cités ET même
+   tâche normalisée ; D. contradiction entre tours qui cite les tours de l'autre. Chaque candidat porte un
+   `component_id` (composante connexe ; une chaîne reliée est acceptée). Le modèle reçoit ces composantes et
+   ne peut pas les réunir ; le validateur le vérifie : un épisode dont les candidats ne forment pas un graphe
+   connexe reçoit l'erreur `DISCONNECTED_MERGE`, est `rejected`, `needs_review`, et
+   `usable_for_next_stages: false` (`usable_episode_count` ne le compte pas). Proximité chronologique, thème
+   commun (« un rendu ») ou même outil (« ChatGPT ») ne relient jamais deux candidats.
+3. **Requête trop grosse** (≈ 35 800 tokens estimés pour 28 candidats). Format 2 normalisé : `practices_by_id`,
+   `signals_by_id`, `evidence_by_id` (chaque citation une fois, référencée par `Q001`…), `turns_by_id`,
+   candidats réduits à des identifiants ; préfixe commun des identifiants déclaré une fois (`id_prefix`) et
+   omis partout, puis rétabli de façon déterministe dans la réponse avant validation (`expand_ids`) ; champs
+   vides omis ; descriptions rédigées par l'Interaction Reader non envoyées (type, forme et citations le
+   sont) ; JSON compact. Découpage par composantes au-delà des seuils (ci-dessus).
+
+**Vocabulaire.** Affects et états intérieurs (culpabilité / coupable, honte, peur / crainte, anxiété, gêne,
+embarras, intention, motivation, légitimité / légitimation…) ne sont jamais une catégorie d'analyse, sauf
+s'ils figurent dans une citation **de l'enquêté·e** associée à l'épisode (épisode, pratiques, signaux). Un
+terme qui ne vient que d'une question de l'enquêteur est en outre signalé `INTERVIEWER_TERM_ATTRIBUTED`.
+Pratique ordinaire : écrire « Aucune restriction, justification ou évaluation explicite n'est relevée dans ce
+passage. » (cette tournure négative n'est pas une « justification »), jamais « sans réserve portant sur sa
+légitimité ». Prompt 1.1, agent 1.1, constructeur de candidats 1.1, validateur 1.1 : le cache de l'étape 4
+est invalidé, celui de l'étape 3 ne l'est pas.
 
 ## Tests (aucun appel réel)
 
@@ -265,7 +306,10 @@ avertissements) + nom, version, empreinte du prompt et du schéma de l'agent + m
 - `tests/test_stage4_long.py` : 320 tours, 31 pratiques → 8 candidats → 5 épisodes, 3 pratiques
   ordinaires examinées, 20 sans marqueur, 1 appel ;
 - `tests/test_app_stage4.py` : interface (AppTest) ;
-- `tests/e2e/browser_check.py` scénarios F et G : Chromium + Streamlit + LLM simulé.
+- `tests/test_stage4_1.py` : proximité intra-tour, relations et composantes, fusions déconnectées,
+  vocabulaire sensible au locuteur, identifiants abrégés, coût (régression « OTMANE » synthétique,
+  `tests/synthetic_stage4_otmane.py`), découpage par composantes, bloc en échec ;
+- `tests/e2e/browser_check.py` scénarios F, G, H et I : Chromium + Streamlit + LLM simulé.
 
 Le LLM est simulé par `tests/fake_llm.FakeTransport` (agent `ACCOUNTABILITY`) ; le lecteur simulé
 `tests/synthetic_stage4.scripted_builder` lit les candidats réellement envoyés et applique une table de

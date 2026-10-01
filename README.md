@@ -70,6 +70,7 @@ python -m pytest tests/test_stage4_pipeline.py        # étape 4 : référence, 
 python -m pytest tests/test_stage4_long.py            # étape 4 : entretien long synthétique (320 tours)
 python -m pytest tests/test_app_stage4.py             # étape 4 : interface (AppTest)
 python -m pytest tests/test_stage3_restore.py         # restauration de sorties de l'étape 3 téléchargées
+python -m pytest tests/test_stage4_1.py               # étape 4.1 : proximité, fusions, requête normalisée
 ```
 
 Les tests n'utilisent que des documents **synthétiques** générés à la volée
@@ -303,8 +304,15 @@ Documentation complète : [`docs/stage4_accountability_episodes.md`](docs/stage4
 - **Étape 3 incomplète** : FAILED → étape 4 `BLOCKED` (aucun appel) ; PARTIAL →
   étape 4 `PARTIAL`, `analysis_complete: false`.
 - **Coût et cache** : 0 appel sans candidat, sinon 1 par entretien ; cache propre à
-  l'étape 4 (modifier l'étape 4 ne relance qu'elle). Seuil d'un appel unique :
-  24 000 tokens estimés ou 60 candidats (signalé au-delà, pas de découpage implémenté).
+  l'étape 4 (modifier l'étape 4 ne relance qu'elle). Requête normalisée (chaque
+  pratique, signal, citation et tour une seule fois, identifiants abrégés) ; seuil
+  d'un appel unique : 24 000 tokens estimés ou 60 candidats, au-delà découpage par
+  composantes entières de candidats.
+- **Étape 4.1** : proximité mesurée dans le tour (≤ 200 caractères entre citations) ;
+  fusion seulement entre candidats reliés explicitement (sinon `DISCONNECTED_MERGE`,
+  épisode rejeté et non utilisable) ; affects et intentions jamais employés comme
+  catégorie sauf s'ils sont dits par l'enquêté·e, mot de l'enquêteur jamais attribué
+  à l'étudiant·e.
 
 ## Restaurer une étape 3 déjà calculée
 

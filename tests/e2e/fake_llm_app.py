@@ -21,7 +21,8 @@ lecture à longue distance sont simulés par tests/synthetic_stage37.py.
 Pour les entretiens synthétiques de l'étape 4 (Entretien_etape_4.txt, 25 tours, et
 Entretien_etape_4_long.txt, 320 tours), l'étape 3 et l'Accountability Episode Builder sont simulés par
 tests/synthetic_stage4.py et tests/synthetic_stage4_long.py (lecteur déterministe des candidats envoyés).
-Pour tout autre entretien, les agents simulés de l'étape 3 ne renvoient rien et l'étape 4 simulée
+Pour l'entretien de régression de l'étape 4.1 (Regression_otmane.txt, 388 tours), voir
+tests/synthetic_stage4_otmane.py. Pour tout autre entretien, les agents simulés de l'étape 3 ne renvoient rien et l'étape 4 simulée
 classe chaque candidat « incertain ».
 """
 
@@ -43,6 +44,7 @@ from tests import synthetic_long_interview as long_interview  # noqa: E402
 from tests import synthetic_stage37 as stage37  # noqa: E402
 from tests import synthetic_stage4 as stage4  # noqa: E402
 from tests import synthetic_stage4_long as stage4_long  # noqa: E402
+from tests import synthetic_stage4_otmane as otmane  # noqa: E402
 from tests.fake_llm import (ACCOUNTABILITY, AUDITOR, INTERACTION, LONG_DISTANCE, PRACTICE, FakeTransport,  # noqa: E402
                             text_response)
 
@@ -64,17 +66,26 @@ def _is_stage37(params: dict) -> bool:
 
 
 def _is_stage4(params: dict) -> bool:
-    return stage4.INTERVIEW_ID + "_T" in params["messages"][0]["content"]
+    content = params["messages"][0]["content"]
+    # étape 3 : identifiants complets ; étape 4 (représentation normalisée) : préfixe déclaré dans id_prefix
+    return stage4.INTERVIEW_ID + "_T" in content or f'"id_prefix":"{stage4.INTERVIEW_ID}_"' in content
 
 
 def _is_stage4_long(params: dict) -> bool:
     return stage4_long.INTERVIEW_ID in params["messages"][0]["content"]
 
 
+def _is_otmane(params: dict) -> bool:
+    return otmane.INTERVIEW_ID in params["messages"][0]["content"]
+
+
 _STAGE4_REFERENCE = stage4.stage3_responders()
+_OTMANE = otmane.stage3_responders()
 
 
 def _practices(params):
+    if _is_otmane(params):
+        return _OTMANE[PRACTICE](params)
     if _is_stage4_long(params):
         return stage4_long.practice_reader(params)
     if _is_stage4(params):
@@ -94,6 +105,8 @@ def _is_long(params: dict) -> bool:
 
 
 def _signals(params):
+    if _is_otmane(params):
+        return _OTMANE[INTERACTION](params)
     if _is_stage4_long(params):
         return stage4_long.signal_reader(params)
     if _is_stage4(params):
@@ -118,6 +131,8 @@ def _audit(params):
 
 
 def _long_distance(params):
+    if _is_otmane(params):
+        return _OTMANE[LONG_DISTANCE](params)
     if _is_stage4_long(params):
         return stage4_long.long_distance_reader(params)
     if _is_stage37(params):
@@ -128,7 +143,12 @@ def _long_distance(params):
 _GENERIC_STAGE4 = stage4.scripted_builder({})
 
 
+_OTMANE_BUILDER = otmane.builder("good")
+
+
 def _accountability(params):
+    if _is_otmane(params):
+        return _OTMANE_BUILDER(params)
     if _is_stage4_long(params):
         return stage4_long.BUILDER(params)
     if _is_stage4(params):

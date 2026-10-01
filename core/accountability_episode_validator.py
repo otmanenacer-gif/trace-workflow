@@ -14,10 +14,15 @@ Aucun LLM. Pour chaque épisode :
 - avertissements de locuteur : propagés à l'épisode (`speaker_warnings`) par TRACE, sans confiance
   dans le modèle ; l'épisode est alors à revoir ;
 - vocabulaire psychologisant ou d'intention (`FORBIDDEN_TERMS`) dans les champs rédigés, sauf si
-  l'enquêté·e l'emploie lui-même ou elle-même dans une citation ; « justification » seulement si
-  une citation donne réellement une raison ;
+  l'enquêté·e l'emploie lui-même ou elle-même dans une citation associée (épisode, pratiques, signaux ;
+  tours de l'enquêté·e seulement) ; un terme présent seulement dans une question de l'enquêteur est en
+  outre signalé `INTERVIEWER_TERM_ATTRIBUTED` ; « justification » seulement si une citation donne
+  réellement une raison ;
 - fusions : pratiques de tâches ou de domaines différents sans lien, pratiques situées entre les deux
-  tours d'une contradiction, matériau absent des candidats cités ;
+  tours d'une contradiction, matériau absent des candidats cités ; étape 4.1 : les candidats réunis dans
+  un épisode doivent former un graphe CONNEXE de relations explicites (core.accountability_candidates.
+  candidate_links) — sinon erreur `DISCONNECTED_MERGE` : l'épisode est rejeté et
+  `usable_for_next_stages: false` (il reste dans le fichier, à revoir) ;
 - couverture : chaque candidat est traité par un épisode (sinon `CANDIDATE_NOT_ADDRESSED`).
 
 Rien n'est réécrit : l'épisode garde le texte du modèle ; TRACE ajoute `validation`, `needs_review`,
@@ -29,10 +34,10 @@ from __future__ import annotations
 import re
 
 from core import evidence_validator, interpretation_guard
-from core.accountability_candidates import TRIGGER_SIGNAL_TYPES, normalize_task
+from core.accountability_candidates import TRIGGER_SIGNAL_TYPES, connected_groups, normalize_task
 from core.schemas import SPEAKER_INTERVIEWER
 
-VALIDATOR_VERSION = "1.0"
+VALIDATOR_VERSION = "1.1"  # 1.1 : fusions déconnectées, vocabulaire élargi et sensible au locuteur
 
 ERROR, WARNING, INFO = "error", "warning", "info"
 
@@ -67,9 +72,13 @@ ISSUE_CODES = {
     "MERGED_DIFFERENT_TASKS": (WARNING, "Épisode réunissant des pratiques de tâches différentes sans candidat commun."),
     "MERGED_DIFFERENT_DOMAINS": (WARNING, "Épisode réunissant une pratique d'études et une pratique personnelle sans candidat commun."),
     "INTERVENING_PRACTICE_MERGED": (WARNING, "Pratique située entre les deux tours d'une contradiction, sans lien avec eux."),
+    "DISCONNECTED_MERGE": (ERROR, "Épisode réunissant des candidats sans relation explicite (pratique ou signal partagé, "
+                                  "mêmes tours et même tâche, contradiction) : composantes déconnectées."),
     # vocabulaire
     "INTERPRETIVE_VOCABULARY": (WARNING, "Vocabulaire psychologisant ou d'intention dans un champ rédigé."),
     "UNSUPPORTED_JUSTIFICATION": (WARNING, "« Justification » sans raison explicite dans les citations."),
+    "INTERVIEWER_TERM_ATTRIBUTED": (WARNING, "Terme proposé par l'enquêteur, non repris par l'enquêté·e, employé dans "
+                                             "la description de l'épisode."),
     # statut, locuteur, couverture
     "UNCERTAIN_NOT_FLAGGED": (INFO, "Épisode incertain non marqué à revoir : marqué par TRACE."),
     "UNCERTAIN_CONFIDENCE": (INFO, "Épisode incertain avec une confiance différente de « low »."),
@@ -87,12 +96,15 @@ FORBIDDEN_TERMS = {
     "rationalisation": r"rationalis\w*",
     "manipulation": r"manipul\w*",
     "mauvaise foi": r"mauvaise foi",
-    "honte (implicite)": r"hont\w*",
-    "peur implicite": r"peurs? implicites?",
-    "culpabilité": r"culpabil\w*",
+    "honte": r"hont\w*",
+    "peur / crainte": r"peurs?\b|craint\w*",
+    "culpabilité / coupable": r"culpabil\w*|coupables?\b",
+    "anxiété / angoisse / inquiétude": r"anxi\w*|angoiss\w*|inquiet\w*",
+    "embarras": r"embarras\w*",
+    "intention / motivation": r"intention\w*|motivation\w*",
     "identité menacée / protection identitaire": r"identit\w*",
     "image de soi": r"image de soi",
-    "volonté de légitimer / légitimation": r"legitim\w*",
+    "volonté de légitimer / légitimation / légitimité": r"legitim\w*",
     "tentative de se justifier": r"(?:tentative|tente|cherche|essaie|volonte) (?:de |a )?(?:se |s )?justifi\w*",
     "se justifier": r"se justifi\w*",
     "défensif / se défendre": r"defensi\w*|se defend\w*",
@@ -134,23 +146,29 @@ def _authored(episode: dict) -> dict[str, str]:
     return texts
 
 
-def scan_vocabulary(episode: dict, interviewee_quotes: list[str]) -> list[dict]:
+def scan_vocabulary(episode: dict, interviewee_quotes: list[str], interviewer_texts: list[str] = ()) -> list[dict]:
     """Termes interdits dans les champs rédigés ; un terme employé par l'enquêté·e (citation d'un tour de
     l'enquêté·e) n'est pas signalé. Une citation de l'enquêteur n'exempte jamais : sa catégorie ne devient
-    pas celle de l'enquêté·e."""
+    pas celle de l'enquêté·e ; si le terme figure dans une question de l'enquêteur du matériau, le constat
+    porte `from_interviewer: true`."""
     quotes = interpretation_guard.fold(" ".join(interviewee_quotes))
+    interviewer = interpretation_guard.fold(" ".join(interviewer_texts))
     findings, seen = [], set()
     for name, text in _authored(episode).items():
         folded = interpretation_guard.fold(text)
         for label, regex in _FORBIDDEN:
             if label not in seen and regex.search(folded) and not regex.search(quotes):
                 seen.add(label)
-                findings.append({"term": label, "field": name})
+                findings.append({"term": label, "field": name, "from_interviewer": bool(regex.search(interviewer))})
     return findings
 
 
+# « justification » niée (« aucune restriction, justification ou évaluation explicite ») : rien n'est affirmé.
+_NEGATED_JUSTIFICATION = re.compile(r"\b(?:aucune?|sans|ni|pas de|pas d)\b[^.;]{0,80}?\bjustifi\w*")
+
+
 def justification_unsupported(episode: dict, interviewee_quotes: list[str], turn_texts: list[str]) -> bool:
-    authored = interpretation_guard.fold(" ".join(_authored(episode).values()))
+    authored = _NEGATED_JUSTIFICATION.sub(" ", interpretation_guard.fold(" ".join(_authored(episode).values())))
     if not _JUSTIFICATION.search(authored):
         return False
     material = interpretation_guard.fold(" ".join(interviewee_quotes + turn_texts)).replace("'", " ")
@@ -296,9 +314,26 @@ def validate_episodes(episodes: list[dict], transcript: dict, practices: list[di
                         abs(p - c) <= 1 for p in points for c in cited):
                     issues.append(make_issue("INTERVENING_PRACTICE_MERGED", practice_id=pid, signal_id=sid))
 
-        # vocabulaire
-        for finding in scan_vocabulary(episode, interviewee_quotes):
+        # fusions : les candidats réunis doivent être reliés (graphe connexe de relations explicites)
+        known_cands = [candidate_by_id[c] for c in dict.fromkeys(cands) if c in candidate_by_id]
+        components = connected_groups(known_cands) if len(known_cands) > 1 else [known_cands]
+        if len(components) > 1:
+            issues.append(make_issue("DISCONNECTED_MERGE", components=components))
+
+        # vocabulaire (citations associées de l'enquêté·e ; questions de l'enquêteur du matériau)
+        associated = interviewee_quotes + [
+            e.get("quote", "") for pid in episode.get("practice_ids", []) if pid in practice_by_id
+            for e in practice_by_id[pid].get("evidence", []) if voiced(e.get("turn_id"))
+            and (e.get("validation") or {}).get("valid", True)] + [
+            e.get("quote", "") for sid in episode.get("signal_ids", []) if sid in signal_by_id
+            for e in signal_by_id[sid].get("evidence", []) if voiced(e.get("turn_id"))
+            and (e.get("validation") or {}).get("valid", True)]
+        interviewer_texts = [turns[t]["text"] for t in material_turns | {t for m in moves for t in m.get(
+            "evidence_turn_ids", [])} if t in turns and not voiced(t)]
+        for finding in scan_vocabulary(episode, associated, interviewer_texts):
             issues.append(make_issue("INTERPRETIVE_VOCABULARY", **finding))
+            if finding["from_interviewer"]:
+                issues.append(make_issue("INTERVIEWER_TERM_ATTRIBUTED", term=finding["term"], field=finding["field"]))
         material_texts = [turns[t]["text"] for t in material_turns if voiced(t)]
         if justification_unsupported(episode, interviewee_quotes, material_texts):
             issues.append(make_issue("UNSUPPORTED_JUSTIFICATION"))
@@ -333,6 +368,8 @@ def validate_episodes(episodes: list[dict], transcript: dict, practices: list[di
             "needs_review": needs_review,
             "speaker_warnings": speaker_warnings_out,
             "validation_status": validation_status,
+            # « épisode propre » pour les étapes ultérieures : jamais un épisode rejeté (dont fusion déconnectée)
+            "usable_for_next_stages": validation_status != "rejected",
             "review_reasons": sorted({i["code"] for i in issues}),
         })
         all_issues.extend({"object_id": episode_id, **issue} for issue in issues)
@@ -351,6 +388,8 @@ def validate_episodes(episodes: list[dict], transcript: dict, practices: list[di
         "validator_version": VALIDATOR_VERSION,
         "episode_count": len(annotated),
         "rejected_episode_ids": [e["episode_id"] for e in annotated if e["validation_status"] == "rejected"],
+        "disconnected_merge_episode_ids": [e["episode_id"] for e in annotated
+                                           if "DISCONNECTED_MERGE" in e["review_reasons"]],
         "episodes_needing_review": [e["episode_id"] for e in annotated if e["needs_review"]],
         "unaddressed_candidate_ids": unaddressed,
         "evidence_count": evidence_count,
