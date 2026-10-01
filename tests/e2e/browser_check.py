@@ -22,7 +22,11 @@ F. étape 4 (LLM simulé) : entretien synthétique de référence, étape 3 puis
    (6 candidats annoncés, 1 appel), tableau accountability / ordinaires / incertains, aperçu,
    téléchargements JSON vérifiés, relance depuis le cache (0 appel) ;
 G. étape 4 sur l'entretien long synthétique (320 tours) : 8 candidats pour 31 pratiques, 1 appel,
-   5 épisodes, 3 pratiques ordinaires examinées, 20 sans marqueur.
+   5 épisodes, 3 pratiques ordinaires examinées, 20 sans marqueur ;
+H. restauration (serveur neuf, cache vide, comme après un redéploiement) : l'entretien de l'étape 4 est
+   réimporté, ses 4 JSON d'étape 3 (calculés au préalable par le LLM simulé) sont importés dans
+   « Restaurer des résultats Stage 3 existants », puis l'étape 4 est lancée : 0 appel d'étape 3, 1 appel
+   d'étape 4, résultats identiques.
 
 Non collecté par pytest (nécessite Playwright et un navigateur). Les runs
 créés dans data/ pendant le test sont supprimés à la fin.
@@ -364,6 +368,60 @@ def scenario_stage4_long(browser, url: str, interview: Path, shots: Path) -> Non
           "20 sans marqueur")
 
 
+def stage3_downloads(work: Path) -> list[Path]:
+    """Calcule l'étape 3 de l'entretien de référence (LLM simulé, hors data/) et écrit les 4 JSON
+    « téléchargés », nommés comme les boutons de téléchargement de l'interface."""
+    from core.analysis import analyze_run
+    from core.analysis_cache import AnalysisCache
+    from tests.fake_llm import FakeTransport, fake_settings
+    run = si.make_ingested_run(work / "precomputed", stage4.FILES)
+    analyze_run(run, settings=fake_settings(), transport=FakeTransport(stage4.stage3_responders()),
+                cache=AnalysisCache(work / "precomputed_cache"))
+    out = Path(run["files"][0]["ingestion"]["output_dir"]) / "analysis"
+    paths = []
+    for name in ("practice_extractor.json", "interaction_signals.json", "evidence_validation.json",
+                 "speaker_attribution_audit.json"):
+        target = work / "downloads" / f"{stage4.INTERVIEW_ID}_{name}"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes((out / name).read_bytes())
+        paths.append(target)
+    return paths
+
+
+def scenario_restore(browser, url: str, interview: Path, downloads: list[Path], shots: Path) -> None:
+    page = browser.new_page(viewport={"width": 1400, "height": 1300})
+    page.goto(url)
+    upload_and_ingest(page, interview)
+    expect(page.get_by_text("Restaurer des résultats Stage 3 existants")).to_be_visible(timeout=TIMEOUT_MS)
+    restore = page.get_by_role("button", name="Restaurer l'étape 3 depuis ces fichiers (0 appel API)")
+    expect(restore).to_be_disabled()
+    inputs = page.locator("input[type=file]")
+    expect(inputs).to_have_count(2, timeout=TIMEOUT_MS)  # import du corpus (haut de page), puis restauration
+    inputs.last.set_input_files([str(p) for p in downloads])  # noms affichés tronqués : on attend le bouton
+    wait_idle(page)
+    expect(restore).to_be_enabled(timeout=TIMEOUT_MS)
+    page.screenshot(path=str(shots / "H1_restauration_avant.png"), full_page=True)
+    restore.click()
+    expect(page.get_by_text("Stage 3 restauré depuis fichiers — 0 appel API").first).to_be_visible(timeout=TIMEOUT_MS)
+    wait_idle(page)
+    assert page.get_by_text("Dernière exécution :", exact=False).count() == 0  # aucune exécution de l'étape 3
+    expect(page.get_by_text("Candidats d'épisodes (déterministes, sans IA) : 6").first).to_be_visible()
+    launch = page.get_by_role("button", name="Construire les épisodes d'accountability (1 appel(s) API payant(s))")
+    expect(launch).to_be_enabled()
+    launch.click()
+    expect(page.get_by_text("Étape 4 terminée.")).to_be_visible(timeout=TIMEOUT_MS)
+    expect(page.get_by_text("Dernière exécution (étape 4) : 1 appel(s) API").first).to_be_visible()
+    row = stage4_row(page)
+    print("   ligne étape 4 :", row)
+    assert row == [stage4.INTERVIEW_ID, "COMPLETE", "✅ SUCCESS", "6", "4", "1", "4", "1", "0", "0", "1"], row
+    stage3_table = page.locator("[data-testid=stTable]").filter(has_text="Practice Extractor")
+    expect(stage3_table).to_contain_text("SUCCESS")  # sorties restaurées affichées comme une étape 3 normale
+    assert_no_exception(page)
+    page.screenshot(path=str(shots / "H2_restauration_etape_4.png"), full_page=True)
+    print("H. restauration : 4 JSON importés, « Stage 3 restauré depuis fichiers — 0 appel API », "
+          "0 appel d'étape 3, étape 4 : 1 appel, 4 épisodes / 1 ordinaire + 4 sans marqueur / 1 incertain")
+
+
 def run_dirs() -> set[Path]:
     return {p for base in (ROOT / "data" / "inputs", ROOT / "data" / "outputs") for p in base.glob("run_*")}
 
@@ -404,6 +462,10 @@ def main() -> int:
                 scenario_stage37(browser, url, stage37_file, args.screenshots)
                 scenario_stage4(browser, url, stage4_file, args.screenshots)
                 scenario_stage4_long(browser, url, stage4_long_file, args.screenshots)
+            downloads = stage3_downloads(work)
+            env_restore = {**base_env, "TRACE_E2E_CACHE_DIR": str(work / "cache_after_redeploy")}
+            with streamlit_server(ROOT / "tests" / "e2e" / "fake_llm_app.py", env_restore) as url:
+                scenario_restore(browser, url, stage4_file, downloads, args.screenshots)
             browser.close()
     finally:
         for path in run_dirs() - before:

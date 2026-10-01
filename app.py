@@ -62,7 +62,7 @@ def _stamp_project_modules() -> None:
 
 _purge_stale_project_modules()
 
-from core import accountability, analysis, config  # noqa: E402
+from core import accountability, analysis, config, stage3_restore  # noqa: E402
 from core.ingestion import ingest_run  # noqa: E402
 from core.llm_client import LLMError, LLMSettings  # noqa: E402
 from core.run_manager import TraceError, get_extension, init_run, load_problematique, save_problematique  # noqa: E402
@@ -566,6 +566,48 @@ def render_stage4_results(run: dict) -> None:
                                         mime="application/json", key=f"dl_acc_{iid}_{filename}")
 
 
+def render_stage3_restore(run: dict, analyzed: list[dict]) -> None:
+    """Importer les 4 JSON d'une étape 3 déjà calculée (stockage local effacé par un redéploiement)."""
+    flash = st.session_state.pop("restore_flash", None)
+    if flash:
+        st.success(flash)
+    for f in analyzed:
+        if f["analysis"].get("restored"):
+            st.success(f"{stage3_restore.RESTORED_NOTICE} ({f['analysis']['interview_id']}, {f['analysis']['restored_at']}).")
+            for warning in f["analysis"].get("restore_warnings") or []:
+                st.caption(f"Restauration : {warning}")
+    missing = [f for f in analysis.eligible_files(run) if accountability.stage3_state(
+        Path(f["ingestion"]["output_dir"]) / config.ANALYSIS_SUBDIR)["status"]
+        in (accountability.STAGE3_NOT_RUN, accountability.STAGE3_FAILED)]
+    if not missing:
+        return
+    with st.expander("Restaurer des résultats Stage 3 existants", expanded=not analyzed):
+        st.markdown(
+            "Le stockage local de l'application (runs, cache TRACE) **peut disparaître lors d'un redéploiement**. "
+            "Si l'étape 3 de cet entretien a déjà été calculée et ses fichiers téléchargés, importez ici les "
+            "**4 JSON** : `practice_extractor.json`, `interaction_signals.json`, `evidence_validation.json`, "
+            "`speaker_attribution_audit.json`. Ils sont vérifiés (même entretien, même transcription, analyses "
+            "complètes, citations revérifiées) puis installés tels quels : **aucun appel API**, ni étape 3, "
+            "ni audit des locuteurs.")
+        interview_id = st.selectbox("Entretien à restaurer", [f["ingestion"]["interview_id"] for f in missing],
+                                    key="restore_interview")
+        uploads = st.file_uploader("Les 4 fichiers JSON de l'étape 3", type=["json"], accept_multiple_files=True,
+                                   key="restore_files")
+        if st.button("Restaurer l'étape 3 depuis ces fichiers (0 appel API)", key="restore_launch",
+                     disabled=not uploads):
+            try:
+                st.session_state.last_run = stage3_restore.restore_stage3(
+                    run, interview_id, [(u.name, u.getvalue()) for u in uploads])
+            except stage3_restore.RestoreError as exc:
+                st.error("Restauration refusée :\n" + "\n".join(f"- {problem}" for problem in exc.problems))
+                return
+            except OSError as exc:
+                st.error(f"Restauration impossible (écriture) : {exc}")
+                return
+            st.session_state.restore_flash = f"{stage3_restore.RESTORED_NOTICE} ({interview_id})."
+            st.rerun()
+
+
 def render_stage4_section(run: dict) -> None:
     st.header("Étape 4 — Épisodes d'accountability")
     st.markdown(
@@ -578,8 +620,10 @@ def render_stage4_section(run: dict) -> None:
         "marqueur n'est pas envoyée au modèle."
     )
     analyzed = [f for f in analysis.eligible_files(run) if "analysis" in f]
+    render_stage3_restore(run, analyzed)
     if not analyzed:
-        st.info("Lancez d'abord l'étape 3 : l'étape 4 en consomme les sorties.")
+        st.info("Lancez d'abord l'étape 3, ou restaurez ses résultats depuis des fichiers déjà téléchargés : "
+                "l'étape 4 en consomme les sorties.")
         return
     settings = LLMSettings.from_env()
     if not settings.enabled:

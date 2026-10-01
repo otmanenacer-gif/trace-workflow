@@ -221,6 +221,11 @@ estimation de la taille de la requête et seuil, comptes, erreur.
 | un agent `FAILED` ou sortie absente | **`BLOCKED`** : aucun appel, aucun `accountability_episodes.json` (un fichier périmé est supprimé), le manifest et la validation disent pourquoi |
 | étape 3 jamais lancée | `BLOCKED` (`stage3_status: NOT_RUN`) |
 
+Si les sorties de l'étape 3 ont disparu (stockage local effacé par un redéploiement) mais ont été
+téléchargées, elles peuvent être **restaurées** depuis l'interface sans aucun appel (section « Restaurer
+des résultats Stage 3 existants », `core/stage3_restore.py`, voir le README) : l'étape 4 les lit alors
+comme des sorties normales.
+
 ## Cache
 
 Cache propre à l'étape 4 (`data/cache/analysis/accountability_episode_builder/`, jamais versionné).

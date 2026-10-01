@@ -69,6 +69,7 @@ python -m pytest tests/test_accountability_validator.py   # étape 4 : validateu
 python -m pytest tests/test_stage4_pipeline.py        # étape 4 : référence, cache, FAILED / PARTIAL
 python -m pytest tests/test_stage4_long.py            # étape 4 : entretien long synthétique (320 tours)
 python -m pytest tests/test_app_stage4.py             # étape 4 : interface (AppTest)
+python -m pytest tests/test_stage3_restore.py         # restauration de sorties de l'étape 3 téléchargées
 ```
 
 Les tests n'utilisent que des documents **synthétiques** générés à la volée
@@ -305,6 +306,40 @@ Documentation complète : [`docs/stage4_accountability_episodes.md`](docs/stage4
   l'étape 4 (modifier l'étape 4 ne relance qu'elle). Seuil d'un appel unique :
   24 000 tokens estimés ou 60 candidats (signalé au-delà, pas de découpage implémenté).
 
+## Restaurer une étape 3 déjà calculée
+
+**Le stockage local de l'application n'est pas durable.** Les runs (`data/outputs/`) et le cache TRACE
+(`data/cache/`) vivent sur le disque de la machine qui exécute Streamlit ; sur Streamlit Cloud, un
+redéploiement (fusion d'une PR, redémarrage) les efface. Un entretien réimporté crée alors un nouveau run
+sans sortie de l'étape 3 : l'interface annonce 0 résultat en cache, propose de repayer tous les appels de
+l'étape 3, et l'étape 4 demande de la relancer. **Téléchargez donc toujours les JSON de l'étape 3.**
+
+Pour les réutiliser sans aucun appel API : réimporter l'entretien et lancer l'ingestion, puis, dans la
+section « Étape 4 », ouvrir « Restaurer des résultats Stage 3 existants », choisir l'entretien et importer
+les 4 fichiers téléchargés (`practice_extractor.json`, `interaction_signals.json`,
+`evidence_validation.json`, `speaker_attribution_audit.json`, préfixés ou non par l'identifiant de
+l'entretien). Le module `core/stage3_restore.py` :
+
+- reconnaît chaque fichier par son contenu ; refuse un fichier manquant, en double, illisible ou inconnu ;
+- exige le même `interview_id` dans les quatre fichiers, égal à celui de l'entretien choisi (aucun mélange
+  d'entretiens) ;
+- exige pour Practice Extractor et Interaction Reader la version de schéma actuelle, un statut exploitable
+  (SUCCESS, SUCCESS_WITH_WARNINGS, CACHED) et une analyse complète (jamais PARTIAL / FAILED /
+  `analysis_complete: false`) ; une autre version d'agent est acceptée avec un avertissement ;
+- compare l'empreinte de `structured_transcript.json` enregistrée par l'audit des locuteurs à celle de
+  l'entretien réimporté : des sorties calculées sur un autre fichier ou une autre segmentation des tours
+  (par exemple avant le correctif de segmentation) sont refusées ;
+- revérifie chaque citation sur la transcription actuelle (tour inexistant, citation déclarée valide qui
+  ne l'est plus → refus) et refuse un `evidence_validation.json` avec des anomalies critiques, des totaux
+  incohérents ou plus de 10 % de citations invalides.
+
+Une fois validés, les fichiers sont recopiés **octet pour octet** dans `analysis/`, avec des manifests de
+restauration (`stage3_restore_manifest.json` : nom importé, SHA-256 et taille de chaque fichier) ; les
+sorties périmées de l'étape 4 sont retirées. Aucune étape 3, aucun audit des locuteurs, aucun appel :
+l'interface affiche « Stage 3 restauré depuis fichiers — 0 appel API » et l'étape 4 lit ces fichiers comme
+des sorties normales. Le cache TRACE de l'étape 3, lui, n'est pas reconstitué : relancer l'étape 3 sur
+cet entretien referait ses appels.
+
 ## Architecture
 
 ```
@@ -328,6 +363,7 @@ core/signal_selectivity.py     étape 3.7 : turn_ids complétés, micro-marqueur
 core/accountability_candidates.py  étape 4 : candidats d'épisodes déterministes, représentation compacte
 core/accountability_episode_validator.py  étape 4 : validation déterministe des épisodes
 core/accountability.py         étape 4 : orchestration, états de l'étape 3, cache, sorties
+core/stage3_restore.py         restauration validée de sorties de l'étape 3 téléchargées (0 appel)
 agents/base.py                 citation, identité versionnée d'un agent, entretien compact
 agents/practice_extractor.py   agent 1 : version, schéma de sortie
 agents/interaction_signal_reader.py  agent 2 : version, schéma de sortie
