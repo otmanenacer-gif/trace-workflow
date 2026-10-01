@@ -9,7 +9,12 @@ Pour chaque pratique ou signal, vérifie :
 3. que turn_start <= turn_end (pratiques) ;
 4. quelques cohérences locales (preuve hors de l'intervalle, affect
    « explicite » absent des citations, contradiction appuyée sur un seul
-   tour, vocabulaire interprétatif…).
+   tour, vocabulaire interprétatif, non_use_reason incohérent avec le
+   statut, évaluation « métadiscursive » sans référence à sa propre parole,
+   citation d'un tour dont l'attribution du locuteur est douteuse…).
+
+Les mêmes contrôles de citations servent à l'auditeur des locuteurs
+(core/speaker_attribution_auditor.py), dont les codes figurent aussi ci-dessous.
 
 Rien n'est corrigé : une citation fausse est marquée invalide, l'objet est
 marqué `needs_review`, et l'anomalie est consignée. Aucun contenu d'entretien
@@ -22,11 +27,12 @@ import logging
 import re
 import unicodedata
 
+from agents.practice_extractor import NON_USE_STATUSES
 from core import interpretation_guard
 
 logger = logging.getLogger(__name__)
 
-VALIDATOR_VERSION = "1.0"
+VALIDATOR_VERSION = "1.1"  # 1.1 : non_use_reason, signal métadiscursif, avertissements de locuteur, auditeur
 
 ERROR = "error"      # la preuve ou l'objet n'est pas valide
 WARNING = "warning"  # vérification humaine recommandée
@@ -47,8 +53,20 @@ ISSUE_CODES = {
     "CONTRADICTION_SINGLE_TURN": (WARNING, "Contradiction entre tours appuyée sur moins de deux tours distincts."),
     "AFFECT_NOT_IN_QUOTES": (WARNING, "Affect « explicite » absent des citations du signal."),
     "INTERPRETIVE_VOCABULARY": (WARNING, "Vocabulaire interprétatif dans un champ rédigé par l'agent."),
+    "NON_USE_REASON_MISMATCH": (WARNING, "non_use_reason incohérent avec use_status (renseigné seulement pour non_use / refusal)."),
+    "METADISCURSIVE_NO_SELF_REFERENCE": (WARNING, "Évaluation métadiscursive sans référence de l'enquêté·e à sa propre parole dans les citations."),
     "AGENT_FLAGGED_REVIEW": (INFO, "L'agent demande une vérification humaine."),
     "EXPLICITNESS_UNCLEAR": (INFO, "L'agent qualifie sa lecture d'incertaine."),
+    "EVIDENCE_ON_DOUBTFUL_SPEAKER_TURN": (INFO, "Citation d'un tour dont l'attribution du locuteur est signalée comme douteuse."),
+    # Speaker Attribution Auditor (les codes de citation ci-dessus s'appliquent aussi à ses évaluations)
+    "NOT_A_CANDIDATE": (WARNING, "Tour évalué par le modèle alors qu'il n'était pas candidat."),
+    "CANDIDATE_NOT_ASSESSED": (WARNING, "Tour candidat non évalué par le modèle : signalé par les seules règles déterministes."),
+    "DUPLICATE_ASSESSMENT": (WARNING, "Plusieurs évaluations pour le même tour."),
+    "SUGGESTION_EQUALS_CURRENT": (WARNING, "Locuteur suggéré identique au locuteur actuel."),
+    "EVIDENCE_OUTSIDE_EXCERPT": (WARNING, "Citation d'un tour absent de l'extrait transmis au modèle."),
+    "SUGGESTION_WITHOUT_REVIEW": (INFO, "Suggestion de locuteur sans demande de vérification : vérification demandée par TRACE."),
+    "CANDIDATE_LIMIT_REACHED": (WARNING, "Trop de tours candidats : les derniers n'ont pas été transmis au modèle."),
+    "AUDIT_UNAVAILABLE": (WARNING, "Audit par le modèle indisponible : seuls les candidats déterministes sont signalés."),
 }
 
 _TURN_ID_RE = re.compile(r"^(?P<interview>.+)_T\d+$")
@@ -87,7 +105,8 @@ def index_turns(transcript: dict) -> dict[str, dict]:
             for i, t in enumerate(transcript["turns"])}
 
 
-def _turn_problem(turn_id: str, turns: dict, interview_id: str) -> str | None:
+def turn_problem(turn_id: str, turns: dict, interview_id: str) -> str | None:
+    """None si le tour existe dans CET entretien, sinon UNKNOWN_TURN_ID ou FOREIGN_INTERVIEW_TURN."""
     if turn_id in turns:
         return None
     match = _TURN_ID_RE.match(turn_id or "")
@@ -101,7 +120,7 @@ def validate_evidence(evidence: list[dict], turns: dict, interview_id: str) -> l
     results = []
     for item in evidence:
         turn_id, quote = item.get("turn_id", ""), item.get("quote", "")
-        problem = _turn_problem(turn_id, turns, interview_id)
+        problem = turn_problem(turn_id, turns, interview_id)
         if problem:
             results.append({"valid": False, "match": None, "code": problem})
         elif not quote.strip():
@@ -117,7 +136,7 @@ def _range_issues(item: dict, turns: dict, interview_id: str) -> tuple[list[dict
     issues = []
     start, end = item.get("turn_start"), item.get("turn_end")
     for field, turn_id in (("turn_start", start), ("turn_end", end)):
-        problem = _turn_problem(turn_id, turns, interview_id)
+        problem = turn_problem(turn_id, turns, interview_id)
         if problem:
             issues.append(make_issue("UNKNOWN_RANGE_TURN" if problem == "UNKNOWN_TURN_ID" else problem,
                                      field=field, turn_id=turn_id))
@@ -129,8 +148,23 @@ def _range_issues(item: dict, turns: dict, interview_id: str) -> tuple[list[dict
     return [], (first, last)
 
 
-def validate_item(item: dict, kind: str, turns: dict, interview_id: str) -> tuple[list[dict], list[dict]]:
-    """Valide une pratique (kind='practice_extractor') ou un signal. Renvoie (résultats par citation, anomalies)."""
+# Référence de l'enquêté·e à sa propre parole : première personne, ou « (de) dire ça », « dit comme ça ».
+_SELF_REFERENCE = re.compile(r"\b(?:je|j|moi|me|m|mon|ma|mes|dire)\b|\bdit comme ca\b")
+
+
+def refers_to_own_speech(texts: list[str]) -> bool:
+    """Vrai si l'un des textes contient une marque de référence à sa propre parole (accents et casse ignorés)."""
+    folded = interpretation_guard.fold(" ".join(texts)).replace("'", " ")
+    return bool(_SELF_REFERENCE.search(folded))
+
+
+def validate_item(item: dict, kind: str, turns: dict, interview_id: str,
+                  speaker_warnings: dict | None = None) -> tuple[list[dict], list[dict]]:
+    """Valide une pratique (kind='practice_extractor') ou un signal. Renvoie (résultats par citation, anomalies).
+
+    `speaker_warnings` : tours dont l'attribution du locuteur est douteuse (auditeur) ; les citer
+    marque l'objet à revoir (information), sans rien changer au locuteur officiel.
+    """
     evidence = item.get("evidence", [])
     results = validate_evidence(evidence, turns, interview_id)
     issues = [make_issue(r["code"], evidence_index=i, turn_id=evidence[i].get("turn_id"))
@@ -141,7 +175,14 @@ def validate_item(item: dict, kind: str, turns: dict, interview_id: str) -> tupl
     elif all(turns[t]["speaker"] == "enqueteur" for t in valid_turns):
         issues.append(make_issue("NO_INTERVIEWEE_EVIDENCE"))
 
+    for turn_id in dict.fromkeys(t for t in valid_turns if t in (speaker_warnings or {})):
+        issues.append(make_issue("EVIDENCE_ON_DOUBTFUL_SPEAKER_TURN", turn_id=turn_id))
+
     if kind == "practice_extractor":
+        has_reason = item.get("non_use_reason") is not None
+        if "use_status" in item and has_reason != (item["use_status"] in NON_USE_STATUSES):
+            issues.append(make_issue("NON_USE_REASON_MISMATCH", use_status=item.get("use_status"),
+                                     non_use_reason=item.get("non_use_reason")))
         range_issues, span = _range_issues(item, turns, interview_id)
         issues.extend(range_issues)
         if span:
@@ -151,7 +192,7 @@ def validate_item(item: dict, kind: str, turns: dict, interview_id: str) -> tupl
     else:
         listed = item.get("turn_ids", [])
         for turn_id in listed:
-            problem = _turn_problem(turn_id, turns, interview_id)
+            problem = turn_problem(turn_id, turns, interview_id)
             if problem:
                 issues.append(make_issue(problem, field="turn_ids", turn_id=turn_id))
         for i, r in enumerate(results):
@@ -160,6 +201,9 @@ def validate_item(item: dict, kind: str, turns: dict, interview_id: str) -> tupl
         if item.get("signal_type") == "cross_turn_contradiction" and (
                 len(set(listed)) < 2 or len(set(valid_turns)) < 2):
             issues.append(make_issue("CONTRADICTION_SINGLE_TURN"))
+        if item.get("signal_type") == "metadiscursive_self_evaluation" and not refers_to_own_speech(
+                [evidence[i]["quote"] for i, r in enumerate(results) if r["valid"]]):
+            issues.append(make_issue("METADISCURSIVE_NO_SELF_REFERENCE"))
         affect = item.get("explicit_affect")
         if affect and not interpretation_guard.affect_in_quotes(
                 affect, [evidence[i]["quote"] for i, r in enumerate(results) if r["valid"]]):
@@ -174,7 +218,8 @@ def validate_item(item: dict, kind: str, turns: dict, interview_id: str) -> tupl
     return results, issues
 
 
-def validate_agent_output(agent: str, items: list[dict], transcript: dict, id_letter: str) -> dict:
+def validate_agent_output(agent: str, items: list[dict], transcript: dict, id_letter: str,
+                          speaker_warnings: dict | None = None) -> dict:
     """Valide toutes les pratiques / tous les signaux d'un agent pour UN entretien.
 
     Renvoie {"items": objets annotés, "report": synthèse pour evidence_validation.json}.
@@ -189,7 +234,7 @@ def validate_agent_output(agent: str, items: list[dict], transcript: dict, id_le
     evidence_count = valid_count = 0
     for number, item in enumerate(items, start=1):
         object_id = f"{interview_id}_{id_letter}{number:03d}"
-        results, issues = validate_item(item, agent, turns, interview_id)
+        results, issues = validate_item(item, agent, turns, interview_id, speaker_warnings)
         evidence = [{**e, "validation": r} for e, r in zip(item.get("evidence", []), results)]
         evidence_count += len(results)
         valid_count += sum(r["valid"] for r in results)

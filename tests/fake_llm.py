@@ -17,6 +17,7 @@ import httpx2
 
 PRACTICE = "practice_extractor"
 INTERACTION = "interaction_signal_reader"
+AUDITOR = "speaker_attribution_auditor"
 
 
 def text_response(payload, *, input_tokens=1200, output_tokens=300, stop_reason="end_turn", model="fake-model",
@@ -56,11 +57,16 @@ def timeout_error():
 
 def agent_of(params: dict) -> str:
     properties = params["output_config"]["format"]["schema"]["properties"]
+    if "assessments" in properties:
+        return AUDITOR
     return PRACTICE if "practices" in properties else INTERACTION
 
 
 class FakeTransport:
-    """Répond selon l'agent (déduit du schéma demandé).
+    """Répond selon l'agent (déduit du schéma demandé) : PRACTICE, INTERACTION ou AUDITOR.
+
+    Un appel à un agent sans réponse prévue échoue (KeyError) : un test qui ne prévoit
+    pas d'audit des locuteurs vérifie donc aussi qu'aucun appel d'audit n'a lieu.
 
     `responders[agent]` peut être : une réponse, une exception, une liste
     (consommée dans l'ordre) ou une fonction (params) -> réponse (éventuellement async).

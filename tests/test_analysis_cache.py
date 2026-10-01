@@ -39,7 +39,7 @@ def test_identical_inputs_hit_the_cache(env):
     run, first = analyze(env)
     assert len(first.calls) == 2
     assert plan_analysis(run, [si.INTERVIEW_ID], fake_settings(), env["cache"]) == {
-        "interviews": 1, "calls": 0, "cached": 2}
+        "interviews": 1, "calls": 0, "cached": 2, "audit_calls": 0, "candidate_turns": 0, "exact": True}
     run, second = analyze(env)
     assert second.calls == []  # aucun appel API
     for spec in analysis.AGENTS:
@@ -155,3 +155,34 @@ def test_cache_key_depends_on_every_field():
         assert compute_cache_key(changed) != key, field
     with pytest.raises(ValueError):
         compute_cache_key({"agent": "x"})
+
+
+def test_interaction_prompt_change_does_not_invalidate_practice(env, tmp_path, monkeypatch):
+    analyze(env)
+    prompt = tmp_path / "interaction_signal_reader_v2.md"
+    prompt.write_text(interaction_signal_reader.SPEC.system_prompt + "\nConsigne ajoutée.", encoding="utf-8")
+    changed = dataclasses.replace(interaction_signal_reader.SPEC, prompt_path=prompt)
+    monkeypatch.setattr(analysis, "AGENTS", (practice_extractor.SPEC, changed))
+    run, transport = analyze(env)
+    assert [c["agent"] for c in transport.calls] == [INTERACTION]
+    assert manifest(run, practice_extractor.SPEC)["status"] == "CACHED"
+
+
+def test_guard_and_validator_versions_do_not_invalidate_the_cache(env, monkeypatch):
+    """Garde-fou et validation sont recalculés à chaque lecture du cache : les changer ne repaie rien."""
+    from core import evidence_validator, interpretation_guard
+    analyze(env)
+    monkeypatch.setattr(interpretation_guard, "GUARD_VERSION", "9.9")
+    monkeypatch.setattr(evidence_validator, "VALIDATOR_VERSION", "9.9")
+    run, transport = analyze(env)
+    assert transport.calls == [] and manifest(run, practice_extractor.SPEC)["guard_version"] == "9.9"
+
+
+def test_agent_versions_of_stage_3_5_have_distinct_cache_keys():
+    """Les versions 1.2 des deux agents ne peuvent pas réutiliser une entrée de cache 1.1."""
+    for spec in (practice_extractor.SPEC, interaction_signal_reader.SPEC):
+        assert spec.version == spec.schema_version == "1.2"
+        old = dataclasses.replace(spec, version="1.1", schema_version="1.1")
+        fields = {"source_sha256": "s", "transcript_sha256": "t", "model": "m",
+                  "request_params": {"effort": None, "temperature": None}}
+        assert compute_cache_key({**fields, **spec.identity()}) != compute_cache_key({**fields, **old.identity()})

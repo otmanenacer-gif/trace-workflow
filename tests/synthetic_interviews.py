@@ -56,6 +56,7 @@ def ev(number: int, quote: str) -> dict:
 def practice(**fields) -> dict:
     base = {
         "summary": "", "turn_start": tid(1), "turn_end": tid(1), "use_status": "use",
+        "non_use_reason": None, "practice_domain": "academic",  # entretiens synthétiques : situations d'études
         "academic_task": None, "discipline": None, "context": "", "ai_tool": [],
         "student_action_before": [], "ai_action": [], "student_action_after": [], "stated_reason": [],
         "explicit_constraints": [], "verification_or_control": [], "stated_frequency": None, "scope_qualifier": None,
@@ -107,14 +108,16 @@ GOOD_PRACTICES = {
         ),
         practice(
             summary="L'étudiante indique ne pas utiliser l'outil pendant les partiels, en disant que ce n'est pas autorisé et que c'est surveillé.",
-            turn_start=tid(8), turn_end=tid(8), use_status="non_use", academic_task="partiels",
+            turn_start=tid(8), turn_end=tid(8), use_status="non_use", non_use_reason="external_rule",
+            academic_task="partiels",
             context="Pendant les partiels.", stated_reason=["on n'a pas le droit", "c'est surveillé"],
             explicit_constraints=["interdiction", "surveillance"], assessment_context="exam", stated_frequency="jamais",
             evidence=[ev(8, "Pendant les partiels je l'utilise pas du tout, de toute façon on n'a pas le droit et c'est surveillé.")],
         ),
         practice(
             summary="L'étudiante indique faire ses lectures elle-même, sans l'outil.",
-            turn_start=tid(13), turn_end=tid(14), use_status="non_use", academic_task="lectures",
+            turn_start=tid(13), turn_end=tid(14), use_status="non_use", non_use_reason="not_stated",
+            academic_task="lectures",
             context="Lectures pour les cours.", student_action_before=["lit elle-même"],
             evidence=[ev(13, "Et pour les lectures ?"), ev(14, "Là non, je lis moi-même.")],
         ),
@@ -200,6 +203,7 @@ PATCH_PRACTICES = {
         practice(
             summary="L'étudiante indique faire ses plans elle-même.",
             turn_start=f"{PATCH_INTERVIEW_ID}_T0003", turn_end=f"{PATCH_INTERVIEW_ID}_T0004", use_status="non_use",
+            non_use_reason="preference",
             academic_task="plans de dissertation", context="Plans de dissertation.",
             student_action_before=["fait ses plans elle-même"],
             evidence=[patch_ev(4, "je préfère faire mes plans moi-même")],
@@ -265,3 +269,280 @@ def other_interview(name: str, sentence: str) -> tuple[str, bytes]:
     """Petit entretien synthétique supplémentaire (pour les tests multi-entretiens)."""
     text = f"Enquêteur : Tu utilises l'IA ?\nEnquêté : {sentence}\n"
     return name, text.encode("utf-8")
+
+
+# =============================================================================================
+# Étape 3.5 — entretiens SYNTHÉTIQUES (aucun vrai entretien) et réponses simulées.
+# =============================================================================================
+
+def _mini(interview_id: str, filename: str, turns: list[tuple[str, str]]):
+    text = "\n".join(f"{speaker} : {sentence}" for speaker, sentence in turns) + "\n"
+
+    def turn(number: int) -> str:
+        return f"{interview_id}_T{number:04d}"
+
+    def quote(number: int, passage: str) -> dict:
+        return {"turn_id": turn(number), "quote": passage}
+
+    return text, [(filename, text.encode("utf-8"))], turn, quote
+
+
+# --- Problème 1 : usages ET non-usages / refus sur un même thème ------------------------------
+NON_USE_INTERVIEW_ID = "ENTRETIEN_NON_USAGE"
+NON_USE_TURNS = [
+    ("Enquêteur", "Tu utilises l'IA pour rédiger ?"),
+    ("Enquêté", "Il m'arrive de lui demander de rédiger. J'utilise parfois l'IA pour rédiger."),
+    ("Enquêteur", "Et pour tes devoirs ?"),
+    ("Enquêté", "Mais normalement mes devoirs je les écris moi-même. Mes vrais devoirs je préfère les écrire moi-même."),
+    ("Enquêteur", "Tu lui demandes parfois de faire un devoir entier ?"),
+    ("Enquêté", "Non, je veux pas qu'il fasse mes travaux. Je lui demande pas de réfléchir à ma place."),
+    ("Enquêteur", "Et les fiches de lecture ?"),
+    ("Enquêté", "Avant je lui faisais faire mes fiches de lecture. Maintenant je les fais moi-même."),
+    ("Enquêteur", "Et en examen ?"),
+    ("Enquêté", "Je n'utilise jamais ChatGPT en examen, de toute façon c'est interdit."),
+]
+NON_USE_TEXT, NON_USE_FILES, nu_tid, nu_ev = _mini(NON_USE_INTERVIEW_ID, "Entretien_non_usage.txt", NON_USE_TURNS)
+
+NON_USE_PRACTICES = {
+    "practices": [
+        practice(
+            summary="Il indique qu'il lui arrive de demander à l'IA de rédiger.",
+            turn_start=nu_tid(1), turn_end=nu_tid(2), use_status="use", academic_task="rédaction",
+            context="Rédaction.", ai_action=["rédige"], stated_frequency="parfois",
+            evidence=[nu_ev(2, "Il m'arrive de lui demander de rédiger."),
+                      nu_ev(2, "J'utilise parfois l'IA pour rédiger.")],
+            uncertainty_note="Au tour T0004, il dit écrire lui-même ses devoirs ; les deux passages sont décrits séparément.",
+        ),
+        practice(
+            summary="Il indique écrire lui-même ses devoirs, en disant qu'il préfère les écrire lui-même.",
+            turn_start=nu_tid(3), turn_end=nu_tid(4), use_status="non_use", non_use_reason="preference",
+            academic_task="devoirs", context="Devoirs.", student_action_before=["écrit ses devoirs lui-même"],
+            stated_reason=["je préfère les écrire moi-même"],
+            evidence=[nu_ev(4, "Mais normalement mes devoirs je les écris moi-même."),
+                      nu_ev(4, "Mes vrais devoirs je préfère les écrire moi-même.")],
+            uncertainty_note="Au tour T0002, il dit qu'il lui arrive de demander à l'IA de rédiger.",
+        ),
+        practice(
+            summary="Il dit ne pas vouloir que l'outil fasse ses travaux ni lui demander de réfléchir à sa place.",
+            turn_start=nu_tid(5), turn_end=nu_tid(6), use_status="refusal", non_use_reason="personal_rule",
+            academic_task="devoirs", context="Devoirs.",
+            evidence=[nu_ev(6, "je veux pas qu'il fasse mes travaux"),
+                      nu_ev(6, "Je lui demande pas de réfléchir à ma place.")],
+        ),
+        practice(
+            summary="Il indique qu'avant, il faisait faire ses fiches de lecture par l'outil.",
+            turn_start=nu_tid(7), turn_end=nu_tid(8), use_status="past_use", academic_task="fiches de lecture",
+            context="Fiches de lecture, par le passé.", ai_action=["faisait les fiches de lecture"],
+            evidence=[nu_ev(8, "Avant je lui faisais faire mes fiches de lecture.")],
+        ),
+        practice(
+            summary="Il indique faire maintenant ses fiches de lecture lui-même.",
+            turn_start=nu_tid(8), turn_end=nu_tid(8), use_status="non_use", non_use_reason="not_stated",
+            academic_task="fiches de lecture", context="Fiches de lecture, actuellement.",
+            student_action_before=["fait ses fiches de lecture lui-même"],
+            evidence=[nu_ev(8, "Maintenant je les fais moi-même.")],
+        ),
+        practice(
+            summary="Il indique ne jamais utiliser ChatGPT en examen, en disant que c'est interdit.",
+            turn_start=nu_tid(9), turn_end=nu_tid(10), use_status="non_use", non_use_reason="external_rule",
+            academic_task="examen", context="Examens.", ai_tool=["ChatGPT"], stated_reason=["c'est interdit"],
+            explicit_constraints=["interdiction"], stated_frequency="jamais", assessment_context="exam",
+            evidence=[nu_ev(10, "Je n'utilise jamais ChatGPT en examen, de toute façon c'est interdit.")],
+        ),
+    ],
+    "extraction_notes": None,
+}
+
+NON_USE_SIGNALS = {
+    "signals": [
+        signal(turn_ids=[nu_tid(4)], signal_type="contrast", surface_form="Mais",
+               description="« Mais » ouvre la réponse après l'évocation d'un usage pour rédiger.",
+               topic="rédaction des devoirs", evidence=[nu_ev(4, "Mais normalement mes devoirs je les écris moi-même.")]),
+        signal(turn_ids=[nu_tid(4)], signal_type="preference_statement", surface_form="je préfère",
+               description="L'enquêté formule une préférence : écrire lui-même ses devoirs.",
+               topic="rédaction des devoirs", evidence=[nu_ev(4, "Mes vrais devoirs je préfère les écrire moi-même.")]),
+    ],
+    "reading_notes": None,
+}
+
+# --- Problème 4 : évaluation métadiscursive de sa propre formulation --------------------------
+META_INTERVIEW_ID = "ENTRETIEN_METADISCOURS"
+META_TURNS = [
+    ("Enquêteur", "Pourquoi tu ne l'utilises pas pour tes dissertations ?"),
+    ("Enquêté", "Parce que c'est mon travail. Bon, c'est assez ridicule ce que je dis."),
+    ("Enquêteur", "Et pour les exposés ?"),
+    ("Enquêté", "Là j'abuse, je l'utilise tout le temps pour les exposés."),
+    ("Enquêteur", "Et pour les calculs ?"),
+    ("Enquêté", "ChatGPT est ridicule pour les calculs. Ça m'énerve. Je suis triste quand ça plante."),
+    ("Enquêteur", "Tu préfères faire comment ?"),
+    ("Enquêté", "Je préfère le faire moi-même. C'est un peu facile de dire ça."),
+]
+META_TEXT, META_FILES, mt_tid, mt_ev = _mini(META_INTERVIEW_ID, "Entretien_metadiscours.txt", META_TURNS)
+
+META_SIGNALS = {
+    "signals": [
+        signal(turn_ids=[mt_tid(2)], signal_type="metadiscursive_self_evaluation",
+               surface_form="c'est assez ridicule ce que je dis",
+               description="L'enquêté qualifie de « ridicule » ce qu'il vient de dire.",
+               topic="non-usage pour les dissertations",
+               evidence=[mt_ev(2, "Bon, c'est assez ridicule ce que je dis.")]),
+        signal(turn_ids=[mt_tid(4)], signal_type="metadiscursive_self_evaluation", surface_form="Là j'abuse",
+               description="L'enquêté dit « j'abuse » à propos de ce qu'il est en train de dire.",
+               topic="usage pour les exposés", evidence=[mt_ev(4, "Là j'abuse")]),
+        signal(turn_ids=[mt_tid(4)], signal_type="intensification", surface_form="tout le temps",
+               description="« tout le temps » renforce la fréquence de l'usage décrit.",
+               evidence=[mt_ev(4, "je l'utilise tout le temps pour les exposés")]),
+        signal(turn_ids=[mt_tid(6)], signal_type="explicit_emotion", surface_form="Ça m'énerve",
+               description="L'enquêté nomme un affect à propos des calculs.", explicit_affect="m'énerve",
+               evidence=[mt_ev(6, "Ça m'énerve.")]),
+        signal(turn_ids=[mt_tid(6)], signal_type="explicit_emotion", surface_form="Je suis triste",
+               description="L'enquêté nomme un affect quand l'outil s'arrête.", explicit_affect="triste",
+               evidence=[mt_ev(6, "Je suis triste quand ça plante.")]),
+        signal(turn_ids=[mt_tid(8)], signal_type="preference_statement", surface_form="Je préfère",
+               description="L'enquêté formule une préférence : le faire lui-même.",
+               evidence=[mt_ev(8, "Je préfère le faire moi-même.")]),
+        signal(turn_ids=[mt_tid(8)], signal_type="metadiscursive_self_evaluation",
+               surface_form="C'est un peu facile de dire ça",
+               description="L'enquêté qualifie de « facile » sa propre formulation.",
+               evidence=[mt_ev(8, "C'est un peu facile de dire ça.")]),
+    ],
+    "reading_notes": None,
+}
+
+# --- Problème 2 : attribution des locuteurs ----------------------------------------------------
+AUDIT_INTERVIEW_ID = "ENTRETIEN_LOCUTEURS"
+AUDIT_TURNS = [
+    ("Enquêteur", "Est-ce que tu utilises ChatGPT ?"),
+    ("Enquêté", "Oui, souvent."),
+    ("Enquêteur", "Pour quoi faire ?"),
+    # Tour volontairement mal attribué : réponse à la première personne marquée « Enquêteur ».
+    ("Enquêteur", "Moi personnellement j'utilise ChatGPT tous les jours parce que ça m'aide pour mes cours."),
+    ("Enquêteur", "Et pour les examens ?"),
+    ("Enquêté", "Jamais en examen."),
+    ("Enquêteur", "Et en dehors des cours ?"),
+    ("Enquêté", "Je lis beaucoup de romans policiers, sans aucun outil."),
+    ("Enquêteur", "D'accord."),
+    ("Enquêté", "Voilà, c'est tout."),
+    ("Enquêteur", "Tu peux préciser ?"),
+    ("Enquêté", "Pour les cours surtout, pour reformuler, tu vois ?"),
+    # Question d'entretien volontairement marquée « Enquêté ».
+    ("Enquêté", "Est-ce que tu l'utilises aussi pour tes dissertations ?"),
+    ("Enquêté", "Non, pas pour les dissertations."),
+]
+AUDIT_TEXT, AUDIT_FILES, au_tid, au_ev = _mini(AUDIT_INTERVIEW_ID, "Entretien_locuteurs.txt", AUDIT_TURNS)
+AUDIT_FAR_TURN_TEXT = "Je lis beaucoup de romans policiers, sans aucun outil."  # ni candidat ni voisin
+
+NORMAL_INTERVIEW_ID = "ENTRETIEN_NORMAL"
+NORMAL_TURNS = [
+    ("Enquêteur", "Est-ce que tu utilises ChatGPT ?"),
+    ("Enquêté", "Oui, pour reformuler mes phrases quand elles sont trop lourdes."),
+    ("Enquêteur", "Tu vois ce que je veux dire ?"),
+    ("Enquêté", "Oui, je vois. Je l'utilise surtout le soir, tu vois ce que je veux dire ?"),
+    ("Enquêteur", "D'accord, merci."),
+]
+NORMAL_TEXT, NORMAL_FILES, no_tid, no_ev = _mini(NORMAL_INTERVIEW_ID, "Entretien_normal.txt", NORMAL_TURNS)
+
+
+def assessment(**fields) -> dict:
+    base = {"turn_id": "", "suggested_speaker": None, "confidence": "low", "reason": "", "needs_review": True,
+            "evidence": []}
+    base.update(fields)
+    return base
+
+
+AUDIT_ASSESSMENTS = {
+    "assessments": [
+        assessment(turn_id=au_tid(4), suggested_speaker="enquete", confidence="high",
+                   reason="Réponse à la première personne qui suit directement la question de l'enquêteur au tour précédent.",
+                   evidence=[au_ev(4, "Moi personnellement j'utilise ChatGPT tous les jours"),
+                             au_ev(3, "Pour quoi faire ?")]),
+        assessment(turn_id=au_tid(13), suggested_speaker="enqueteur", confidence="medium",
+                   reason="Question adressée à l'interlocuteur, suivie d'une réponse.",
+                   evidence=[au_ev(13, "Est-ce que tu l'utilises aussi pour tes dissertations ?")]),
+    ],
+    "audit_notes": None,
+}
+
+# --- Test synthétique global de l'étape 3.5 (section 12) ---------------------------------------
+STAGE35_INTERVIEW_ID = "ENTRETIEN_ETAPE_3_5"
+STAGE35_TURNS = [
+    ("Enquêteur", "Est-ce que tu utilises des IA génératives ?"),
+    ("Enquêté", "Oui, ChatGPT. Il m'arrive de lui demander de rédiger un paragraphe quand je bloque."),
+    ("Enquêteur", "Et pour tes devoirs notés ?"),
+    ("Enquêté", "Mais normalement mes devoirs je les écris moi-même. Je veux pas qu'il fasse mes travaux, "
+                "je lui demande pas de réfléchir à ma place."),
+    ("Enquêteur", "Pourquoi ?"),
+    ("Enquêté", "Je préfère écrire moi-même. Bon, c'est assez ridicule ce que je dis."),
+    ("Enquêteur", "Tu l'utilises en dehors des études ?"),
+    # Tour volontairement mal attribué (réponse de l'enquêté marquée « Enquêteur »).
+    ("Enquêteur", "Oui, le mois dernier je lui ai demandé comment réparer le lave-vaisselle, et j'ai fait la "
+                  "réparation du lave-vaisselle moi-même en suivant ses étapes."),
+    ("Enquêteur", "D'accord. Et tes amis, ils en pensent quoi ?"),
+    ("Enquêté", "Eux ils l'utilisent pour tout."),
+]
+STAGE35_TEXT, STAGE35_FILES, s35_tid, s35_ev = _mini(STAGE35_INTERVIEW_ID, "Entretien_etape_3_5.txt", STAGE35_TURNS)
+STAGE35_MISATTRIBUTED_TURN = s35_tid(8)
+
+STAGE35_PRACTICES = {
+    "practices": [
+        practice(
+            summary="Il indique qu'il lui arrive de demander à ChatGPT de rédiger un paragraphe quand il bloque.",
+            turn_start=s35_tid(1), turn_end=s35_tid(2), use_status="use", academic_task="rédaction",
+            context="Rédaction, quand il dit bloquer.", ai_tool=["ChatGPT"], ai_action=["rédige un paragraphe"],
+            stated_reason=["quand je bloque"],
+            evidence=[s35_ev(2, "Il m'arrive de lui demander de rédiger un paragraphe quand je bloque.")],
+            uncertainty_note="Au tour T0004, il dit écrire lui-même ses devoirs.",
+        ),
+        practice(
+            summary="Il indique écrire lui-même ses devoirs et dit préférer écrire lui-même.",
+            turn_start=s35_tid(3), turn_end=s35_tid(6), use_status="non_use", non_use_reason="preference",
+            academic_task="devoirs notés", context="Devoirs notés.", assessment_context="graded",
+            student_action_before=["écrit ses devoirs lui-même"], stated_reason=["Je préfère écrire moi-même."],
+            evidence=[s35_ev(4, "Mais normalement mes devoirs je les écris moi-même."),
+                      s35_ev(6, "Je préfère écrire moi-même.")],
+        ),
+        practice(
+            summary="Il dit ne pas vouloir que l'outil fasse ses travaux ni lui demander de réfléchir à sa place.",
+            turn_start=s35_tid(4), turn_end=s35_tid(4), use_status="refusal", non_use_reason="personal_rule",
+            academic_task="devoirs notés", context="Devoirs notés.", assessment_context="graded",
+            evidence=[s35_ev(4, "Je veux pas qu'il fasse mes travaux, je lui demande pas de réfléchir à ma place.")],
+        ),
+        practice(
+            summary="Il indique avoir demandé à ChatGPT comment réparer le lave-vaisselle, puis l'avoir réparé lui-même.",
+            turn_start=s35_tid(7), turn_end=s35_tid(8), use_status="use", practice_domain="personal",
+            context="Réparation du lave-vaisselle, à la maison.", ai_action=["explique comment réparer"],
+            student_action_after=["fait la réparation du lave-vaisselle en suivant les étapes"],
+            stated_frequency="une fois (le mois dernier)", assessment_context="personal", explicitness="unclear",
+            evidence=[s35_ev(8, "je lui ai demandé comment réparer le lave-vaisselle")],
+            uncertainty_note="Le tour T0008 est marqué enquêteur alors qu'il est signalé comme pouvant être une "
+                             "réponse de l'enquêté : attribution du locuteur douteuse.",
+        ),
+    ],
+    "extraction_notes": None,
+}
+
+STAGE35_SIGNALS = {
+    "signals": [
+        signal(turn_ids=[s35_tid(4)], signal_type="contrast", surface_form="Mais",
+               description="« Mais » ouvre la réponse sur les devoirs notés.",
+               evidence=[s35_ev(4, "Mais normalement mes devoirs je les écris moi-même.")]),
+        signal(turn_ids=[s35_tid(6)], signal_type="preference_statement", surface_form="Je préfère",
+               description="L'enquêté formule une préférence : écrire lui-même.", topic="devoirs notés",
+               evidence=[s35_ev(6, "Je préfère écrire moi-même.")]),
+        signal(turn_ids=[s35_tid(6)], signal_type="metadiscursive_self_evaluation",
+               surface_form="c'est assez ridicule ce que je dis",
+               description="L'enquêté qualifie de « ridicule » ce qu'il vient de dire.", topic="devoirs notés",
+               evidence=[s35_ev(6, "Bon, c'est assez ridicule ce que je dis.")]),
+    ],
+    "reading_notes": None,
+}
+
+STAGE35_AUDIT = {
+    "assessments": [
+        assessment(turn_id=s35_tid(8), suggested_speaker="enquete", confidence="high",
+                   reason="Réponse à la première personne qui suit directement la question du tour précédent.",
+                   evidence=[s35_ev(8, "Oui, le mois dernier je lui ai demandé comment réparer le lave-vaisselle"),
+                             s35_ev(7, "Tu l'utilises en dehors des études ?")]),
+    ],
+    "audit_notes": None,
+}

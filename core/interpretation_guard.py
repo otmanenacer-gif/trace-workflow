@@ -8,6 +8,12 @@ citations) et signale — sans rien modifier — les termes suspects.
 Un terme n'est pas signalé s'il figure dans les citations du même objet :
 l'enquêté·e l'a alors employé lui-même ou elle-même.
 
+Certains termes sont ambigus : « réparation » désigne aussi bien la réparation
+d'un lave-vaisselle (sens ordinaire, matériel) qu'un concept théorique
+(« réparation discursive »). Pour ces termes, chaque occurrence est examinée
+dans son contexte immédiat (règles lexicales simples, sans IA) et seul un
+emploi interprétatif est signalé (voir `reparation_uses`).
+
 Les listes ne figurent volontairement PAS dans les prompts : les nommer dans
 les consignes introduirait le cadre théorique que l'on veut tenir à distance.
 """
@@ -17,14 +23,14 @@ from __future__ import annotations
 import re
 import unicodedata
 
-GUARD_VERSION = "1.1"  # 1.1 : champ scope_qualifier, lecture de la personne (signaux)
+GUARD_VERSION = "1.2"  # 1.2 : « réparation » examinée en contexte (sens matériel non signalé), auditeur des locuteurs
 
 # Concepts théoriques réservés à l'étape interprétative ultérieure (les deux agents).
 THEORETICAL_TERMS = {
     "accountability": r"accountab\w*",
     "garfinkel": r"garfinkel\w*",
     "breach / breaching": r"breach\w*",
-    "réparation": r"reparation\w*",
+    "réparation": r"repar\w*",  # terme contextuel : voir CONTEXTUAL_CHECKS
     "ethnométhodologie": r"ethnomethodolog\w*",
     "métier d'étudiant": r"metier d.etudiant\w*",
     "régime d'…": r"regimes? d.\w*",
@@ -72,6 +78,8 @@ PERSON_READING_TERMS = {
 AGENT_TERM_SETS = {
     "practice_extractor": (THEORETICAL_TERMS, JUDGMENT_TERMS),
     "interaction_signal_reader": (THEORETICAL_TERMS, JUDGMENT_TERMS, FUNCTION_TERMS, PERSON_READING_TERMS),
+    # Auditeur des locuteurs : sa justification (« reason ») ne doit contenir ni concept ni jugement.
+    "speaker_attribution_auditor": (THEORETICAL_TERMS, JUDGMENT_TERMS),
 }
 
 # Champs rédigés par l'agent (les citations sont exclues).
@@ -84,6 +92,7 @@ AUTHORED_FIELDS = {
     "interaction_signal_reader": (
         "surface_form", "description", "topic", "explicit_affect", "cross_turn_reference",
     ),
+    "speaker_attribution_auditor": ("reason",),
 }
 
 
@@ -101,6 +110,108 @@ def _compile(term_sets) -> list[tuple[str, re.Pattern]]:
 _PATTERNS = {agent: _compile(sets) for agent, sets in AGENT_TERM_SETS.items()}
 
 
+# --- Termes contextuels : « réparation » -----------------------------------------------------
+#
+# Chaque occurrence de réparation / réparer / réparateur… est classée d'après les mots qui
+# l'entourent dans la même proposition (fenêtre de 4 mots avant, 7 après) :
+#   1. marqueur interprétatif fort (« identité », « conduite », « discursive »…)  → interprétatif ;
+#   2. objet ou cadre matériel (« lave-vaisselle », « téléphone », « coût de »…)  → ordinaire ;
+#   3. nom d'analyse devant (« travail de », « opération de », « stratégie de »…) → interprétatif ;
+#   4. objet matériel ailleurs dans le même objet (pratique ou signal)             → ordinaire ;
+#   5. sinon : le nom (« une réparation ») reste signalé, comme avant ; le verbe non.
+# Les listes sont volontairement courtes et lisibles ; elles ne figurent dans aucun prompt.
+
+_REPAIR_FORM = re.compile(
+    r"^repar(?:ations?|ateurs?|atrices?|ables?|er|e|es|ee|ees|ent|ait|aient|ais|ant|ons|ez|ions|iez"
+    r"|erai|eras|era|erons|erez|eront|erait|eraient)$")
+_REPAIR_NOUN = re.compile(r"^reparations?$")
+_TOKEN = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
+_CLAUSE_BREAK = re.compile(r"[.;,:!?|()\[\]\n«»\"]")
+
+REPAIR_INTERPRETIVE_MARKERS = frozenset("""
+    identite identites identitaire identitaires soi image conduite conduites comportement comportements
+    accountability accountable morale moral moraux normatif normative normatifs symbolique symboliques
+    discursive discursif discursives discursifs interactionnelle interactionnel interactionnelles
+    conversationnelle conversationnel narrative narratif biographique rituelle rituel relationnelle
+    relationnel reputation honneur dignite credibilite legitimite statut role offense faute transgression
+    rupture breach ordre interaction interactions situation presentation recit discours propos parole
+    lien liens relation relations confiance ethnomethodologique face
+""".split())
+REPAIR_ANALYTIC_NOUNS = frozenset("""
+    travail operation operations strategie strategies procede procedes mecanisme mecanismes logique
+    forme formes geste gestes tentative tentatives sequence sequences dispositif demarche effort efforts
+    enjeu enjeux fonction dimension visee registre acte actes processus mouvement ressource ressources
+    rhetorique pratique pratiques
+""".split())
+REPAIR_MATERIAL_MARKERS = frozenset("""
+    appareil appareils machine machines lave-vaisselle lave-linge seche-linge frigo refrigerateur
+    congelateur four micro-ondes plaque plaques cuisiniere chaudiere chauffe-eau radiateur radiateurs
+    electromenager menager menagers menagere domestique domestiques ordinateur ordinateurs ordi ordis pc
+    mac portable portables telephone telephones smartphone smartphones iphone tablette ecran ecrans
+    clavier souris imprimante console televiseur tele tv voiture voitures auto automobile vehicule moteur
+    velo velos scooter moto trottinette pneu pneus frein freins robinet evier toilettes wc plomberie
+    canalisation canalisations tuyau tuyaux fuite eau gaz electricite electrique prise cable cables
+    chargeur batterie meuble meubles porte fenetre volet toit toiture mur murs maison appartement
+    logement objet objets outil outils outillage piece pieces panne pannes bricolage bricoler garage
+    garagiste reparateur depanneur depannage technicien plombier electricien montre chaussure chaussures
+    vetement vetements lunettes materiel materielle mecanique informatique cout couts frais prix devis
+    facture atelier service kit tuto tutoriel tutoriels video videos notice manuel magasin boutique sav
+    garantie
+""".split())
+_LEFT, _RIGHT = 4, 7
+
+
+def _strong_marker(window: list[str]) -> bool:
+    for i, token in enumerate(window):
+        if token not in REPAIR_INTERPRETIVE_MARKERS:
+            continue
+        nxt = window[i + 1] if i + 1 < len(window) else ""
+        prev = window[i - 1] if i else ""
+        if token == "soi" and nxt == "meme":                      # « réparer soi même »
+            continue
+        if token == "face" and prev not in ("la", "sa", "leur"):  # « face à… »
+            continue
+        if token in ("conduite", "conduites") and {"eau", "gaz"} & set(window):  # conduite d'eau
+            continue
+        return True
+    return False
+
+
+def reparation_uses(text: str, context: str = "") -> list[str]:
+    """Classe chaque occurrence de « réparation / réparer… » : 'interpretive' ou 'ordinary'.
+
+    `text` et `context` sont attendus repliés (voir `fold`). `context` (le reste de
+    l'objet : autres champs, citations) ne sert qu'à reconnaître un cadre matériel.
+    """
+    material_context = bool(REPAIR_MATERIAL_MARKERS & set(_TOKEN.findall(context)))
+    uses = []
+    for clause in _CLAUSE_BREAK.split(text):
+        tokens = _TOKEN.findall(clause.replace("'", " "))
+        for i, token in enumerate(tokens):
+            if not _REPAIR_FORM.match(token):
+                continue
+            left, right = tokens[max(0, i - _LEFT):i], tokens[i + 1:i + 1 + _RIGHT]
+            if _strong_marker(left + [""] + right):
+                uses.append("interpretive")
+            elif REPAIR_MATERIAL_MARKERS & set(left + right):
+                uses.append("ordinary")
+            elif REPAIR_ANALYTIC_NOUNS & set(left):
+                uses.append("interpretive")
+            elif material_context or not _REPAIR_NOUN.match(token):
+                uses.append("ordinary")
+            else:
+                uses.append("interpretive")
+    return uses
+
+
+def reparation_is_interpretive(text: str, context: str = "") -> bool:
+    return "interpretive" in reparation_uses(text, context)
+
+
+# Termes ambigus : signalés seulement si l'emploi est interprétatif (le motif ne fait que présélectionner).
+CONTEXTUAL_CHECKS = {"réparation": reparation_is_interpretive}
+
+
 def _authored_text(item: dict, agent: str) -> dict[str, str]:
     texts = {}
     for name in AUTHORED_FIELDS[agent]:
@@ -113,19 +224,26 @@ def _authored_text(item: dict, agent: str) -> dict[str, str]:
 
 
 def scan_item(item: dict, agent: str) -> list[dict]:
-    """Termes interprétatifs trouvés dans les champs rédigés d'un objet (pratique ou signal).
+    """Termes interprétatifs trouvés dans les champs rédigés d'un objet (pratique, signal, évaluation).
 
     Renvoie une liste {term, field} ; un terme présent dans les citations de
-    l'objet n'est pas signalé.
+    l'objet n'est pas signalé. Un terme contextuel (« réparation ») n'est
+    signalé que dans un emploi interprétatif, et n'est exempté que si les
+    citations l'emploient elles-mêmes dans ce sens.
     """
     quotes = fold(" ".join(e.get("quote", "") for e in item.get("evidence", [])))
+    authored = {name: fold(text) for name, text in _authored_text(item, agent).items()}
+    context = " | ".join([*authored.values(), quotes])
     findings, seen = [], set()
-    for name, text in _authored_text(item, agent).items():
-        folded = fold(text)
+    for name, folded in authored.items():
         for label, pattern in _PATTERNS[agent]:
             if label in seen or not pattern.search(folded):
                 continue
-            if pattern.search(quotes):
+            check = CONTEXTUAL_CHECKS.get(label)
+            if check is not None:
+                if not check(folded, context) or check(quotes, quotes):
+                    continue
+            elif pattern.search(quotes):
                 continue  # mot employé par l'enquêté·e
             seen.add(label)
             findings.append({"term": label, "field": name})

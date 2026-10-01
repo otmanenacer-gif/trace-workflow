@@ -42,9 +42,14 @@ La transcription est fournie entre les balises `<transcript>` et `</transcript>`
 - `significant_repetition` : répétition remarquable d'un mot ou d'une formule.
 - `pronoun_shift` : passage de « je » à « on » (ou « nous », « tu » générique) ou inversement, lorsqu'il est localement remarquable.
 - `preference_statement` : préférence explicitement formulée par l'enquêté·e (« je préfère le faire moi-même », « je préfère chercher sur Internet », « j'aime mieux écrire moi-même »). Une telle formulation relève de ce type, pas de `other`. Décris seulement la préférence énoncée, dans les termes de l'enquêté·e, sans lui prêter d'autre signification (ni trait de la personne, ni valeur, ni prise de position).
+- `metadiscursive_self_evaluation` : l'enquêté·e évalue explicitement **sa propre formulation, son propre récit ou la manière dont il ou elle présente sa conduite** (« c'est assez ridicule ce que je dis », « là j'abuse », « c'est un peu facile de dire ça », « c'est un peu la facilité de dire ça », « je sais que dit comme ça c'est bizarre »). Une telle formulation relève de ce type, pas de `other`. Ne relèvent PAS de ce type : une évaluation portant sur autre chose que sa propre parole (« ChatGPT est ridicule » : l'outil est évalué, pas la formulation), un affect nommé (« ça m'énerve », « je suis triste » → `explicit_emotion`), une préférence (« je préfère le faire moi-même » → `preference_statement`). Décris seulement ce que l'enquêté·e dit de sa propre formulation, dans ses termes : ne lui prête aucune fonction ni aucun but (ni se justifier, ni se défendre, ni se protéger), aucun sentiment non formulé, aucune signification pour la personne.
 - `other` : autre phénomène observable ; décris-le précisément dans `description`.
 
-Un même passage peut porter plusieurs signaux : fais un objet par signal. Ne force pas un passage dans une catégorie : en cas de doute, utilise `other` ou `explicitness: "unclear"`.
+Un même passage peut porter plusieurs signaux : fais un objet par signal. Ne force pas un passage dans une catégorie : en cas de doute, utilise `other` ou `explicitness: "unclear"`. Il n'y a pas de nombre maximal de signaux : ne les sélectionne pas selon leur importance et ne fusionne pas des signaux distincts.
+
+## Avertissements sur l'attribution des locuteurs
+
+Certains tours peuvent porter un champ `speaker_warning` (`suggested_speaker`, `confidence`) produit par un contrôle automatique de la transcription. **Le locuteur officiel reste celui du champ `speaker`** : le `speaker_warning` indique seulement que l'attribution du locuteur est potentiellement douteuse. Ne corrige jamais la transcription ni le locuteur. Si un signal s'appuie sur un tour ainsi signalé, relève-le normalement, mentionne dans `description` que l'attribution du locuteur de ce tour est douteuse et mets `needs_human_review` à `true`.
 
 ## Ce que tu ne dois PAS faire
 

@@ -33,8 +33,8 @@ def by_type(document, signal_type):
 def test_agent_identity_is_versioned():
     identity = SPEC.identity()
     assert identity["agent"] == "interaction_signal_reader"
-    assert identity["agent_version"] == INTERACTION_SIGNAL_READER_VERSION == "1.1"
-    assert identity["schema_version"] == INTERACTION_SCHEMA_VERSION == "1.1"
+    assert identity["agent_version"] == INTERACTION_SIGNAL_READER_VERSION == "1.2"
+    assert identity["schema_version"] == INTERACTION_SCHEMA_VERSION == "1.2"
 
 
 def test_prompt_observes_without_reading_minds():
@@ -140,3 +140,70 @@ def test_preference_statement_read_as_a_trait_of_the_person_is_flagged(tmp_path)
     terms = {i["term"] for i in validation["agents"]["interaction_signal_reader"]["issues"]
              if i["code"] == "INTERPRETIVE_VOCABULARY"}
     assert {"autonomie", "résistance", "position morale", "identité"} <= terms
+
+
+# --- Étape 3.5 : metadiscursive_self_evaluation --------------------------------------------------
+
+def test_metadiscursive_type_in_schema_and_prompt():
+    assert "metadiscursive_self_evaluation" in SIGNAL_TYPES and SIGNAL_TYPES[-1] == "other"
+    enum = SPEC.output_schema["$defs"]["InteractionSignal"]["properties"]["signal_type"]["enum"]
+    assert "metadiscursive_self_evaluation" in enum
+    prompt = SPEC.system_prompt
+    assert "- `metadiscursive_self_evaluation` : l'enquêté·e évalue explicitement **sa propre formulation" in prompt
+    for example in ("« c'est assez ridicule ce que je dis »", "« là j'abuse »", "« c'est un peu facile de dire ça »",
+                    "« je sais que dit comme ça c'est bizarre »"):
+        assert example in prompt, example
+    # contre-exemples
+    assert "« ChatGPT est ridicule » : l'outil est évalué, pas la formulation" in prompt
+    assert "« je suis triste » → `explicit_emotion`" in prompt
+    assert "« je préfère le faire moi-même » → `preference_statement`" in prompt
+    assert "ni se justifier, ni se défendre, ni se protéger" in prompt
+    lowered = prompt.casefold()
+    for term in ("réparation", "accountab", "identité", "honte implicite", "stratégie défensive"):
+        assert term not in lowered, term
+
+
+def test_metadiscursive_signals_are_kept_as_descriptive_signals(tmp_path):
+    summary, document = run_signals(tmp_path, si.META_SIGNALS, si.META_FILES)
+    assert summary["status"] == "SUCCESS" and summary["invalid_evidence_count"] == 0
+    meta = by_type(document, "metadiscursive_self_evaluation")
+    assert [s["surface_form"] for s in meta] == ["c'est assez ridicule ce que je dis", "Là j'abuse",
+                                                "C'est un peu facile de dire ça"]
+    assert all(s["review_reasons"] == [] for s in meta) and not by_type(document, "other")
+    # « ChatGPT est ridicule » n'est pas métadiscursif ; les affects nommés restent explicit_emotion
+    assert all("ChatGPT est ridicule" not in e["quote"] for s in meta for e in s["evidence"])
+    assert {s["explicit_affect"] for s in by_type(document, "explicit_emotion")} == {"m'énerve", "triste"}
+    assert [s["surface_form"] for s in by_type(document, "preference_statement")] == ["Je préfère"]
+
+
+def test_evaluation_of_something_else_labelled_metadiscursive_is_flagged(tmp_path):
+    output = copy.deepcopy(si.META_SIGNALS)
+    output["signals"].append(si.signal(
+        turn_ids=[si.mt_tid(6)], signal_type="metadiscursive_self_evaluation", surface_form="ChatGPT est ridicule",
+        description="L'enquêté qualifie l'outil de « ridicule ».",
+        evidence=[si.mt_ev(6, "ChatGPT est ridicule pour les calculs.")]))
+    summary, document = run_signals(tmp_path, output, si.META_FILES)
+    assert summary["status"] == "SUCCESS_WITH_WARNINGS"
+    assert document["signals"][-1]["review_reasons"] == ["METADISCURSIVE_NO_SELF_REFERENCE"]
+    assert all(not s["needs_review"] for s in document["signals"][:-1])
+
+
+def test_metadiscursive_signal_read_as_a_function_is_flagged(tmp_path):
+    output = copy.deepcopy(si.META_SIGNALS)
+    output["signals"][0]["description"] = ("Justification défensive : une réparation de son image, "
+                                           "signe de honte et d'une identité menacée.")
+    summary, document = run_signals(tmp_path, output, si.META_FILES)
+    assert "INTERPRETIVE_VOCABULARY" in document["signals"][0]["review_reasons"]
+    validation = json.loads((Path(document_dir(tmp_path)) / "evidence_validation.json").read_text(encoding="utf-8"))
+    terms = {i["term"] for i in validation["agents"]["interaction_signal_reader"]["issues"]
+             if i["code"] == "INTERPRETIVE_VOCABULARY"}
+    assert {"se justifier / justification", "défensif", "réparation", "honte", "identité"} <= terms
+
+
+@pytest.mark.parametrize("quote, expected", [
+    ("c'est assez ridicule ce que je dis", True), ("j'abuse là", True), ("c'est un peu la facilité de dire ça", True),
+    ("je sais que dit comme ça c'est bizarre", True), ("ChatGPT est ridicule", False),
+])
+def test_self_reference_check(quote, expected):
+    from core.evidence_validator import refers_to_own_speech
+    assert refers_to_own_speech([quote]) is expected

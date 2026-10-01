@@ -32,8 +32,8 @@ def run_practices(tmp_path, output, files=None):
 def test_agent_identity_is_versioned():
     identity = SPEC.identity()
     assert identity["agent"] == "practice_extractor"
-    assert identity["agent_version"] == PRACTICE_EXTRACTOR_VERSION == "1.1"
-    assert identity["schema_version"] == PRACTICE_SCHEMA_VERSION == "1.1"
+    assert identity["agent_version"] == PRACTICE_EXTRACTOR_VERSION == "1.2"
+    assert identity["schema_version"] == PRACTICE_SCHEMA_VERSION == "1.2"
     assert len(identity["prompt_sha256"]) == 64 and len(identity["schema_sha256"]) == 64
 
 
@@ -185,3 +185,88 @@ def test_surtout_as_frequency_is_never_recorded(tmp_path):
 def test_scope_qualifier_is_scanned_by_the_guard(tmp_path):
     _, document = run_practices(tmp_path, _with_practice_fields(scope_qualifier="par paresse"))
     assert "INTERPRETIVE_VOCABULARY" in document["practices"][2]["review_reasons"]
+
+
+# --- Étape 3.5 : non-usages et refus, distincts des usages ------------------------------------
+
+def test_prompt_searches_uses_and_non_uses_without_merging():
+    prompt = SPEC.system_prompt
+    assert "Cherche **systématiquement les usages ET les non-usages ou refus**" in prompt
+    for example in ("« pour mes plans je le fais moi-même »", "« je n'utilise jamais ChatGPT en examen »",
+                    "« pour cette matière je ne l'utilise pas »", "« je veux pas qu'il fasse mes travaux »",
+                    "« je refuse de lui faire écrire mon devoir »", "« je lui demande pas de réfléchir à ma place »"):
+        assert example in prompt, example
+    assert ("« Il m'arrive de lui demander de rédiger » puis « Mais normalement mes devoirs je les écris "
+            "moi-même » donnent DEUX pratiques distinctes") in prompt
+    assert "Ne les fusionne pas, ne tranche pas" in prompt
+    assert "`past_use` (ce que l'enquêté·e faisait) et `non_use`" in prompt
+    for value in ("not_stated", "preference", "personal_rule", "external_rule", "technical_limitation"):
+        assert f"`{value}`" in prompt, value
+    assert "n'écarte aucune situation au motif qu'elle n'est pas universitaire" in prompt
+
+
+def test_schema_has_non_use_reason_and_practice_domain():
+    practice = SPEC.output_schema["$defs"]["Practice"]
+    assert {"non_use_reason", "practice_domain"} <= set(practice["required"])
+    assert practice["properties"]["practice_domain"]["enum"] == ["academic", "personal", "professional", "mixed",
+                                                                 "unknown"]
+    reason = json.dumps(practice["properties"]["non_use_reason"])
+    for value in ("not_stated", "preference", "personal_rule", "external_rule", "technical_limitation", "other"):
+        assert value in reason
+    bad = copy.deepcopy(si.NON_USE_PRACTICES)
+    bad["practices"][1]["non_use_reason"] = "laziness"
+    with pytest.raises(ValidationError):
+        PracticeExtractorOutput.model_validate(bad)
+
+
+def test_use_and_non_use_on_the_same_theme_stay_two_practices(tmp_path):
+    """« Il m'arrive de lui demander de rédiger » / « Mais normalement mes devoirs je les écris moi-même »."""
+    summary, document = run_practices(tmp_path, si.NON_USE_PRACTICES, si.NON_USE_FILES)
+    assert summary["status"] == "SUCCESS" and summary["invalid_evidence_count"] == 0
+    assert document["item_count"] == 6  # rien n'est fusionné
+    use, non_use = document["practices"][0], document["practices"][1]
+    assert (use["use_status"], non_use["use_status"]) == ("use", "non_use")
+    assert use["practice_id"] != non_use["practice_id"]
+    assert "rédiger" in use["evidence"][0]["quote"] and "moi-même" in non_use["evidence"][0]["quote"]
+    assert use["non_use_reason"] is None and non_use["non_use_reason"] == "preference"
+    assert not use["needs_review"] and not non_use["needs_review"]
+
+
+def test_refusal_is_distinct_from_a_stated_preference(tmp_path):
+    _, document = run_practices(tmp_path, si.NON_USE_PRACTICES, si.NON_USE_FILES)
+    by_status = {}
+    for p in document["practices"]:
+        by_status.setdefault(p["use_status"], []).append(p)
+    refusal, = by_status["refusal"]
+    assert refusal["non_use_reason"] == "personal_rule"
+    assert "Je lui demande pas de réfléchir à ma place." in [e["quote"] for e in refusal["evidence"]]
+    preference = next(p for p in by_status["non_use"] if p["non_use_reason"] == "preference")
+    assert "je préfère" in preference["evidence"][1]["quote"]
+
+
+def test_past_use_and_current_non_use_are_two_practices(tmp_path):
+    _, document = run_practices(tmp_path, si.NON_USE_PRACTICES, si.NON_USE_FILES)
+    fiches = [p for p in document["practices"] if p["academic_task"] == "fiches de lecture"]
+    assert [(p["use_status"], p["non_use_reason"]) for p in fiches] == [("past_use", None), ("non_use", "not_stated")]
+    exam = document["practices"][-1]
+    assert (exam["use_status"], exam["non_use_reason"], exam["assessment_context"]) == ("non_use", "external_rule", "exam")
+
+
+def test_inconsistent_non_use_reason_is_flagged_not_corrected(tmp_path):
+    output = copy.deepcopy(si.NON_USE_PRACTICES)
+    output["practices"][0]["non_use_reason"] = "preference"   # un usage n'a pas de raison de non-usage
+    output["practices"][1]["non_use_reason"] = None           # un non-usage doit en avoir une
+    summary, document = run_practices(tmp_path, output, si.NON_USE_FILES)
+    assert summary["status"] == "SUCCESS_WITH_WARNINGS"
+    for practice in document["practices"][:2]:
+        assert "NON_USE_REASON_MISMATCH" in practice["review_reasons"]
+    assert document["practices"][0]["non_use_reason"] == "preference"  # rien n'est corrigé
+
+
+def test_personal_practices_are_kept(tmp_path):
+    output = {"practices": [si.practice(
+        summary="L'étudiante indique utiliser ChatGPT pour reformuler, y compris hors des cours.",
+        turn_start=si.tid(1), turn_end=si.tid(2), practice_domain="personal", assessment_context="personal",
+        ai_tool=["ChatGPT"], evidence=[si.ev(2, "Oui, ChatGPT surtout.")])], "extraction_notes": None}
+    summary, document = run_practices(tmp_path, output)
+    assert summary["status"] == "SUCCESS" and document["practices"][0]["practice_domain"] == "personal"
