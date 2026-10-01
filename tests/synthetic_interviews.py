@@ -58,7 +58,7 @@ def practice(**fields) -> dict:
         "summary": "", "turn_start": tid(1), "turn_end": tid(1), "use_status": "use",
         "academic_task": None, "discipline": None, "context": "", "ai_tool": [],
         "student_action_before": [], "ai_action": [], "student_action_after": [], "stated_reason": [],
-        "explicit_constraints": [], "verification_or_control": [], "stated_frequency": None,
+        "explicit_constraints": [], "verification_or_control": [], "stated_frequency": None, "scope_qualifier": None,
         "assessment_context": "unknown", "other_actors": [], "evidence": [], "explicitness": "direct",
         "uncertainty_note": None,
     }
@@ -100,6 +100,7 @@ GOOD_PRACTICES = {
             turn_start=tid(6), turn_end=tid(12), use_status="use", academic_task="rédaction de dissertation",
             context="Rédaction de ses propres textes.", ai_tool=["ChatGPT"], student_action_before=["rédige ses phrases"],
             ai_action=["reformule ses phrases"], stated_reason=["ses phrases sont trop lourdes"],
+            scope_qualifier="surtout",
             evidence=[ev(6, "je l'utilise surtout pour reformuler, pas pour faire le plan"),
                       ev(12, "Oui, juste pour reformuler mes phrases quand elles sont trop lourdes.")],
             explicitness="strongly_supported",
@@ -166,6 +167,53 @@ GOOD_SIGNALS = {
                explicitness="direct",
                evidence=[ev(4, "je lui ai demandé un plan"),
                          ev(12, "le plan de la dissert, c'est moi qui l'ai fait, toute seule")]),
+    ],
+    "reading_notes": None,
+}
+
+# Mini-entretien SYNTHÉTIQUE du correctif de l'étape 3 : qualificatif de portée et préférence énoncée.
+PATCH_FILENAME = "Entretien_preference.txt"
+PATCH_INTERVIEW_ID = "ENTRETIEN_PREFERENCE"
+PATCH_TURNS = [
+    ("Enquêteur", "Tu utilises ChatGPT pour tes dissertations ?"),
+    ("Enquêté", "Oui, mais je l'utilise surtout pour reformuler."),
+    ("Enquêteur", "Et pour les plans ?"),
+    ("Enquêté", "Non, je préfère faire mes plans moi-même."),
+]
+PATCH_TEXT = "\n".join(f"{speaker} : {text}" for speaker, text in PATCH_TURNS) + "\n"
+PATCH_FILES = [(PATCH_FILENAME, PATCH_TEXT.encode("utf-8"))]
+
+
+def patch_ev(number: int, quote: str) -> dict:
+    return {"turn_id": f"{PATCH_INTERVIEW_ID}_T{number:04d}", "quote": quote}
+
+
+PATCH_PRACTICES = {
+    "practices": [
+        practice(
+            summary="L'étudiante indique utiliser ChatGPT pour reformuler.",
+            turn_start=f"{PATCH_INTERVIEW_ID}_T0001", turn_end=f"{PATCH_INTERVIEW_ID}_T0002", use_status="use",
+            academic_task="dissertation", context="Dissertations.", ai_tool=["ChatGPT"], ai_action=["reformule"],
+            stated_frequency=None, scope_qualifier="surtout",
+            evidence=[patch_ev(2, "je l'utilise surtout pour reformuler")],
+        ),
+        practice(
+            summary="L'étudiante indique faire ses plans elle-même.",
+            turn_start=f"{PATCH_INTERVIEW_ID}_T0003", turn_end=f"{PATCH_INTERVIEW_ID}_T0004", use_status="non_use",
+            academic_task="plans de dissertation", context="Plans de dissertation.",
+            student_action_before=["fait ses plans elle-même"],
+            evidence=[patch_ev(4, "je préfère faire mes plans moi-même")],
+        ),
+    ],
+    "extraction_notes": None,
+}
+
+PATCH_SIGNALS = {
+    "signals": [
+        signal(turn_ids=[f"{PATCH_INTERVIEW_ID}_T0004"], signal_type="preference_statement",
+               surface_form="je préfère",
+               description="L'enquêtée formule une préférence : faire ses plans elle-même.",
+               topic="plans de dissertation", evidence=[patch_ev(4, "je préfère faire mes plans moi-même")]),
     ],
     "reading_notes": None,
 }

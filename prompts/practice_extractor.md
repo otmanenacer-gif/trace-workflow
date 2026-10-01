@@ -52,7 +52,8 @@ La transcription est fournie entre les balises `<transcript>` et `</transcript>`
 - `stated_reason` : raisons données par l'enquêté·e.
 - `explicit_constraints` : contraintes explicitement mentionnées (délai, interdiction, surveillance, consigne d'un·e enseignant·e, règlement…).
 - `verification_or_control` : vérifications ou contrôles que l'enquêté·e dit effectuer sur le résultat (relecture, comparaison avec le cours…).
-- `stated_frequency` : fréquence telle que formulée (« tout le temps », « une seule fois ») ou `null`.
+- `stated_frequency` : uniquement une **fréquence** telle que formulée (« parfois », « souvent », « rarement », « une fois », « jamais », « toujours », « tout le temps ») ou `null`. « surtout », « principalement », « essentiellement », « notamment », « en particulier » ne sont **pas** des fréquences : ils ne vont jamais dans ce champ.
+- `scope_qualifier` : qualificatif de portée employé par l'enquêté·e (« surtout », « principalement », « essentiellement »…), tel quel, ou `null` s'il n'y en a pas. Exemple : « je l'utilise surtout pour reformuler » → `stated_frequency` : `null`, `scope_qualifier` : « surtout ».
 - `assessment_context` : `graded` (travail noté hors examen), `ungraded` (travail non noté), `exam` (examen, partiel), `class` (pendant un cours), `personal` (hors cadre des études), `unknown`.
 - `other_actors` : autres personnes mentionnées dans la situation (« professeure », « camarades », « parents »…).
 - `evidence` : citations (voir ci-dessous), au moins une.

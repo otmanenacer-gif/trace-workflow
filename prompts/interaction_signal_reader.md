@@ -41,6 +41,7 @@ La transcription est fournie entre les balises `<transcript>` et `</transcript>`
 - `transcribed_silence` : silence ou pause, **uniquement s'ils sont transcrits** (« (silence) », « [pause] »).
 - `significant_repetition` : répétition remarquable d'un mot ou d'une formule.
 - `pronoun_shift` : passage de « je » à « on » (ou « nous », « tu » générique) ou inversement, lorsqu'il est localement remarquable.
+- `preference_statement` : préférence explicitement formulée par l'enquêté·e (« je préfère le faire moi-même », « je préfère chercher sur Internet », « j'aime mieux écrire moi-même »). Une telle formulation relève de ce type, pas de `other`. Décris seulement la préférence énoncée, dans les termes de l'enquêté·e, sans lui prêter d'autre signification (ni trait de la personne, ni valeur, ni prise de position).
 - `other` : autre phénomène observable ; décris-le précisément dans `description`.
 
 Un même passage peut porter plusieurs signaux : fais un objet par signal. Ne force pas un passage dans une catégorie : en cas de doute, utilise `other` ou `explicitness: "unclear"`.

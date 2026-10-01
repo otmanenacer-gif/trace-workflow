@@ -63,7 +63,7 @@ non-usage, refus, usage hypothétique, usage passé. Il reprend les raisons
 > Mauvais : « L'étudiante utilise ChatGPT pour éviter l'effort intellectuel. »
 > Bon : « L'étudiante indique utiliser ChatGPT pour obtenir un résumé lorsqu'elle dit ne pas avoir le temps de lire le texte. »
 
-### Schéma d'une pratique (schema_version 1.0)
+### Schéma d'une pratique (schema_version 1.1)
 
 | Champ | Contenu |
 |---|---|
@@ -78,7 +78,8 @@ non-usage, refus, usage hypothétique, usage passé. Il reprend les raisons
 | `stated_reason` | raisons données par l'enquêté·e |
 | `explicit_constraints` | délais, interdictions, surveillance, consignes… |
 | `verification_or_control` | contrôles déclarés sur le résultat |
-| `stated_frequency` | fréquence telle que formulée (ajout au schéma initial) |
+| `stated_frequency` | fréquence uniquement (« parfois », « souvent », « rarement », « une fois », « jamais », « toujours »…), sinon `null` (ajout au schéma initial) |
+| `scope_qualifier` | qualificatif de portée tel que dit (« surtout », « principalement »…), sinon `null` (ajout, schéma 1.1) |
 | `assessment_context` | `graded`, `ungraded`, `exam`, `class`, `personal`, `unknown` |
 | `other_actors` | autres personnes mentionnées |
 | `evidence` | au moins une citation `{turn_id, quote}` |
@@ -86,6 +87,13 @@ non-usage, refus, usage hypothétique, usage passé. Il reprend les raisons
 | `uncertainty_note` | incertitude, sinon `null` |
 
 Niveau global : `extraction_notes` (remarques techniques, pas de synthèse).
+
+`stated_frequency` ne contient qu'une fréquence : « je l'utilise surtout pour
+reformuler » donne `stated_frequency: null` et `scope_qualifier: "surtout"`.
+Une réponse qui place « surtout », « principalement », « essentiellement »,
+« notamment » ou « en particulier » dans `stated_frequency` est rejetée à la
+validation locale du schéma (`SCHEMA_VALIDATION`) : rien n'est enregistré ni
+mis en cache.
 
 ## 3. Interaction Signal Reader : observer sans lire les pensées
 
@@ -97,7 +105,9 @@ Il relève des marques **présentes dans le texte transcrit** :
 `reference_to_peer_judgment`, `reference_to_rule`,
 `distancing_from_own_practice`, `attribution_to_others`,
 `transcribed_laughter`, `transcribed_silence`, `significant_repetition`,
-`pronoun_shift`, `other` (décrit librement, pour ne pas forcer un passage
+`pronoun_shift`, `preference_statement` (préférence explicitement formulée :
+« je préfère le faire moi-même », « j'aime mieux écrire moi-même » ; ajout,
+schéma 1.1), `other` (décrit librement, pour ne pas forcer un passage
 dans une catégorie).
 
 **Il peut** : noter « scrupules » comme `explicit_affect` quand l'enquêté·e
@@ -108,10 +118,12 @@ se contredisent, de façon neutre.
 **Il ne peut pas** : attribuer une émotion non formulée (honte, culpabilité,
 peur…), prêter une fonction à une formulation (se défendre, se justifier,
 stratégie), qualifier un rire (« gêné »), un silence ou une contradiction
-(mensonge, hypocrisie, dissimulation, réparation). Rire et silence ne sont
+(mensonge, hypocrisie, dissimulation, réparation), ni convertir une
+préférence énoncée (`preference_statement`) en trait de la personne
+(autonomie, résistance, identité, position morale). Rire et silence ne sont
 relevés que s'ils sont **transcrits**.
 
-### Schéma d'un signal (schema_version 1.0)
+### Schéma d'un signal (schema_version 1.1)
 
 | Champ | Contenu |
 |---|---|
@@ -188,7 +200,8 @@ accents ni casse, à trois listes : concepts théoriques réservés (accountabil
 Garfinkel, breach, réparation, métier d'étudiant, identité…), jugements moraux
 et diagnostics (triche, dépendance, culpabilité, honte, peur…), et — pour
 l'Interaction Signal Reader — fonctions prêtées aux formulations (stratégie,
-défensif, justification, mensonge, rire gêné…). Un terme employé par
+défensif, justification, mensonge, rire gêné…) et lectures de la personne
+(autonomie, résistance, position morale). Un terme employé par
 l'enquêté·e dans les citations du même objet n'est pas signalé. Le garde-fou
 signale, il ne supprime rien.
 
@@ -214,7 +227,7 @@ Chaque exécution écrit un manifest par agent (`practice_manifest.json`,
 
 ```json
 {
-  "agent": "practice_extractor", "agent_version": "1.0", "schema_version": "1.0",
+  "agent": "practice_extractor", "agent_version": "1.1", "schema_version": "1.1",
   "prompt_sha256": "…", "schema_sha256": "…", "source_sha256": "…", "transcript_sha256": "…",
   "model": "<ANTHROPIC_MODEL>", "request_params": {"effort": null, "temperature": null},
   "cache_key": "…", "cache_hit": false, "status": "SUCCESS",

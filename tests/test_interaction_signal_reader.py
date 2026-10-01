@@ -7,8 +7,8 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from agents.interaction_signal_reader import (INTERACTION_SCHEMA_VERSION, INTERACTION_SIGNAL_READER_VERSION, SPEC,
-                                              InteractionSignalOutput)
+from agents.interaction_signal_reader import (INTERACTION_SCHEMA_VERSION, INTERACTION_SIGNAL_READER_VERSION,
+                                              SIGNAL_TYPES, SPEC, InteractionSignalOutput)
 from core.analysis import analyze_run
 from core.analysis_cache import AnalysisCache
 from tests import synthetic_interviews as si
@@ -17,8 +17,8 @@ from tests.fake_llm import INTERACTION, PRACTICE, FakeTransport, fake_settings, 
 EMPTY_PRACTICES = {"practices": [], "extraction_notes": None}
 
 
-def run_signals(tmp_path, output):
-    run = si.make_ingested_run(tmp_path)
+def run_signals(tmp_path, output, files=None):
+    run = si.make_ingested_run(tmp_path, files)
     transport = FakeTransport({PRACTICE: text_response(EMPTY_PRACTICES), INTERACTION: text_response(output)})
     run = analyze_run(run, settings=fake_settings(), transport=transport, cache=AnalysisCache(tmp_path / "cache"))
     summary = run["files"][0]["analysis"]
@@ -33,8 +33,8 @@ def by_type(document, signal_type):
 def test_agent_identity_is_versioned():
     identity = SPEC.identity()
     assert identity["agent"] == "interaction_signal_reader"
-    assert identity["agent_version"] == INTERACTION_SIGNAL_READER_VERSION == "1.0"
-    assert identity["schema_version"] == INTERACTION_SCHEMA_VERSION == "1.0"
+    assert identity["agent_version"] == INTERACTION_SIGNAL_READER_VERSION == "1.1"
+    assert identity["schema_version"] == INTERACTION_SCHEMA_VERSION == "1.1"
 
 
 def test_prompt_observes_without_reading_minds():
@@ -103,3 +103,40 @@ def test_psychological_or_theoretical_readings_are_flagged(tmp_path):
 
 def document_dir(tmp_path):
     return next((tmp_path / "outputs").glob("*/interviews/*/analysis"))
+
+
+# --- preference_statement ------------------------------------------------------------------
+
+def test_preference_statement_is_a_signal_type():
+    assert "preference_statement" in SIGNAL_TYPES and SIGNAL_TYPES[-1] == "other"
+    enum = SPEC.output_schema["$defs"]["InteractionSignal"]["properties"]["signal_type"]["enum"]
+    assert "preference_statement" in enum
+    prompt = SPEC.system_prompt
+    assert "- `preference_statement` : préférence explicitement formulée par l'enquêté·e" in prompt
+    for example in ("« je préfère le faire moi-même »", "« je préfère chercher sur Internet »",
+                    "« j'aime mieux écrire moi-même »"):
+        assert example in prompt
+    assert "relève de ce type, pas de `other`" in prompt
+    for term in ("autonomie", "résistance", "identité", "morale"):  # le prompt ne nomme pas ces lectures
+        assert term not in prompt.casefold(), term
+
+
+def test_preference_statement_is_kept_as_a_descriptive_signal(tmp_path):
+    summary, document = run_signals(tmp_path, si.PATCH_SIGNALS, si.PATCH_FILES)
+    assert summary["status"] == "SUCCESS" and summary["invalid_evidence_count"] == 0
+    signal = document["signals"][0]
+    assert signal["signal_type"] == "preference_statement" and signal["surface_form"] == "je préfère"
+    assert signal["review_reasons"] == [] and not by_type(document, "other")
+
+
+def test_preference_statement_read_as_a_trait_of_the_person_is_flagged(tmp_path):
+    output = copy.deepcopy(si.PATCH_SIGNALS)
+    output["signals"][0]["description"] = ("Préférence qui exprime son autonomie, une forme de résistance, "
+                                           "une position morale et son identité étudiante.")
+    summary, document = run_signals(tmp_path, output, si.PATCH_FILES)
+    assert summary["status"] == "SUCCESS_WITH_WARNINGS"
+    assert "INTERPRETIVE_VOCABULARY" in document["signals"][0]["review_reasons"]
+    validation = json.loads((Path(document_dir(tmp_path)) / "evidence_validation.json").read_text(encoding="utf-8"))
+    terms = {i["term"] for i in validation["agents"]["interaction_signal_reader"]["issues"]
+             if i["code"] == "INTERPRETIVE_VOCABULARY"}
+    assert {"autonomie", "résistance", "position morale", "identité"} <= terms

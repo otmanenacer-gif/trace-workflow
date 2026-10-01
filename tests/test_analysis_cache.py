@@ -81,7 +81,7 @@ def test_prompt_change_triggers_new_call(env, tmp_path, monkeypatch):
 
 def test_agent_version_change_triggers_new_call(env, monkeypatch):
     analyze(env)
-    changed = dataclasses.replace(interaction_signal_reader.SPEC, version="1.1")
+    changed = dataclasses.replace(interaction_signal_reader.SPEC, version=interaction_signal_reader.SPEC.version + ".1")
     monkeypatch.setattr(analysis, "AGENTS", (practice_extractor.SPEC, changed))
     _, transport = analyze(env)
     assert [c["agent"] for c in transport.calls] == [INTERACTION]
