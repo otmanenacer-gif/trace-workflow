@@ -1,8 +1,10 @@
 """Agent 2 — Interaction Signal Reader.
 
 Relève des signaux discursifs OBSERVABLES dans la manière dont l'étudiant·e
-raconte ses pratiques (hésitations, autocorrections, minimisations, affects
-explicitement nommés, références au jugement d'autrui, contradictions…).
+raconte ses pratiques (autocorrections, exceptions, restrictions, affects
+explicitement nommés, références au jugement d'autrui, contradictions…), et
+seulement ceux qui sont pertinents pour ce récit (étape 3.7 : pas d'inventaire
+de micro-marqueurs ; voir aussi core/signal_selectivity.py).
 Il ne lit pas les pensées : aucun état psychologique n'est inféré.
 Il ne reçoit jamais la sortie du Practice Extractor.
 
@@ -23,7 +25,7 @@ from agents.base import TRANSCRIPT_DATA_NOTICE, AgentSpec, Evidence, Explicitnes
 from core import config
 
 AGENT_NAME = "interaction_signal_reader"
-INTERACTION_SIGNAL_READER_VERSION = "1.2"
+INTERACTION_SIGNAL_READER_VERSION = "1.3"  # 1.3 : règle de pertinence, micro-marqueurs jamais relevés seuls
 # Schéma 1.1 : ajout du type preference_statement.
 # Schéma 1.2 : ajout du type metadiscursive_self_evaluation.
 INTERACTION_SCHEMA_VERSION = "1.2"
@@ -107,7 +109,7 @@ CHUNK_USER_TEMPLATE = """Entretien à analyser : {interview_id}. Cet entretien e
 {transcript_json}
 </transcript>
 
-Applique tes consignes à cet extrait et réponds avec l'objet JSON demandé. Relève tous les signaux présents dans l'extrait, y compris dans ses premiers et ses derniers tours : TRACE réunit ensuite les extraits et supprime les doublons. Les contradictions, répétitions ou changements de vocabulaire avec des passages situés hors de l'extrait font l'objet d'une lecture séparée : ne les suppose pas."""
+Applique tes consignes à cet extrait, y compris à ses premiers et à ses derniers tours, et réponds avec l'objet JSON demandé. La règle de pertinence s'applique à l'extrait comme à un entretien entier : relève les signaux pertinents pour le récit des pratiques, pas chaque marqueur. TRACE réunit ensuite les extraits et supprime les doublons. Les contradictions, répétitions ou changements de vocabulaire avec des passages situés hors de l'extrait font l'objet d'une lecture séparée : ne les suppose pas."""
 
 CHUNK_OVERLAP_NOTE = (" Ses {overlap_turns} premiers tours (jusqu'au tour {overlap_last_turn_id}) figurent aussi à la fin "
                       "de l'extrait précédent : ils sont repris pour que les phénomènes situés à la jonction restent lisibles.")
@@ -116,7 +118,7 @@ CHUNK_OVERLAP_NOTE = (" Ses {overlap_turns} premiers tours (jusqu'au tour {overl
 # --- Entretien long : lecture à longue distance -------------------------------------------
 
 LONG_DISTANCE_AGENT_NAME = "interaction_signal_reader_long_distance"
-LONG_DISTANCE_VERSION = "1.0"
+LONG_DISTANCE_VERSION = "1.1"  # 1.1 : deux passages réellement éloignés et incompatibles, exemples négatifs
 LONG_DISTANCE_SIGNAL_TYPES = ("cross_turn_contradiction", "significant_repetition", "vocabulary_shift")
 LongDistanceSignalType = Literal[LONG_DISTANCE_SIGNAL_TYPES]  # type: ignore[valid-type]
 

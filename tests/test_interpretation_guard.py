@@ -31,7 +31,7 @@ INTERPRETIVE = [
 
 
 def test_guard_version_is_bumped():
-    assert GUARD_VERSION == "1.2"
+    assert GUARD_VERSION == "1.3"  # étape 3.7
 
 
 @pytest.mark.parametrize("text", ORDINARY)

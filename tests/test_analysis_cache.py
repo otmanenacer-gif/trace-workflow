@@ -181,7 +181,9 @@ def test_guard_and_validator_versions_do_not_invalidate_the_cache(env, monkeypat
 def test_agent_versions_of_stage_3_5_have_distinct_cache_keys():
     """Les versions 1.2 des deux agents ne peuvent pas réutiliser une entrée de cache 1.1."""
     for spec in (practice_extractor.SPEC, interaction_signal_reader.SPEC):
-        assert spec.version == spec.schema_version == "1.2"
+        # étape 3.7 : Interaction Reader 1.3 (consignes), schémas inchangés (1.2)
+        assert spec.schema_version == "1.2" and spec.version == {"practice_extractor": "1.2",
+                                                                  "interaction_signal_reader": "1.3"}[spec.name]
         old = dataclasses.replace(spec, version="1.1", schema_version="1.1")
         fields = {"source_sha256": "s", "transcript_sha256": "t", "model": "m",
                   "request_params": {"effort": None, "temperature": None}}

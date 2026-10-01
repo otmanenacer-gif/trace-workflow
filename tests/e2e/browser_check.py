@@ -13,7 +13,11 @@ C. étape 3.5 (LLM simulé) : entretien synthétique dont un tour est mal attrib
    1 appel d'audit + 2 agents, avertissement affiché, transcription inchangée ;
 D. étape 3.6 (LLM simulé) : entretien long synthétique (349 tours), annonce des blocs
    avant exécution, 5 blocs + 1 lecture à longue distance, bilan des blocs,
-   téléchargement de interaction_signals.json fusionné (citations valides).
+   téléchargement de interaction_signals.json fusionné (citations valides) ;
+E. étape 3.7 (LLM simulé) : entretien long synthétique saturé de remplisseurs (330 tours),
+   Practice Extractor en 4 blocs et Interaction Reader en 3 blocs annoncés avant exécution,
+   lecteur Interaction qui surcode, bilan (blocs, pratiques/signaux avant et après
+   dédoublonnage, anomalies de validation), téléchargements JSON, relance depuis le cache.
 
 Non collecté par pytest (nécessite Playwright et un navigateur). Les runs
 créés dans data/ pendant le test sont supprimés à la fin.
@@ -42,6 +46,7 @@ sys.path.insert(0, str(ROOT))
 
 from tests import synthetic_interviews as si  # noqa: E402
 from tests import synthetic_long_interview as long_interview  # noqa: E402
+from tests import synthetic_stage37 as stage37  # noqa: E402
 
 TIMEOUT_MS = 30_000
 
@@ -84,6 +89,7 @@ def streamlit_server(script: Path, env: dict):
 def upload_and_ingest(page, interview_path: Path) -> None:
     page.locator("input[type=file]").set_input_files(str(interview_path))
     expect(page.get_by_text(interview_path.name).first).to_be_visible(timeout=TIMEOUT_MS)
+    wait_idle(page)  # l'import relance le script : cliquer seulement une fois le rendu terminé
     page.get_by_role("button", name="Lancer l'analyse", exact=True).click()
     expect(page.get_by_text("Structuration des entretiens terminée")).to_be_visible(timeout=TIMEOUT_MS)
     expect(page.get_by_role("heading", name="Analyse IA — Étape 3")).to_be_visible(timeout=TIMEOUT_MS)
@@ -166,6 +172,26 @@ def scenario_stage35(browser, url: str, interview: Path, shots: Path) -> None:
     print("C. étape 3.5 : 1 appel d'audit + 2 agents, tour mal attribué signalé, transcription non modifiable")
 
 
+def wait_idle(page) -> None:
+    """Attend que Streamlit ait fini d'exécuter le script (indicateur « Running… » absent)."""
+    page.wait_for_timeout(500)
+    expect(page.locator("[data-testid=stStatusWidget]")).to_have_count(0, timeout=TIMEOUT_MS)
+    page.wait_for_timeout(300)
+
+
+def download_json(page, expander_label: str, name: str) -> dict:
+    """Télécharge un JSON de l'aperçu d'un entretien. Un téléchargement relance le script et l'aperçu peut se
+    refermer : attendre la fin du rendu, rouvrir l'aperçu au besoin, puis cliquer."""
+    wait_idle(page)
+    button = page.get_by_role("button", name=f"Télécharger {name}")
+    if not button.is_visible():
+        page.get_by_text(expander_label).click()
+        wait_idle(page)
+    with page.expect_download(timeout=TIMEOUT_MS) as info:
+        button.click()
+    return json.loads(Path(info.value.path()).read_text(encoding="utf-8"))
+
+
 def assert_no_exception(page) -> None:
     assert page.locator("[data-testid=stException]").count() == 0, "exception Streamlit affichée"
 
@@ -176,25 +202,28 @@ def scenario_long_interview(browser, url: str, interview: Path, shots: Path) -> 
     upload_and_ingest(page, interview)
     expect(page.get_by_text("entretien long : analyse en 5 blocs").first).to_be_visible(timeout=TIMEOUT_MS)
     expect(page.get_by_text("soit au plus 6 appels Interaction Reader").first).to_be_visible()
-    launch = page.get_by_role("button", name="Lancer les deux analyses IA (au plus 7 appel(s) API payant(s))")
+    # étape 3.7 : le Practice Extractor lit aussi l'entretien long par blocs (6 blocs)
+    expect(page.get_by_text("soit au plus 6 appels Practice Extractor").first).to_be_visible()
+    launch = page.get_by_role("button", name="Lancer les deux analyses IA (au plus 12 appel(s) API payant(s))")
     expect(launch).to_be_enabled()
     page.screenshot(path=str(shots / "D1_entretien_long_avant.png"), full_page=True)
     launch.click()
     expect(page.get_by_text("Analyse IA terminée.")).to_be_visible(timeout=TIMEOUT_MS)
-    expect(page.get_by_text("7 appel(s) API").first).to_be_visible()
+    expect(page.get_by_text("12 appel(s) API").first).to_be_visible()
+    wait_idle(page)  # la relance qui suit l'analyse remplace le tableau d'avancement par celui des résultats
     table = page.locator("[data-testid=stTable]").last
     row = [c.strip() for c in table.locator("tbody tr").first.locator("td").all_inner_texts()]
     print("   ligne de résultats :", row)
     assert row[5] == "✅ SUCCESS" and row[-1] == "5/5", row
     page.get_by_text(f"Analyse IA — {long_interview.LONG_INTERVIEW_ID} — aperçu").click()
     expect(page.get_by_text("blocs réussis : 5/5").first).to_be_visible()
-    with page.expect_download() as info:
-        page.get_by_role("button", name="Télécharger interaction_signals.json").click()
-    document = json.loads(Path(info.value.path()).read_text(encoding="utf-8"))
+    document = download_json(page, f"Analyse IA — {long_interview.LONG_INTERVIEW_ID} — aperçu", "interaction_signals.json")
     chunking = document["chunking"]
     assert document["status"] == "SUCCESS" and document["analysis_complete"] is True
     assert chunking["chunking_used"] and chunking["chunk_count"] == 5 and chunking["chunks_succeeded"] == 5
-    assert chunking["signals_after_dedup"] == len(document["signals"]) < chunking["signals_before_dedup"]
+    assert chunking["signals_after_dedup"] < chunking["signals_before_dedup"]
+    # étape 3.7 : les « Euh… » isolés du lecteur simulé sont écartés après la fusion, et conservés à part
+    assert len(document["signals"]) + len(document["set_aside_signals"]) == chunking["signals_after_dedup"]
     assert all(e["validation"]["valid"] for s in document["signals"] for e in s["evidence"])
     assert [s["signal_type"] for s in document["signals"]].count("cross_turn_contradiction") == 1
     assert_no_exception(page)
@@ -208,6 +237,54 @@ def scenario_long_interview(browser, url: str, interview: Path, shots: Path) -> 
     expect(page.get_by_text("0 appel(s) API — 0 tokens entrée — 0 tokens sortie")).to_be_visible(timeout=TIMEOUT_MS)
     assert_no_exception(page)
     print("   second lancement : 0 appel API (blocs et lecture à longue distance en cache)")
+
+
+def scenario_stage37(browser, url: str, interview: Path, shots: Path) -> None:
+    page = browser.new_page(viewport={"width": 1400, "height": 1000})
+    page.goto(url)
+    upload_and_ingest(page, interview)
+    expect(page.get_by_text("Practice Extractor — ENTRETIEN_ETAPE_3_7 : entretien long : analyse en 4 blocs").first
+           ).to_be_visible(timeout=TIMEOUT_MS)
+    expect(page.get_by_text("Interaction Reader — ENTRETIEN_ETAPE_3_7 : entretien long : analyse en 3 blocs").first
+           ).to_be_visible()
+    launch = page.get_by_role("button", name="Lancer les deux analyses IA (au plus 9 appel(s) API payant(s))")
+    expect(launch).to_be_enabled()
+    page.screenshot(path=str(shots / "E1_etape_3_7_avant.png"), full_page=True)
+    launch.click()
+    expect(page.get_by_text("Analyse IA terminée.")).to_be_visible(timeout=TIMEOUT_MS)
+    expect(page.get_by_text("9 appel(s) API").first).to_be_visible()
+    wait_idle(page)
+    table = page.locator("[data-testid=stTable]").last
+    row = [c.strip() for c in table.locator("tbody tr").first.locator("td").all_inner_texts()]
+    print("   ligne de résultats :", row)
+    assert row[4] == "✅ SUCCESS" and row[5] == "✅ SUCCESS", row        # Practice, Interaction
+    assert row[-3:] == ["0", "4/4", "3/3"], row                           # anomalies, blocs Practice, blocs Interaction
+    page.get_by_text("Analyse IA — ENTRETIEN_ETAPE_3_7 — aperçu").click()
+    expect(page.get_by_text("pratiques finales : 19 (avant dédoublonnage : 20)").first).to_be_visible()
+    expect(page.get_by_text("anomalies de validation : 0").first).to_be_visible()
+    documents = {name: download_json(page, "Analyse IA — ENTRETIEN_ETAPE_3_7 — aperçu", name)
+                 for name in ("practice_extractor.json", "interaction_signals.json", "evidence_validation.json")}
+    practices, signals = documents["practice_extractor.json"], documents["interaction_signals.json"]
+    assert practices["status"] == "SUCCESS" and practices["chunking"]["chunk_count"] == 4
+    assert {"use", "non_use", "refusal", "past_use"} <= {p["use_status"] for p in practices["practices"]}
+    markers = stage37.micro_marker_count()
+    assert signals["chunking"]["signals_before_dedup"] > markers and len(signals["signals"]) * 20 < markers
+    assert [s["signal_type"] for s in signals["signals"]].count("cross_turn_contradiction") == 2
+    assert all(e["validation"]["valid"] for d in (practices, signals) for i in d[next(
+        k for k in ("practices", "signals") if k in d)] for e in i["evidence"])
+    assert documents["evidence_validation.json"]["total_invalid_evidence"] == 0
+    assert_no_exception(page)
+    page.screenshot(path=str(shots / "E2_etape_3_7_resultats.png"), full_page=True)
+    print(f"E. étape 3.7 : Practice 4/4 blocs ({len(practices['practices'])} pratiques), Interaction 3/3 blocs "
+          f"({len(signals['signals'])} signaux pour {markers} remplisseurs ; avant dédoublonnage : "
+          f"{signals['chunking']['signals_before_dedup']}), 0 anomalie, téléchargements OK")
+
+    relaunch = page.get_by_role("button", name="Lancer les deux analyses IA (0 appel(s) API payant(s))")
+    expect(relaunch).to_be_visible(timeout=TIMEOUT_MS)
+    relaunch.click()
+    expect(page.get_by_text("0 appel(s) API — 0 tokens entrée — 0 tokens sortie")).to_be_visible(timeout=TIMEOUT_MS)
+    assert_no_exception(page)
+    print("   second lancement : 0 appel API (tous les blocs en cache)")
 
 
 def run_dirs() -> set[Path]:
@@ -228,6 +305,8 @@ def main() -> int:
     stage35.write_bytes(si.STAGE35_FILES[0][1])
     long_file = work / long_interview.LONG_FILENAME
     long_file.write_text(long_interview.long_text(), encoding="utf-8")
+    stage37_file = work / stage37.FILENAME
+    stage37_file.write_text(stage37.text(), encoding="utf-8")
     base_env = {k: v for k, v in os.environ.items() if not k.startswith(("ANTHROPIC_", "TRACE_"))}
     before = run_dirs()
     try:
@@ -241,6 +320,7 @@ def main() -> int:
                 scenario_fake_llm(browser, url, interview, args.screenshots)
                 scenario_stage35(browser, url, stage35, args.screenshots)
                 scenario_long_interview(browser, url, long_file, args.screenshots)
+                scenario_stage37(browser, url, stage37_file, args.screenshots)
             browser.close()
     finally:
         for path in run_dirs() - before:

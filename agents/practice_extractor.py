@@ -4,6 +4,11 @@ Décrit ce que l'étudiant·e fait concrètement avec (ou sans) IAG, situation p
 situation. Volontairement descriptif et « aveugle » à la théorie : ses
 consignes (prompts/practice_extractor.md) ne mentionnent aucun cadre
 sociologique. Il ne reçoit jamais la sortie de l'Interaction Signal Reader.
+
+Entretien long (étape 3.7, voir core/practice_chunking.py) : le MÊME agent (mêmes
+consignes, même schéma, même définition des catégories) lit l'entretien par blocs de
+tours qui se chevauchent ; seul le message utilisateur (`CHUNK_USER_TEMPLATE`) annonce
+un extrait. Les pratiques sont ensuite réunies de façon déterministe, sans LLM.
 """
 
 from __future__ import annotations
@@ -13,7 +18,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from agents.base import AgentSpec, Evidence, Explicitness
+from agents.base import TRANSCRIPT_DATA_NOTICE, AgentSpec, Evidence, Explicitness
 from core import config
 
 AGENT_NAME = "practice_extractor"
@@ -101,3 +106,23 @@ SPEC = AgentSpec(
     manifest_filename="practice_manifest.json",
     pipeline_step=config.PRACTICE_STEP,
 )
+
+
+# --- Entretien long : lecture par blocs (étape 3.7) ----------------------------------------
+
+# Message utilisateur d'un bloc : mêmes consignes système, même schéma ; seul l'en-tête annonce un extrait.
+# Il rappelle de décrire chaque conduite déclarée dans l'extrait (usages ET non-usages / refus) sans
+# rien supposer de la suite : une conduite décrite ailleurs n'efface jamais celle de l'extrait.
+CHUNK_USER_TEMPLATE = """Entretien à analyser : {interview_id}. Cet entretien est long : tu en reçois un EXTRAIT de {turn_count} tours consécutifs, du tour {first_turn_id} au tour {last_turn_id}.{overlap_note}
+
+""" + TRANSCRIPT_DATA_NOTICE + """
+
+<transcript>
+{transcript_json}
+</transcript>
+
+Applique tes consignes à cet extrait et réponds avec l'objet JSON demandé. Décris chaque situation racontée dans l'extrait, y compris dans ses premiers et ses derniers tours, et en particulier chaque usage, non-usage, refus, usage passé ou hypothétique que l'enquêté·e y déclare, même s'il ou elle dit peut-être autre chose dans une autre partie de l'entretien : TRACE réunit ensuite les extraits sans jamais fusionner deux conduites différentes (un usage et un non-usage restent deux pratiques). Ne suppose rien sur les passages situés hors de l'extrait et n'y fais pas référence."""
+
+CHUNK_OVERLAP_NOTE = (" Ses {overlap_turns} premiers tours (jusqu'au tour {overlap_last_turn_id}) figurent aussi à la fin "
+                      "de l'extrait précédent : ils sont repris pour qu'une situation racontée à la jonction reste "
+                      "lisible en entier.")
