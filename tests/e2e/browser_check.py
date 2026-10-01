@@ -29,7 +29,13 @@ H. restauration (serveur neuf, cache vide, comme après un redéploiement) : l'e
    d'étape 4, résultats identiques ;
 I. étape 4.1 : entretien de régression « OTMANE » synthétique (388 tours, longs tours à plusieurs pratiques) :
    26 candidats, représentation normalisée, 1 appel, 17 épisodes / 8 ordinaires examinées / 22 sans marqueur,
-   aucune fusion de composantes déconnectées, aucun avertissement.
+   aucune fusion de composantes déconnectées, aucun avertissement ;
+J. étape 5 après l'étape 4 (entretien de référence, sans temporalité) : 1 appel, configuration contextuelle,
+   aperçu, 3 téléchargements JSON vérifiés, relance depuis le cache (0 appel) ;
+K. étape 5 sur un entretien à vraie temporalité (« Au lycée » / « Maintenant ») : trajectoire temporelle explicite ;
+L. restauration des étapes 3 PUIS 4 (serveur neuf, cache vide) : « Stage 4 restauré depuis fichiers — 0 appel API »,
+   puis étape 5 directement : 1 appel, aucune exécution des étapes 3 et 4 ;
+M. étape 5 sur l'entretien long « OTMANE-like » (190 tours, 50 pratiques, 20 épisodes) : 1 appel, configuration mixte.
 
 Non collecté par pytest (nécessite Playwright et un navigateur). Les runs
 créés dans data/ pendant le test sont supprimés à la fin.
@@ -39,6 +45,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -62,6 +69,8 @@ from tests import synthetic_stage37 as stage37  # noqa: E402
 from tests import synthetic_stage4 as stage4  # noqa: E402
 from tests import synthetic_stage4_long as stage4_long  # noqa: E402
 from tests import synthetic_stage4_otmane as otmane  # noqa: E402
+from tests import synthetic_stage5 as stage5  # noqa: E402
+from tests import synthetic_stage5_long as stage5_long  # noqa: E402
 
 TIMEOUT_MS = 30_000
 
@@ -357,6 +366,7 @@ def scenario_stage4(browser, url: str, interview: Path, shots: Path) -> None:
     assert_no_exception(page)
     page.screenshot(path=str(shots / "F2_etape_4_cache.png"), full_page=True)
     print("   relance étape 4 : CACHED, 0 appel API")
+    stage5_after_stage4(page, shots)
 
 
 def scenario_stage4_long(browser, url: str, interview: Path, shots: Path) -> None:
@@ -445,6 +455,158 @@ def scenario_otmane(browser, url: str, interview: Path, shots: Path) -> None:
           "déconnectée, mot de l'enquêteur non attribué")
 
 
+# --- Étape 5 -------------------------------------------------------------------------------------------
+
+STAGE5_LAUNCH = "Construire la configuration intra-entretien ({} appel(s) API payant(s))"
+
+
+def stage5_row(page) -> list[str]:
+    wait_idle(page)
+    table = page.locator("[data-testid=stTable]").filter(has_text="Changements temporels explicites").last
+    return [c.strip() for c in table.locator("tbody tr").first.locator("td").all_inner_texts()]
+
+
+def launch_stage5(page) -> list[str]:
+    expect(page.get_by_role("heading", name="Étape 5 — Configuration et trajectoire intra-entretien")).to_be_visible(
+        timeout=TIMEOUT_MS)
+    launch = page.get_by_role("button", name=STAGE5_LAUNCH.format(1))
+    expect(launch).to_be_enabled(timeout=TIMEOUT_MS)
+    launch.click()
+    expect(page.get_by_text("Étape 5 terminée.")).to_be_visible(timeout=TIMEOUT_MS)
+    expect(page.get_by_text("Dernière exécution (étape 5) : 1 appel(s) API").first).to_be_visible()
+    assert_no_exception(page)
+    return stage5_row(page)
+
+
+def stage5_after_stage4(page, shots: Path) -> None:
+    row = launch_stage5(page)
+    print("   ligne étape 5 :", row)
+    # Entretien, étape 4, étape 5, configuration, retenues, frontières, variations, temporels, exceptions, tensions,
+    # zones ordinaires, critères, avertissements, appels
+    assert row == [stage4.INTERVIEW_ID, "disponible", "✅ SUCCESS", "configuration contextuelle", "3", "0", "0", "0",
+                   "1", "0", "1", "2", "0", "1"], row
+    label = f"Configuration intra-entretien — {stage4.INTERVIEW_ID} — aperçu"
+    page.get_by_text(label).click()
+    expect(page.get_by_text("Affirmations retenues (3)")).to_be_visible(timeout=TIMEOUT_MS)
+    page.screenshot(path=str(shots / "J1_etape_5_resultats.png"), full_page=True)
+    document = download_json(page, label, "student_trajectory.json")
+    validation = download_json(page, label, "student_trajectory_validation.json")
+    manifest = download_json(page, label, "student_trajectory_manifest.json")
+    assert document["configuration_type"] == "contextual_configuration" and document["explicit_temporal_changes"] == []
+    assert len(document["exceptions"]) == len(document["ordinary_zones"]) == 1
+    assert validation["error_count"] == validation["warning_count"] == 0
+    assert manifest["api_calls"] == 1 and manifest["stage4_status"] == "COMPLETE"
+    print("J. étape 5 après l'étape 4 : 1 appel, configuration contextuelle, 3 affirmations, 2 critères, "
+          "téléchargements JSON OK")
+    relaunch = page.get_by_role("button", name=STAGE5_LAUNCH.format(0))
+    expect(relaunch).to_be_visible(timeout=TIMEOUT_MS)
+    relaunch.click()
+    expect(page.get_by_text("Dernière exécution (étape 5) : 0 appel(s) API").first).to_be_visible(timeout=TIMEOUT_MS)
+    row = stage5_row(page)
+    assert row[2] == "♻️ CACHED" and row[-1] == "0", row
+    assert_no_exception(page)
+    page.screenshot(path=str(shots / "J2_etape_5_cache.png"), full_page=True)
+    print("   relance étape 5 : CACHED, 0 appel API")
+
+
+def stage3_and_stage4(page, interview: Path) -> None:
+    upload_and_ingest(page, interview)
+    page.get_by_role("button", name=re.compile(r"^Lancer les deux analyses IA")).click()
+    expect(page.get_by_text("Analyse IA terminée.")).to_be_visible(timeout=TIMEOUT_MS)
+    wait_idle(page)
+    page.get_by_role("button", name="Construire les épisodes d'accountability (1 appel(s) API payant(s))").click()
+    expect(page.get_by_text("Étape 4 terminée.")).to_be_visible(timeout=TIMEOUT_MS)
+    wait_idle(page)
+
+
+def scenario_stage5_temporal(browser, url: str, interview: Path, shots: Path) -> None:
+    page = browser.new_page(viewport={"width": 1400, "height": 1300})
+    page.goto(url)
+    stage3_and_stage4(page, interview)
+    row = launch_stage5(page)
+    print("   ligne étape 5 :", row)
+    assert row[:4] == [stage5.TEMPORAL.interview_id, "disponible", "✅ SUCCESS", "trajectoire temporelle explicite"], row
+    assert row[7] == "1", row  # un changement temporel explicite
+    label = f"Configuration intra-entretien — {stage5.TEMPORAL.interview_id} — aperçu"
+    page.get_by_text(label).click()
+    expect(page.get_by_text("Affirmations retenues (1)")).to_be_visible(timeout=TIMEOUT_MS)
+    document = download_json(page, label, "student_trajectory.json")
+    [change] = document["explicit_temporal_changes"]
+    assert document["configuration_type"] == "temporal_trajectory" and change.endswith("_TC001")
+    [claim] = document["trajectory_claims"]
+    assert [a["text"] for a in claim["validated_temporal_anchors"]] == ["Au lycée", "Maintenant"]
+    assert_no_exception(page)
+    page.screenshot(path=str(shots / "K_etape_5_temporalite.png"), full_page=True)
+    print("K. étape 5, vraie temporalité : trajectoire temporelle explicite, ancrages « Au lycée » / « Maintenant »")
+
+
+def scenario_stage5_long(browser, url: str, interview: Path, shots: Path) -> None:
+    page = browser.new_page(viewport={"width": 1400, "height": 1300})
+    page.goto(url)
+    stage3_and_stage4(page, interview)
+    row = launch_stage5(page)
+    print("   ligne étape 5 :", row)
+    assert row == [stage5_long.INTERVIEW_ID, "disponible", "✅ SUCCESS",
+                   "mixte (changement temporel explicite et variations contextuelles)", "10", "2", "2", "1", "1", "1",
+                   "2", "5", "0", "1"], row
+    page.screenshot(path=str(shots / "M_etape_5_long.png"), full_page=True)
+    print("M. étape 5, entretien long OTMANE-like : 50 pratiques, 20 épisodes, 1 appel, configuration mixte")
+
+
+def stage4_downloads(work: Path) -> list[Path]:
+    """Calcule les étapes 3 et 4 de l'entretien de référence (LLM simulé, hors data/) et écrit les 6 JSON
+    « téléchargés », nommés comme les boutons de téléchargement de l'interface."""
+    run, _ = stage5.run_to_stage4(work / "precomputed4", stage4.FILES, stage4.stage3_responders(),
+                                  stage4.REFERENCE_BUILDER)
+    out = Path(run["files"][0]["ingestion"]["output_dir"]) / "analysis"
+    paths = []
+    for name in ("practice_extractor.json", "interaction_signals.json", "evidence_validation.json",
+                 "speaker_attribution_audit.json", "accountability_episodes.json",
+                 "accountability_episode_validation.json"):
+        target = work / "downloads4" / f"{stage4.INTERVIEW_ID}_{name}"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes((out / name).read_bytes())
+        paths.append(target)
+    return paths
+
+
+def scenario_restore_stage4(browser, url: str, interview: Path, downloads: list[Path], shots: Path) -> None:
+    page = browser.new_page(viewport={"width": 1400, "height": 1300})
+    page.goto(url)
+    upload_and_ingest(page, interview)
+    inputs = page.locator("input[type=file]")
+    expect(inputs).to_have_count(2, timeout=TIMEOUT_MS)  # corpus, restauration de l'étape 3
+    inputs.last.set_input_files([str(p) for p in downloads[:4]])
+    wait_idle(page)
+    page.get_by_role("button", name="Restaurer l'étape 3 depuis ces fichiers (0 appel API)").click()
+    expect(page.get_by_text("Stage 3 restauré depuis fichiers — 0 appel API").first).to_be_visible(timeout=TIMEOUT_MS)
+    wait_idle(page)
+    expect(page.get_by_text("Restaurer des résultats Stage 4 existants")).to_be_visible(timeout=TIMEOUT_MS)
+    restore = page.get_by_role("button", name="Restaurer l'étape 4 depuis ces fichiers (0 appel API)")
+    expect(restore).to_be_disabled()
+    expect(inputs).to_have_count(2, timeout=TIMEOUT_MS)  # corpus, restauration de l'étape 4
+    inputs.last.set_input_files([str(p) for p in downloads[4:]])
+    wait_idle(page)
+    expect(restore).to_be_enabled(timeout=TIMEOUT_MS)
+    page.screenshot(path=str(shots / "L1_restauration_etape_4_avant.png"), full_page=True)
+    restore.click()
+    expect(page.get_by_text("Stage 4 restauré depuis fichiers — 0 appel API").first).to_be_visible(timeout=TIMEOUT_MS)
+    wait_idle(page)
+    row = launch_stage5(page)
+    print("   ligne étape 5 :", row)
+    assert row == [stage4.INTERVIEW_ID, "disponible", "✅ SUCCESS", "configuration contextuelle", "3", "0", "0", "0",
+                   "1", "0", "1", "2", "0", "1"], row
+    assert page.get_by_text("Dernière exécution :", exact=False).count() == 0  # aucune exécution de l'étape 3
+    assert page.get_by_text("Dernière exécution (étape 4)", exact=False).count() == 0  # ni de l'étape 4
+    label = f"Configuration intra-entretien — {stage4.INTERVIEW_ID} — aperçu"
+    page.get_by_text(label).click()
+    expect(page.get_by_text("(restaurée depuis fichiers)", exact=False).first).to_be_visible(timeout=TIMEOUT_MS)
+    assert_no_exception(page)
+    page.screenshot(path=str(shots / "L2_restauration_etape_4_etape_5.png"), full_page=True)
+    print("L. restauration étapes 3 et 4 : « Stage 4 restauré depuis fichiers — 0 appel API », étape 5 : 1 appel, "
+          "0 appel d'étape 3 ou 4")
+
+
 def run_dirs() -> set[Path]:
     return {p for base in (ROOT / "data" / "inputs", ROOT / "data" / "outputs") for p in base.glob("run_*")}
 
@@ -471,6 +633,10 @@ def main() -> int:
     stage4_long_file.write_text(stage4_long.text(), encoding="utf-8")
     otmane_file = work / otmane.FILENAME
     otmane_file.write_text(otmane.text(), encoding="utf-8")
+    temporal_file = work / stage5.TEMPORAL.filename
+    temporal_file.write_text(stage5.TEMPORAL.text, encoding="utf-8")
+    stage5_long_file = work / stage5_long.FILENAME
+    stage5_long_file.write_text(stage5_long.text(), encoding="utf-8")
     base_env = {k: v for k, v in os.environ.items() if not k.startswith(("ANTHROPIC_", "TRACE_"))}
     before = run_dirs()
     try:
@@ -488,10 +654,16 @@ def main() -> int:
                 scenario_stage4(browser, url, stage4_file, args.screenshots)
                 scenario_stage4_long(browser, url, stage4_long_file, args.screenshots)
                 scenario_otmane(browser, url, otmane_file, args.screenshots)
+                scenario_stage5_temporal(browser, url, temporal_file, args.screenshots)
+                scenario_stage5_long(browser, url, stage5_long_file, args.screenshots)
             downloads = stage3_downloads(work)
+            downloads4 = stage4_downloads(work)
             env_restore = {**base_env, "TRACE_E2E_CACHE_DIR": str(work / "cache_after_redeploy")}
             with streamlit_server(ROOT / "tests" / "e2e" / "fake_llm_app.py", env_restore) as url:
                 scenario_restore(browser, url, stage4_file, downloads, args.screenshots)
+            env_restore4 = {**base_env, "TRACE_E2E_CACHE_DIR": str(work / "cache_after_redeploy_4")}
+            with streamlit_server(ROOT / "tests" / "e2e" / "fake_llm_app.py", env_restore4) as url:
+                scenario_restore_stage4(browser, url, stage4_file, downloads4, args.screenshots)
             browser.close()
     finally:
         for path in run_dirs() - before:

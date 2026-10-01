@@ -3,7 +3,8 @@
 Ingestion déterministe des entretiens (sans IA), puis, uniquement sur action
 explicite de l'utilisateur, l'étape 3 : deux agents IA indépendants
 (Practice Extractor et Interaction Signal Reader), puis l'étape 4 : épisodes
-d'accountability (candidats déterministes, au plus un appel LLM par entretien).
+d'accountability (candidats déterministes, au plus un appel LLM par entretien), puis
+l'étape 5 : configuration et trajectoire intra-entretien (au plus un appel LLM par entretien).
 
 Lancement : streamlit run app.py
 """
@@ -62,7 +63,7 @@ def _stamp_project_modules() -> None:
 
 _purge_stale_project_modules()
 
-from core import accountability, analysis, config, stage3_restore  # noqa: E402
+from core import accountability, analysis, config, stage3_restore, stage4_restore, trajectory  # noqa: E402
 from core.ingestion import ingest_run  # noqa: E402
 from core.llm_client import LLMError, LLMSettings  # noqa: E402
 from core.run_manager import TraceError, get_extension, init_run, load_problematique, save_problematique  # noqa: E402
@@ -98,6 +99,16 @@ ACC_ALL = "Tous les entretiens analysés"
 PREVIEW_EPISODES = 3
 EPISODE_STATUS_LABELS = {"accountability_episode": "épisode d'accountability", "ordinary_practice": "pratique ordinaire",
                          "uncertain": "incertain"}
+CONFIGURATION_LABELS = {"temporal_trajectory": "trajectoire temporelle explicite",
+                        "contextual_configuration": "configuration contextuelle",
+                        "mixed": "mixte (changement temporel explicite et variations contextuelles)",
+                        "no_clear_pattern": "pas de configuration nette"}
+CLAIM_TYPE_LABELS = {"stable_boundary": "frontière stable", "recurring_accounting_move": "opération récurrente",
+                     "contextual_variation": "variation contextuelle", "explicit_temporal_change": "changement temporel explicite",
+                     "exception": "exception", "unresolved_tension": "tension non résolue", "ordinary_zone": "zone ordinaire"}
+STAGE4_STATE_LABELS = {trajectory.STAGE4_COMPLETE: "disponible", trajectory.STAGE4_PARTIAL: "incomplète (PARTIAL)",
+                       trajectory.STAGE4_FAILED: "en échec ou bloquée", trajectory.STAGE4_STALE: "périmée",
+                       trajectory.STAGE4_NOT_RUN: "absente"}
 
 
 def format_size(size_bytes: int) -> str:
@@ -121,7 +132,7 @@ def format_count(value: int | None) -> str:
 
 def render_pipeline(run: dict | None, llm_enabled: bool) -> None:
     """Affiche les étapes : structuration, puis les deux agents de l'étape 3 ; le reste est inactif."""
-    ai_steps = (config.PRACTICE_STEP, config.INTERACTION_STEP, config.ACCOUNTABILITY_STEP)
+    ai_steps = (config.PRACTICE_STEP, config.INTERACTION_STEP, config.ACCOUNTABILITY_STEP, config.TRAJECTORY_STEP)
     for index, step in enumerate(config.PIPELINE_STEPS, start=1):
         if step == config.INGESTION_STEP:
             state = run["pipeline"][step] if run else "prête"
@@ -633,6 +644,244 @@ def render_stage4_section(run: dict) -> None:
     render_stage4_results(st.session_state.get("last_run") or run)
 
 
+# --- Étape 5 — configuration et trajectoire intra-entretien -----------------------------------------------
+
+def _interview_dir(info: dict) -> Path:
+    return Path(info["ingestion"]["output_dir"])
+
+
+def render_stage4_restore(run: dict) -> None:
+    """Importer les 2 JSON d'une étape 4 déjà calculée (stockage local effacé par un redéploiement)."""
+    flash = st.session_state.pop("restore4_flash", None)
+    if flash:
+        st.success(flash)
+    files = analysis.eligible_files(run)
+    for f in files:
+        summary = f.get("accountability") or {}
+        if summary.get("restored"):
+            st.success(f"{stage4_restore.RESTORED_NOTICE} ({summary['interview_id']}, {summary['restored_at']}).")
+            for warning in summary.get("restore_warnings") or []:
+                st.caption(f"Restauration (étape 4) : {warning}")
+    missing = [f for f in files if trajectory.stage4_state(_interview_dir(f))["status"]
+               in (trajectory.STAGE4_NOT_RUN, trajectory.STAGE4_FAILED, trajectory.STAGE4_STALE)]
+    if not missing:
+        return
+    with st.expander("Restaurer des résultats Stage 4 existants", expanded=True):
+        st.markdown(
+            "Le stockage local de l'application **peut disparaître lors d'un redéploiement**. Si l'étape 4 de cet "
+            "entretien a déjà été calculée et ses fichiers téléchargés, importez ici les **2 JSON** : "
+            "`accountability_episodes.json` et `accountability_episode_validation.json`. Ils sont vérifiés (même "
+            "entretien, versions compatibles, analyse complète, aucune erreur de validation, empreintes de l'étape 3 "
+            "installée, candidats et épisodes recalculés par TRACE, citations revérifiées) puis installés tels quels : "
+            "**aucun appel API**, l'étape 4 n'est pas relancée.")
+        ready = [f for f in missing if accountability.stage3_state(
+            _interview_dir(f) / config.ANALYSIS_SUBDIR)["status"] == accountability.STAGE3_COMPLETE]
+        if not ready:
+            st.info("L'étape 3 de cet entretien n'est pas disponible : restaurez-la (ou lancez-la) d'abord, dans la "
+                    "section de l'étape 4.")
+            return
+        interview_id = st.selectbox("Entretien dont l'étape 4 est à restaurer",
+                                    [f["ingestion"]["interview_id"] for f in ready], key="restore4_interview")
+        uploads = st.file_uploader("Les 2 fichiers JSON de l'étape 4", type=["json"], accept_multiple_files=True,
+                                   key="restore4_files")
+        if st.button("Restaurer l'étape 4 depuis ces fichiers (0 appel API)", key="restore4_launch",
+                     disabled=not uploads):
+            try:
+                st.session_state.last_run = stage4_restore.restore_stage4(
+                    run, interview_id, [(u.name, u.getvalue()) for u in uploads])
+            except stage3_restore.RestoreError as exc:
+                st.error("Restauration refusée :\n" + "\n".join(f"- {problem}" for problem in exc.problems))
+                return
+            except OSError as exc:
+                st.error(f"Restauration impossible (écriture) : {exc}")
+                return
+            st.session_state.restore4_flash = f"{stage4_restore.RESTORED_NOTICE} ({interview_id})."
+            st.rerun()
+
+
+def render_stage5_launcher(run: dict, available: list[dict], settings: LLMSettings) -> None:
+    """Choix des entretiens, estimation des appels (0 ou 1 par entretien), lancement explicite."""
+    if st.session_state.pop("traj_reset", False):
+        st.session_state.traj_force = False
+    flash = st.session_state.pop("traj_flash", None)
+    if flash:
+        (st.warning if flash[0] == "warning" else st.success)(flash[1])
+    ids = [f["ingestion"]["interview_id"] for f in available]
+    choice = st.selectbox("Entretien(s) pour l'étape 5", ids + ([ACC_ALL] if len(ids) > 1 else []), key="traj_interview")
+    selected = ids if choice == ACC_ALL else [choice]
+    force = st.checkbox("Forcer une nouvelle analyse de la configuration (ignore le cache de l'étape 5)", key="traj_force")
+    try:
+        plan = trajectory.plan_stage5(run, selected, settings, force=force)
+    except (OSError, ValueError, KeyError) as exc:
+        st.error(f"Sorties de l'étape 4 illisibles : {exc}")
+        return
+    st.dataframe([{"Entretien": row["interview_id"], "Statut étape 4": STAGE4_STATE_LABELS.get(row["stage4_status"]),
+                   "Étape 4 restaurée": "oui" if row["stage4_restored"] else "non",
+                   "Épisodes utilisables": row["usable_episode_count"],
+                   "Pratiques sans marqueur": row["unmarked_practice_count"],
+                   "Ancrages temporels": row["temporal_anchor_count"],
+                   "Appel prévu": "en cache" if row["cached"] else row["call"],
+                   "Tokens estimés (entrée)": row["estimated_input_tokens"]} for row in plan["per_interview"]],
+                 hide_index=True)
+    st.info(
+        "Au plus **1 appel LLM par entretien** (aucun si moins de deux éléments utilisables), sur une représentation "
+        "compacte préparée sans IA à partir des épisodes de l'étape 4 ; chaque entretien est analysé seul, sans "
+        f"comparaison. Pour cette sélection : **{plan['calls']} appel(s) API** prévu(s), {plan['cached']} résultat(s) "
+        f"en cache, {plan['blocked']} entretien(s) bloqué(s) (étape 4 absente, en échec ou périmée)"
+        + (f", {plan['partial']} entretien(s) à l'étape 4 incomplète (résultat PARTIAL)" if plan["partial"] else "") + ".")
+    clicked = st.button(f"Construire la configuration intra-entretien ({plan['calls']} appel(s) API payant(s))",
+                        type="primary", key="traj_launch")
+    if not clicked:
+        return
+    with st.spinner("Étape 5 en cours (préparation déterministe, Trajectory Mapper, validation)…"):
+        try:
+            st.session_state.last_run = trajectory.analyze_run_stage5(run, selected, settings=settings, force=force)
+        except LLMError as exc:
+            st.error(exc.user_message)
+            return
+        except (OSError, ValueError, KeyError) as exc:
+            logging.error("Étape 5 interrompue : %s", type(exc).__name__)
+            st.error(f"Étape 5 interrompue ({type(exc).__name__}) : vérifiez les fichiers du run.")
+            return
+    usage = st.session_state.last_run["last_trajectory"]["usage"]
+    if usage["failed"] or usage["partial"] or usage["blocked"]:
+        st.session_state.traj_flash = ("warning", f"Étape 5 terminée : {usage['failed']} échec(s), {usage['partial']} "
+                                       f"incomplète(s), {usage['blocked']} bloquée(s) — voir le détail ci-dessous.")
+    else:
+        st.session_state.traj_flash = ("success", "Étape 5 terminée.")
+    st.session_state.traj_reset = True
+    st.rerun()
+
+
+def _claim_row(claim: dict) -> dict:
+    anchors = " · ".join(f"« {a['text']} » ({a['turn_id'].rsplit('_', 1)[-1]})" for a in claim["validated_temporal_anchors"])
+    label = CLAIM_TYPE_LABELS.get(claim["claim_type"], claim["claim_type"])
+    if claim.get("model_claim_type"):
+        label += f" (requalifié : {CLAIM_TYPE_LABELS.get(claim['model_claim_type'], claim['model_claim_type'])})"
+    return {"id": claim["claim_id"].rsplit("_", 1)[-1], "type": label, "description": claim["description"],
+            "appuis": ", ".join(i.rsplit("_", 1)[-1] for i in claim["support_ids"]),
+            "contextes": ", ".join(claim["contexts"]), "ancrages temporels": anchors,
+            "tours": ", ".join(t.rsplit("_", 1)[-1] for t in claim["evidence_turn_ids"]),
+            "confiance": claim["confidence"], "à revoir": ", ".join(claim["review_reasons"]) or ("oui" if claim[
+                "needs_review"] else "")}
+
+
+def render_stage5_results(run: dict) -> None:
+    done = [f for f in run["files"] if "trajectory" in f]
+    if not done:
+        return
+    usage = (run.get("last_trajectory") or {}).get("usage")
+    if usage:
+        st.markdown(f"**Dernière exécution (étape 5) :** {usage['api_calls']} appel(s) API — "
+                    f"{format_count(usage['input_tokens'])} tokens entrée — {format_count(usage['output_tokens'])} "
+                    f"tokens sortie — {usage['cached_results']} résultat(s) repris du cache TRACE")
+    st.table([{
+        "Entretien": s["interview_id"],
+        "Statut étape 4": STAGE4_STATE_LABELS.get(s.get("stage4_status"), s.get("stage4_status") or "n/a"),
+        "Étape 5": f"{ACC_STATUS_ICONS.get(s['status'], '')} {s['status']}",
+        "Configuration": CONFIGURATION_LABELS.get(s.get("configuration_type"), "—"),
+        "Affirmations retenues": s.get("kept_claim_count") or 0,
+        "Frontières stables": s.get("stable_boundaries_count") or 0,
+        "Variations contextuelles": s.get("contextual_variations_count") or 0,
+        "Changements temporels explicites": s.get("explicit_temporal_changes_count") or 0,
+        "Exceptions": s.get("exceptions_count") or 0,
+        "Tensions": s.get("unresolved_tensions_count") or 0,
+        "Zones ordinaires": s.get("ordinary_zones_count") or 0,
+        "Critères (métier d'étudiant)": s.get("student_role_criteria_count") or 0,
+        "Avertissements": (s.get("validation_warning_count") or 0) + (s.get("validation_error_count") or 0),
+        "Appels API": s.get("api_calls") or 0,
+    } for s in (f["trajectory"] for f in done)])
+    for f in done:
+        summary = f["trajectory"]
+        iid = summary["interview_id"]
+        with st.expander(f"Configuration intra-entretien — {iid} — aperçu"):
+            if summary["status"] == trajectory.STATUS_BLOCKED:
+                st.error((summary.get("error") or {}).get("message") or "Étape 5 bloquée.")
+            elif summary.get("error"):
+                st.error(f"Trajectory Mapper : {summary['error']['message']}")
+            if summary["status"] == analysis.STATUS_PARTIAL:
+                st.warning("Analyse INCOMPLÈTE : l'étape 4 est partielle (analysis_complete = false).")
+            if not trajectory.trajectory_current(summary):
+                st.warning("Résultat PÉRIMÉ : l'étape 4 (ou l'étape 3) de cet entretien a changé depuis ; relancez l'étape 5.")
+            doc_json = read_analysis_file(summary, config.STUDENT_TRAJECTORY_FILENAME)
+            validation_json = read_analysis_file(summary, config.STUDENT_TRAJECTORY_VALIDATION_FILENAME)
+            manifest_json = read_analysis_file(summary, config.STUDENT_TRAJECTORY_MANIFEST_FILENAME)
+            if doc_json:
+                document = json.loads(doc_json)
+                line = (f"Configuration : **{CONFIGURATION_LABELS.get(document['configuration_type'])}** · "
+                        f"étape 4 : **{STAGE4_STATE_LABELS.get(document['stage4_status'])}**"
+                        + (" (restaurée depuis fichiers)" if document.get("stage4_restored") else "")
+                        + f" · épisodes utilisables : **{document['material']['usable_episode_count']}** · pratiques "
+                        f"sans marqueur : **{document['material']['unmarked_practice_count']}** · ancrages temporels : "
+                        f"**{document['material']['temporal_anchor_count']}** · "
+                        + ("repris du cache TRACE" if document["cache_hit"] else "1 appel" if document["llm_called"]
+                           else "aucun appel (matériau insuffisant)"))
+                st.markdown(line)
+                if document.get("model_configuration_type"):
+                    st.warning(f"Configuration proposée par le modèle : "
+                               f"{CONFIGURATION_LABELS.get(document['model_configuration_type'])} — requalifiée par TRACE "
+                               "(aucun changement temporel explicite validé).")
+                st.markdown(f"**Synthèse** — {document['trajectory_summary']}")
+                kept = [c for c in document["trajectory_claims"] if c["usable_for_next_stages"]]
+                st.markdown(" · ".join(f"{CLAIM_TYPE_LABELS[t]} : **{len(document[key])}**"
+                                       for t, key in trajectory.validator.LIST_KEYS.items()))
+                if kept:
+                    order = list(CLAIM_TYPE_LABELS)
+                    st.markdown(f"**Affirmations retenues** ({len(kept)})")
+                    st.dataframe([_claim_row(c) for c in sorted(kept, key=lambda c: order.index(c["claim_type"]))],
+                                 hide_index=True)
+                criteria = [c for c in document["student_role_criteria"] if c["usable_for_next_stages"]]
+                if criteria:
+                    st.markdown(f"**Critères du métier d'étudiant mobilisés dans cet entretien** ({len(criteria)})")
+                    st.dataframe([{"id": c["criterion_id"].rsplit("_", 1)[-1], "critère": c["criterion"],
+                                   "description": c["description"],
+                                   "épisodes": ", ".join(i.rsplit("_", 1)[-1] for i in c["support_ids"]),
+                                   "tours": ", ".join(t.rsplit("_", 1)[-1] for t in c["evidence_turn_ids"]),
+                                   "confiance": c["confidence"], "à revoir": ", ".join(c["review_reasons"])}
+                                  for c in criteria], hide_index=True)
+            if validation_json:
+                validation = json.loads(validation_json)
+                issues = [i for i in validation.get("issues", []) if i["severity"] != "info"]
+                if issues:
+                    st.markdown(f"**Avertissements de validation** ({len(issues)})")
+                    st.dataframe([{"objet": i["object_id"].rsplit("_", 1)[-1], "code": i["code"], "gravité": i["severity"],
+                                   "message": i["message"]} for i in issues], hide_index=True)
+            cols = st.columns(3)
+            for col, content, filename in ((cols[0], doc_json, config.STUDENT_TRAJECTORY_FILENAME),
+                                           (cols[1], validation_json, config.STUDENT_TRAJECTORY_VALIDATION_FILENAME),
+                                           (cols[2], manifest_json, config.STUDENT_TRAJECTORY_MANIFEST_FILENAME)):
+                if content:
+                    col.download_button(f"Télécharger {filename}", data=content, file_name=f"{iid}_{filename}",
+                                        mime="application/json", key=f"dl_traj_{iid}_{filename}")
+
+
+def render_stage5_section(run: dict) -> None:
+    st.header("Étape 5 — Configuration et trajectoire intra-entretien")
+    st.markdown(
+        "À l'intérieur d'**un seul entretien**, à partir des épisodes de l'étape 4 (jamais de l'entretien entier) : "
+        "quelles frontières, règles et manières de rendre compte de ses usages se **répètent**, restent **stables**, "
+        "**varient** selon les tâches, comportent des **exceptions**, entrent en **tension**, ou **changent "
+        "explicitement** dans le temps ; quelles zones sont racontées **sans justification** ; quels critères du "
+        "« métier d'étudiant » sont mobilisés. L'ordre de l'entretien n'est jamais un ordre biographique : un "
+        "changement temporel exige des ancrages explicites (« au lycée », « maintenant »…), sinon TRACE le requalifie "
+        "en variation contextuelle. Aucune comparaison entre entretiens à cette étape."
+    )
+    render_stage4_restore(run)
+    run = st.session_state.get("last_run") or run
+    available = [f for f in analysis.eligible_files(run) if trajectory.stage4_state(_interview_dir(f))["status"]
+                 in (trajectory.STAGE4_COMPLETE, trajectory.STAGE4_PARTIAL)]
+    if not available:
+        st.info("Lancez d'abord l'étape 4, ou restaurez ses résultats depuis des fichiers déjà téléchargés : l'étape 5 "
+                "en consomme les épisodes.")
+    else:
+        settings = LLMSettings.from_env()
+        if not settings.enabled:
+            st.warning(settings.disabled_reason())
+        else:
+            render_stage5_launcher(run, available, settings)
+    render_stage5_results(st.session_state.get("last_run") or run)
+
+
 st.set_page_config(page_title="TRACE", layout="wide")
 
 # 1. Titre et 2. introduction
@@ -690,7 +939,7 @@ st.header("Pipeline")
 st.caption(
     "Actives : la structuration des entretiens (sans IA) et, sur action explicite, "
     "l'extraction des pratiques et l'analyse interactionnelle (étape 3), puis la construction des épisodes "
-    "d'accountability (étape 4). Les autres étapes restent inactives."
+    "d'accountability (étape 4) et la configuration intra-entretien (étape 5). Les autres étapes restent inactives."
 )
 pipeline_area = st.container()
 
@@ -813,6 +1062,8 @@ if run:
     render_analysis_section(run)
     # 9. Étape 4 — épisodes d'accountability (jamais automatique, après l'étape 3)
     render_stage4_section(st.session_state.get("last_run") or run)
+    # 10. Étape 5 — configuration et trajectoire intra-entretien (jamais automatique, après l'étape 4)
+    render_stage5_section(st.session_state.get("last_run") or run)
 else:
     st.info("Aucun run lancé pendant cette session.")
 

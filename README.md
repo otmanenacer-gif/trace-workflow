@@ -19,7 +19,15 @@ des entretiens semi-directifs. **Version actuelle :**
    candidats, l'*Accountability Episode Builder* (au plus un appel LLM par
    entretien) les classe en épisodes d'accountability, pratiques ordinaires ou
    cas incertains, puis un validateur déterministe vérifie chaque citation.
-   Lancée uniquement sur action explicite, après l'étape 3.
+   Lancée uniquement sur action explicite, après l'étape 3 ;
+5. **étape 5** — *configuration et trajectoire intra-entretien* : à partir des
+   épisodes de l'étape 4 (jamais de l'entretien entier), une préparation
+   déterministe (ancrages temporels explicites, régularités) puis le *Trajectory
+   Mapper* (au plus un appel LLM par entretien) décrivent ce qui se répète, reste
+   stable, varie selon les tâches, fait exception, reste en tension, change
+   explicitement dans le temps, ou est raconté sans justification ; un validateur
+   déterministe requalifie toute « évolution » fondée sur le seul ordre de
+   l'entretien. Un entretien à la fois, aucune comparaison entre entretiens.
 
 ## Installation
 
@@ -71,6 +79,13 @@ python -m pytest tests/test_stage4_long.py            # étape 4 : entretien lon
 python -m pytest tests/test_app_stage4.py             # étape 4 : interface (AppTest)
 python -m pytest tests/test_stage3_restore.py         # restauration de sorties de l'étape 3 téléchargées
 python -m pytest tests/test_stage4_1.py               # étape 4.1 : proximité, fusions, requête normalisée
+python -m pytest tests/test_trajectory_candidates.py  # étape 5 : préparation déterministe, ancrages temporels
+python -m pytest tests/test_trajectory_validator.py   # étape 5 : validateur (requalifications, vocabulaire)
+python -m pytest tests/test_stage5_sociological.py    # étape 5 : cas A à H (temporalité, contexte, exception…)
+python -m pytest tests/test_stage5_pipeline.py        # étape 5 : blocages, cache, coût, échecs
+python -m pytest tests/test_stage5_long.py            # étape 5 : entretien long « OTMANE-like »
+python -m pytest tests/test_stage4_restore.py         # restauration de sorties de l'étape 4 téléchargées
+python -m pytest tests/test_app_stage5.py             # étape 5 : interface (AppTest)
 ```
 
 Les tests n'utilisent que des documents **synthétiques** générés à la volée
@@ -314,6 +329,38 @@ Documentation complète : [`docs/stage4_accountability_episodes.md`](docs/stage4
   catégorie sauf s'ils sont dits par l'enquêté·e, mot de l'enquêteur jamais attribué
   à l'étudiant·e.
 
+## Étape 5 — configuration et trajectoire intra-entretien
+
+Documentation complète : [`docs/stage5_trajectory.md`](docs/stage5_trajectory.md).
+
+- **Un entretien à la fois** : quelles frontières, règles et manières de rendre compte de ses usages se
+  répètent, restent stables, varient selon les tâches ou contextes, comportent des exceptions, entrent en
+  tension, ou changent explicitement dans le temps ; quelles zones sont racontées sans justification ; quels
+  critères du « métier d'étudiant » sont explicitement mobilisés. Aucune comparaison entre entretiens,
+  aucune typologie.
+- **Ordre de l'entretien ≠ ordre biographique** : un `explicit_temporal_change` exige deux états
+  comparables, une différence documentée et des ancrages explicites de l'enquêté·e qui les ordonnent (« au
+  lycée » / « maintenant », « je ne … plus »…) ; sinon le validateur le **requalifie** en variation
+  contextuelle, et une configuration `temporal_trajectory` / `mixed` sans changement validé est requalifiée.
+- **Préparation déterministe** (`core/trajectory_candidates.py`) : épisodes `usable_for_next_stages` et
+  pratiques sans marqueur, ancrages temporels repérés dans les tours de l'enquêté·e, régularités (opérations
+  et frontières répétées, mêmes tâches, règle + cas, tensions signalées, pratiques ordinaires) ; représentation
+  normalisée.
+- **Validateur** (`core/trajectory_validator.py`) : appuis utilisables, tours de l'enquêté·e, ancrages exacts,
+  exception = règle + cas, propagation des épisodes à revoir (une affirmation qui ne repose que sur eux est à
+  revoir), vocabulaire psychologisant ou de récit de conversion, mot de l'enquêteur jamais attribué.
+- **Coût et cache** : 0 appel sans matériau suffisant, sinon 1 par entretien ; cache propre à l'étape 5.
+- **Sorties** : `student_trajectory.json`, `student_trajectory_validation.json`, `student_trajectory_manifest.json`.
+
+## Restaurer une étape 4 déjà calculée
+
+Après avoir restauré l'étape 3 (section suivante), la section « Étape 5 » propose « Restaurer des résultats
+Stage 4 existants » : importer `accountability_episodes.json` et `accountability_episode_validation.json`.
+`core/stage4_restore.py` vérifie le même entretien, les versions, une analyse complète sans erreur de
+validation, les empreintes de l'étape 3 installée, puis **recalcule** candidats et validation des épisodes
+pour refuser tout fichier altéré ; les fichiers sont recopiés octet pour octet et l'interface affiche « Stage 4
+restauré depuis fichiers — 0 appel API ». L'étape 5 peut alors être lancée directement, sans relancer l'étape 4.
+
 ## Restaurer une étape 3 déjà calculée
 
 **Le stockage local de l'application n'est pas durable.** Les runs (`data/outputs/`) et le cache TRACE
@@ -372,15 +419,21 @@ core/accountability_candidates.py  étape 4 : candidats d'épisodes déterminist
 core/accountability_episode_validator.py  étape 4 : validation déterministe des épisodes
 core/accountability.py         étape 4 : orchestration, états de l'étape 3, cache, sorties
 core/stage3_restore.py         restauration validée de sorties de l'étape 3 téléchargées (0 appel)
+core/trajectory_candidates.py  étape 5 : préparation déterministe (ancrages temporels, régularités, représentation)
+core/trajectory_validator.py   étape 5 : validation déterministe (requalifications, propagation, vocabulaire)
+core/trajectory.py             étape 5 : orchestration, état de l'étape 4, cache, sorties
+core/stage4_restore.py         restauration validée de sorties de l'étape 4 téléchargées (0 appel)
 agents/base.py                 citation, identité versionnée d'un agent, entretien compact
 agents/practice_extractor.py   agent 1 : version, schéma de sortie
 agents/interaction_signal_reader.py  agent 2 : version, schéma de sortie
 agents/accountability_episode_builder.py  étape 4 : version, schéma d'un épisode, taxonomie des opérations
+agents/trajectory_mapper.py    étape 5 : version, schéma des affirmations et des critères
 prompts/practice_extractor.md  consignes de l'agent 1
 prompts/interaction_signal_reader.md  consignes de l'agent 2
 prompts/speaker_attribution_auditor.md  consignes de l'auditeur des locuteurs
 prompts/interaction_long_distance_reader.md  consignes de la lecture à longue distance (entretien long)
 prompts/accountability_episode_builder.md  consignes de l'Accountability Episode Builder (étape 4, v1.0)
+prompts/trajectory_mapper.md   consignes du Trajectory Mapper (étape 5, v1.0)
 scripts/smoke_test_stage3.py   test réel (payant, sur confirmation) sur l'entretien synthétique
 docs/data_model.md             format des données transmis aux agents
 docs/agents_stage3.md          étape 3 : méthode, schémas, validation, cache, configuration
@@ -388,6 +441,7 @@ docs/speaker_attribution_audit.md  étape 3.5 : audit de l'attribution des locut
 docs/interaction_chunking.md   étape 3.6 : Interaction Reader sur les entretiens longs
 docs/stage3_7.md               étape 3.7 : Practice Extractor par blocs, sélectivité, avertissements
 docs/stage4_accountability_episodes.md  étape 4 : épisodes d'accountability
+docs/stage5_trajectory.md      étape 5 : configuration et trajectoire intra-entretien
 data/inputs|outputs/   données des runs (non versionnées)
 logs/                  journal trace.log (non versionné)
 tests/                 tests automatiques (pytest), documents synthétiques uniquement

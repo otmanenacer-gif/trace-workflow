@@ -22,8 +22,11 @@ Pour les entretiens synthétiques de l'étape 4 (Entretien_etape_4.txt, 25 tours
 Entretien_etape_4_long.txt, 320 tours), l'étape 3 et l'Accountability Episode Builder sont simulés par
 tests/synthetic_stage4.py et tests/synthetic_stage4_long.py (lecteur déterministe des candidats envoyés).
 Pour l'entretien de régression de l'étape 4.1 (Regression_otmane.txt, 388 tours), voir
-tests/synthetic_stage4_otmane.py. Pour tout autre entretien, les agents simulés de l'étape 3 ne renvoient rien et l'étape 4 simulée
-classe chaque candidat « incertain ».
+tests/synthetic_stage4_otmane.py. Pour les entretiens synthétiques de l'étape 5 (tests/synthetic_stage5.py : A à H, et
+tests/synthetic_stage5_long.py : Etape5_long.txt, 190 tours), les étapes 3 et 4 et le Trajectory Mapper sont simulés par ces
+modules ; pour l'entretien de référence de l'étape 4, le Trajectory Mapper suit synthetic_stage5.REFERENCE_PLAN.
+Pour tout autre entretien, les agents simulés de l'étape 3 ne renvoient rien, l'étape 4 simulée
+classe chaque candidat « incertain » et l'étape 5 simulée ne décrit aucune configuration.
 """
 
 import os
@@ -36,6 +39,10 @@ sys.path.insert(0, str(ROOT))
 
 os.environ["ANTHROPIC_API_KEY"] = "sk-ant-fake-browser-test"  # factice : jamais envoyée
 os.environ["ANTHROPIC_MODEL"] = "fake-model"
+# Garde-fou : si un rechargement à chaud (fichier source modifié pendant le test, voir app.py) réimporte
+# core.llm_client, le transport réel réapparaît ; il viserait alors une adresse locale fermée et échouerait
+# sans jamais joindre l'API.
+os.environ["ANTHROPIC_BASE_URL"] = "http://127.0.0.1:9"
 
 import core.llm_client as llm_client  # noqa: E402
 from core import config  # noqa: E402
@@ -45,8 +52,10 @@ from tests import synthetic_stage37 as stage37  # noqa: E402
 from tests import synthetic_stage4 as stage4  # noqa: E402
 from tests import synthetic_stage4_long as stage4_long  # noqa: E402
 from tests import synthetic_stage4_otmane as otmane  # noqa: E402
-from tests.fake_llm import (ACCOUNTABILITY, AUDITOR, INTERACTION, LONG_DISTANCE, PRACTICE, FakeTransport,  # noqa: E402
-                            text_response)
+from tests import synthetic_stage5 as stage5  # noqa: E402
+from tests import synthetic_stage5_long as stage5_long  # noqa: E402
+from tests.fake_llm import (ACCOUNTABILITY, AUDITOR, INTERACTION, LONG_DISTANCE, PRACTICE, TRAJECTORY,  # noqa: E402
+                            FakeTransport, text_response)
 
 if os.environ.get("TRACE_E2E_CACHE_DIR"):
     config.CACHE_DIR = Path(os.environ["TRACE_E2E_CACHE_DIR"])
@@ -81,9 +90,31 @@ def _is_otmane(params: dict) -> bool:
 
 _STAGE4_REFERENCE = stage4.stage3_responders()
 _OTMANE = otmane.stage3_responders()
+_STAGE5_LONG = stage5_long.stage3_responders()
+
+
+def _stage5_case(params: dict):
+    """Cas synthétique de l'étape 5 (A à H) dont l'identifiant figure dans le message, sinon None."""
+    content = params["messages"][0]["content"]
+    return next((case for case in stage5.CASES.values() if case.interview_id + "_" in content), None)
+
+
+def _is_stage5_long(params: dict) -> bool:
+    return stage5_long.INTERVIEW_ID + "_" in params["messages"][0]["content"]
+
+
+def _stage5_stage3(agent: str):
+    def respond(params):
+        if _is_stage5_long(params):
+            return _STAGE5_LONG[agent](params)
+        case = _stage5_case(params)
+        return case.stage3_responders()[agent](params) if case else None
+    return respond
 
 
 def _practices(params):
+    if (stage5_response := _stage5_stage3(PRACTICE)(params)) is not None:
+        return stage5_response
     if _is_otmane(params):
         return _OTMANE[PRACTICE](params)
     if _is_stage4_long(params):
@@ -105,6 +136,8 @@ def _is_long(params: dict) -> bool:
 
 
 def _signals(params):
+    if (stage5_response := _stage5_stage3(INTERACTION)(params)) is not None:
+        return stage5_response
     if _is_otmane(params):
         return _OTMANE[INTERACTION](params)
     if _is_stage4_long(params):
@@ -123,6 +156,8 @@ def _signals(params):
 
 
 def _audit(params):
+    if (stage5_response := _stage5_stage3(AUDITOR)(params)) is not None:
+        return stage5_response
     if _is_stage4(params):
         return _STAGE4_REFERENCE[AUDITOR](params)
     if _is_stage35(params):
@@ -131,6 +166,8 @@ def _audit(params):
 
 
 def _long_distance(params):
+    if _is_stage5_long(params):
+        return _STAGE5_LONG[LONG_DISTANCE](params)
     if _is_otmane(params):
         return _OTMANE[LONG_DISTANCE](params)
     if _is_stage4_long(params):
@@ -147,6 +184,10 @@ _OTMANE_BUILDER = otmane.builder("good")
 
 
 def _accountability(params):
+    if _is_stage5_long(params):
+        return stage5_long.BUILDER(params)
+    if (case := _stage5_case(params)) is not None:
+        return case.builder()(params)
     if _is_otmane(params):
         return _OTMANE_BUILDER(params)
     if _is_stage4_long(params):
@@ -156,8 +197,22 @@ def _accountability(params):
     return _GENERIC_STAGE4(params)
 
 
+_GENERIC_STAGE5 = stage5.scripted_mapper(stage5.generic_plan())
+_REFERENCE_STAGE5 = stage5.scripted_mapper(stage5.REFERENCE_PLAN)
+
+
+def _trajectory(params):
+    if _is_stage5_long(params):
+        return stage5_long.mapper()(params)
+    if (case := _stage5_case(params)) is not None:
+        return case.mapper()(params)
+    if _is_stage4(params):
+        return _REFERENCE_STAGE5(params)
+    return _GENERIC_STAGE5(params)
+
+
 llm_client.AnthropicTransport = lambda settings: FakeTransport(
     {PRACTICE: _practices, INTERACTION: _signals, AUDITOR: _audit, LONG_DISTANCE: _long_distance,
-     ACCOUNTABILITY: _accountability})
+     ACCOUNTABILITY: _accountability, TRAJECTORY: _trajectory})
 
 runpy.run_path(str(ROOT / "app.py"), run_name="__main__")
