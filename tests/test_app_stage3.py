@@ -126,3 +126,33 @@ def test_speaker_audit_is_shown_and_never_editable(tmp_path, monkeypatch):
     assert not at.text_input and [t.key for t in at.text_area] == ["problematique"]
     # relance : tout vient du cache, y compris l'audit
     assert "(0 appel(s) API payant(s))" in at.button(key="ai_launch").label
+
+
+@pytest.fixture
+def restore_project_modules():
+    """Rétablit les modules du projet : les mocks des autres tests visent ces objets-là."""
+    import sys
+    saved = {n: m for n, m in sys.modules.items() if n.split(".")[0] in ("core", "agents")}
+    yield
+    for name in [n for n in sys.modules if n.split(".")[0] in ("core", "agents")]:
+        del sys.modules[name]
+    sys.modules.update(saved)
+
+
+def test_app_reloads_stale_analysis_module_after_hot_redeploy(restore_project_modules):
+    """Redéploiement à chaud : un ancien core.analysis (sans AUDITOR) reste en mémoire."""
+    import sys
+    import types
+    from core import analysis
+    stale = types.ModuleType("core.analysis")
+    stale.__file__ = analysis.__file__
+    stale._trace_loaded_at = 0.0  # chargé avant la dernière modification du fichier
+    for name in ("AGENTS", "STATUS_PENDING", "STATUS_RUNNING", "STATUS_SUCCESS",
+                 "STATUS_SUCCESS_WITH_WARNINGS", "STATUS_CACHED", "STATUS_FAILED"):
+        setattr(stale, name, getattr(analysis, name))
+    sys.modules["core.analysis"] = stale
+    sys.modules["core"].analysis = stale
+
+    at = AppTest.from_file(APP, default_timeout=30).run()
+    assert not at.exception
+    assert hasattr(sys.modules["core.analysis"], "AUDITOR")
