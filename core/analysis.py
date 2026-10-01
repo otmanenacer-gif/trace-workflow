@@ -14,8 +14,13 @@ schéma et la même représentation compacte de l'entretien (avec, le cas éché
 les `speaker_warning` de l'auditeur : le locuteur officiel reste inchangé).
 Aucun des deux ne reçoit la sortie de l'autre ; aucune synthèse commune n'est produite.
 
-Un appel = un entretien = un agent. Un échec d'un agent n'efface pas la
-sortie de l'autre ; un entretien en échec ne bloque pas les autres.
+Un appel = un entretien = un agent. Exception : un entretien LONG est lu par
+l'Interaction Signal Reader en plusieurs blocs de tours qui se chevauchent (un
+appel par bloc, cache par bloc), puis par une lecture légère à longue distance ;
+les signaux sont fusionnés de façon déterministe en UN interaction_signals.json
+(voir core/interaction_chunking.py). Un bloc en échec (réponse tronquée…) rend
+l'analyse PARTIAL, sans effacer les blocs réussis. Un échec d'un agent n'efface
+pas la sortie de l'autre ; un entretien en échec ne bloque pas les autres.
 
 Sorties : data/outputs/<run_id>/interviews/<interview_id>/analysis/ (les
 fichiers d'ingestion ne sont jamais modifiés).
@@ -26,6 +31,7 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import dataclasses
+import functools
 import hashlib
 import json
 import logging
@@ -37,7 +43,7 @@ from typing import Callable
 
 from agents import interaction_signal_reader, practice_extractor
 from agents.base import AgentSpec, build_agent_input, render_user_message, serialize_agent_input, sha256_text
-from core import config, evidence_validator, interpretation_guard
+from core import config, evidence_validator, interaction_chunking, interpretation_guard
 from core import speaker_attribution_auditor as speaker_audit
 from core.analysis_cache import AnalysisCache, compute_cache_key, write_json_atomic
 from core.llm_client import LLMClient, LLMError, LLMSettings, Transport
@@ -54,12 +60,22 @@ STATUS_SUCCESS = "SUCCESS"
 STATUS_SUCCESS_WITH_WARNINGS = "SUCCESS_WITH_WARNINGS"
 STATUS_FAILED = "FAILED"
 STATUS_CACHED = "CACHED"
+STATUS_PARTIAL = "PARTIAL"      # entretien long : au moins un bloc (ou la lecture à longue distance) en échec
+STATUS_TRUNCATED = "TRUNCATED"  # statut d'un bloc dont la réponse a atteint la limite de sortie
 ANALYSIS_STATUSES = (STATUS_PENDING, STATUS_RUNNING, STATUS_SUCCESS, STATUS_SUCCESS_WITH_WARNINGS,
-                     STATUS_FAILED, STATUS_CACHED)
+                     STATUS_FAILED, STATUS_CACHED, STATUS_PARTIAL)
 DONE_STATUSES = (STATUS_SUCCESS, STATUS_SUCCESS_WITH_WARNINGS, STATUS_CACHED)
 
 AGENTS: tuple[AgentSpec, ...] = (practice_extractor.SPEC, interaction_signal_reader.SPEC)
 AUDITOR: AgentSpec = speaker_audit.SPEC
+INTERACTION: AgentSpec = interaction_signal_reader.SPEC
+LONG_DISTANCE: AgentSpec = interaction_signal_reader.LONG_DISTANCE_SPEC
+
+
+@functools.lru_cache(maxsize=None)
+def chunk_spec(spec: AgentSpec) -> AgentSpec:
+    """Le MÊME agent (consignes, schéma, version) ; seul le message utilisateur annonce un extrait."""
+    return dataclasses.replace(spec, user_template=interaction_signal_reader.CHUNK_USER_TEMPLATE)
 
 StatusCallback = Callable[[str, str, str], None]  # (interview_id, agent, status)
 
@@ -174,7 +190,13 @@ def plan_analysis(metadata: dict, interview_ids: list[str], settings: LLMSetting
                 warnings = None  # inconnus avant l'audit
         agent_prepared = with_speaker_warnings(prepared, warnings) if warnings is not None else None
         for spec in AGENTS:
-            if agent_prepared is None:
+            chunks = interaction_chunks(prepared, settings) if spec.name == INTERACTION.name else []
+            if len(chunks) > 1:
+                plan = _plan_chunked_interaction(spec, prepared, chunks, warnings, settings, cache, force)
+                calls += plan["calls"]
+                cached += plan["cached"]
+                exact = exact and plan["exact"]
+            elif agent_prepared is None:
                 calls += 1
                 exact = exact and force
             elif not force and settings.model and cache.contains(
@@ -186,6 +208,67 @@ def plan_analysis(metadata: dict, interview_ids: list[str], settings: LLMSetting
             "candidate_turns": candidate_turns, "exact": exact}
 
 
+def interaction_chunks(prepared: PreparedInterview, settings: LLMSettings) -> list:
+    """Blocs de lecture de l'Interaction Signal Reader (un seul pour un entretien court)."""
+    return interaction_chunking.plan_chunks(prepared.transcript, settings.interaction_chunk_tokens)
+
+
+def chunk_cache_key_fields(spec: AgentSpec, user_message: str, settings: LLMSettings) -> dict:
+    """Clé de cache d'un bloc (ou de la lecture à longue distance) : le message EXACT envoyé.
+
+    L'empreinte du message tient lieu d'empreinte de source : un bloc inchangé reste en
+    cache même si une autre partie du fichier source a été modifiée.
+    """
+    digest = sha256_text(user_message)
+    return {"source_sha256": digest, "transcript_sha256": digest, **spec.identity(), "model": settings.model,
+            "request_params": settings.request_params()}
+
+
+def _plan_chunked_interaction(spec: AgentSpec, prepared: PreparedInterview, chunks: list, warnings: dict | None,
+                              settings: LLMSettings, cache: AnalysisCache, force: bool) -> dict:
+    """Appels d'un entretien long : un par bloc absent du cache, plus la lecture à longue distance."""
+    if warnings is None or force:  # avertissements inconnus avant l'audit, ou nouvelle analyse forcée
+        return {"calls": interaction_chunking.max_interaction_calls(chunks), "cached": 0, "exact": False}
+    calls = cached = 0
+    outputs = []
+    for chunk in chunks:
+        request = interaction_chunking.chunk_request(prepared.transcript, chunk, warnings)
+        entry = cache.load(chunk_cache_key_fields(chunk_spec(spec), request["user_message"], settings),
+                           spec.output_model) if settings.model else None
+        if entry is None:
+            calls += 1
+        else:
+            cached += 1
+            outputs.append(entry["output"]["signals"])
+    if calls:  # la sélection à longue distance dépend des blocs : appel compté au plus
+        return {"calls": calls + 1, "cached": cached, "exact": False}
+    selection = interaction_chunking.select_long_distance_turns(prepared.transcript, chunks, outputs)
+    if selection["needs_llm"]:
+        request = interaction_chunking.long_distance_request(prepared.transcript, chunks, selection, warnings)
+        if cache.contains(LONG_DISTANCE.name, compute_cache_key(
+                chunk_cache_key_fields(LONG_DISTANCE, request["user_message"], settings))):
+            cached += 1
+        else:
+            calls += 1
+    return {"calls": calls, "cached": cached, "exact": True}
+
+
+def plan_interaction_chunking(metadata: dict, interview_ids: list[str], settings: LLMSettings) -> list[dict]:
+    """Pour l'interface, AVANT exécution : blocs de lecture et nombre maximal d'appels Interaction Reader."""
+    wanted = set(interview_ids)
+    plans = []
+    for info in eligible_files(metadata):
+        if info["ingestion"]["interview_id"] not in wanted:
+            continue
+        prepared = prepare_interview(info["ingestion"])
+        chunks = interaction_chunks(prepared, settings)
+        plans.append({"interview_id": prepared.interview_id, "chunk_count": len(chunks),
+                      "chunking_used": len(chunks) > 1,
+                      "max_calls": interaction_chunking.max_interaction_calls(chunks),
+                      "chunk_ranges": interaction_chunking.chunk_ranges(chunks)})
+    return plans
+
+
 # --- Exécution d'un agent ---------------------------------------------------------------
 
 def _validation_status(report: dict) -> str:
@@ -193,10 +276,12 @@ def _validation_status(report: dict) -> str:
 
 
 async def run_agent(spec: AgentSpec, prepared: PreparedInterview, client: LLMClient, cache: AnalysisCache,
-                    settings: LLMSettings, force: bool = False, on_status: StatusCallback | None = None) -> dict:
+                    settings: LLMSettings, force: bool = False, on_status: StatusCallback | None = None,
+                    extra: dict | None = None) -> dict:
     """Exécute UN agent sur UN entretien. Ne lève pas d'exception : renvoie le manifest.
 
     L'agent ne reçoit que : ses consignes, son schéma, le transcript compact.
+    `extra` : champs ajoutés au manifest et au document (ex. `chunking` de l'Interaction Reader).
     """
     notify = on_status or (lambda *args: None)
     label = f"{prepared.interview_id}/{spec.name}"
@@ -230,6 +315,7 @@ async def run_agent(spec: AgentSpec, prepared: PreparedInterview, client: LLMCli
         "has_warnings": False,
         "output_file": None,
         "error": None,
+        **(extra or {}),
     }
     output_path = prepared.analysis_dir / spec.output_filename
     manifest_path = prepared.analysis_dir / spec.manifest_filename
@@ -276,6 +362,7 @@ async def run_agent(spec: AgentSpec, prepared: PreparedInterview, client: LLMCli
             "needs_review_count": len(report["objects_needing_review"]),
             "invalid_evidence_count": report["invalid_evidence_count"],
             **{k: v for k, v in output.items() if k != spec.items_key},
+            **(extra or {}),
             spec.items_key: validated["items"],
         }
         write_json_atomic(output_path, document)
@@ -297,6 +384,271 @@ async def run_agent(spec: AgentSpec, prepared: PreparedInterview, client: LLMCli
     write_json_atomic(manifest_path, manifest)
     notify(prepared.interview_id, spec.name, manifest["status"])
     logger.info("Analyse %s : %s", label, manifest["status"])
+    return {"manifest": manifest, "validation": report}
+
+
+# --- Interaction Signal Reader : entretien court (1 appel) ou long (blocs) ---------------
+
+def _chunking_summary(chunks: list, settings: LLMSettings, transcript: dict) -> dict:
+    return {
+        "chunking_version": interaction_chunking.CHUNKING_VERSION,
+        "chunking_used": len(chunks) > 1,
+        "chunk_count": len(chunks),
+        "target_tokens": settings.interaction_chunk_tokens,
+        "estimated_tokens": sum(interaction_chunking.turn_costs(transcript)),
+        "overlap_turns": interaction_chunking.OVERLAP_TURNS if len(chunks) > 1 else 0,
+        "chunk_ranges": interaction_chunking.chunk_ranges(chunks),
+    }
+
+
+async def run_interaction_reader(spec: AgentSpec, prepared: PreparedInterview, client: LLMClient,
+                                 cache: AnalysisCache, settings: LLMSettings, force: bool = False,
+                                 on_status: StatusCallback | None = None) -> dict:
+    """Interaction Signal Reader : un appel pour un entretien court (comportement inchangé), des blocs sinon."""
+    try:
+        chunks = interaction_chunks(prepared, settings)
+    except Exception as exc:  # noqa: BLE001 — sans découpage, on garde le comportement historique
+        logger.error("Découpage %s : %s", prepared.interview_id, type(exc).__name__)
+        chunks = []
+    if len(chunks) <= 1:
+        extra = {"chunking": _chunking_summary(chunks, settings, prepared.transcript)} if chunks else None
+        return await run_agent(spec, prepared, client, cache, settings, force, on_status, extra)
+    return await run_chunked_interaction(spec, prepared, chunks, client, cache, settings, force, on_status)
+
+
+def _call_record(result) -> dict:
+    return {"usage": result.usage, "attempts": result.attempts, "duration_seconds": result.duration_seconds,
+            "model_requested": result.model_requested, "response_model": result.response_model,
+            "request_id": result.request_id, "stop_reason": result.stop_reason}
+
+
+async def _cached_call(spec: AgentSpec, user_message: str, client: LLMClient, cache: AnalysisCache,
+                       settings: LLMSettings, force: bool, label: str) -> dict:
+    """UN appel (bloc ou lecture à longue distance), repris du cache s'il existe. Ne lève pas d'exception."""
+    key_fields = chunk_cache_key_fields(spec, user_message, settings)
+    record = {"cache_key": compute_cache_key(key_fields), "cache_hit": False, "status": STATUS_PENDING,
+              "api_calls": 0, "billed_this_run": False, "usage": None, "duration_seconds": None,
+              "response_model": None, "request_id": None, "stop_reason": None, "created_at": None, "error": None,
+              "output": None}
+    try:
+        entry = None if force else cache.load(key_fields, spec.output_model)
+        if entry is not None:
+            call = entry.get("call", {})
+            record.update(cache_hit=True, status=STATUS_CACHED, output=entry["output"],
+                          created_at=entry.get("created_at"), usage=call.get("usage"),
+                          duration_seconds=call.get("duration_seconds"), response_model=call.get("response_model"),
+                          request_id=call.get("request_id"), stop_reason=call.get("stop_reason"))
+            return record
+        result = await client.complete_json(system_prompt=spec.system_prompt, user_content=user_message,
+                                            output_schema=spec.output_schema, response_model=spec.output_model,
+                                            label=label)
+        output = result.data.model_dump(mode="json")
+        cache.store(key_fields, output, _call_record(result))
+        record.update(status=STATUS_SUCCESS, output=output, created_at=_now(), api_calls=result.attempts,
+                      billed_this_run=True, usage=result.usage, duration_seconds=result.duration_seconds,
+                      response_model=result.response_model, request_id=result.request_id,
+                      stop_reason=result.stop_reason)
+    except LLMError as error:
+        record.update(status=STATUS_TRUNCATED if error.code == "TRUNCATED" else STATUS_FAILED, error=error.to_dict(),
+                      api_calls=error.attempts, usage=error.usage, duration_seconds=error.duration_seconds,
+                      billed_this_run=bool(error.usage and error.usage.get("input_tokens")),
+                      request_id=error.request_id, stop_reason="max_tokens" if error.code == "TRUNCATED" else None)
+    except Exception as exc:  # noqa: BLE001 — isolé à ce bloc, sans contenu d'entretien
+        logger.error("Analyse %s : erreur inattendue %s\n%s", label, type(exc).__name__,
+                     "".join(traceback.format_tb(exc.__traceback__)))
+        record.update(status=STATUS_FAILED, error=LLMError("UNEXPECTED_ERROR", type(exc).__name__).to_dict())
+    return record
+
+
+CALL_OK = (STATUS_SUCCESS, STATUS_CACHED)
+
+
+def _sum_usage(usages: list[dict]) -> dict | None:
+    usages = [u for u in usages if u]
+    if not usages:
+        return None
+    return {k: sum(u.get(k) or 0 for u in usages) for k in
+            ("input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")}
+
+
+def _public_record(record: dict) -> dict:
+    return {k: v for k, v in record.items() if k != "output"}
+
+
+async def run_chunked_interaction(spec: AgentSpec, prepared: PreparedInterview, chunks: list, client: LLMClient,
+                                  cache: AnalysisCache, settings: LLMSettings, force: bool = False,
+                                  on_status: StatusCallback | None = None) -> dict:
+    """Interaction Signal Reader sur un entretien LONG. Ne lève pas d'exception : renvoie le manifest.
+
+    1. un appel par bloc (en parallèle, concurrence bornée par le client), chaque bloc en cache ;
+    2. si tous les blocs ont réussi : lecture légère à longue distance sur une sélection compacte ;
+    3. fusion déterministe, puis validation des preuves sur le résultat fusionné (comme avant).
+    Un bloc en échec ou tronqué rend le statut PARTIAL : le résultat n'est jamais présenté comme complet.
+    """
+    notify = on_status or (lambda *args: None)
+    label = f"{prepared.interview_id}/{spec.name}"
+    transcript = prepared.transcript
+    warnings = prepared.speaker_warnings
+    chunking = _chunking_summary(chunks, settings, transcript)
+    manifest = {
+        "manifest_version": MANIFEST_VERSION,
+        "interview_id": prepared.interview_id,
+        **spec.identity(),
+        "source_sha256": prepared.source_sha256,
+        "transcript_sha256": prepared.transcript_sha256,
+        "model": settings.model,
+        "request_params": settings.request_params(),
+        "cache_key": None,  # un entretien long a une clé par bloc (chunking.chunks[].cache_key)
+        "cache_hit": False,
+        "status": STATUS_PENDING,
+        "run_at": _now(),
+        "created_at": None,
+        "api_calls": 0,
+        "billed_this_run": False,
+        "usage": None,
+        "duration_seconds": None,
+        "response_model": None,
+        "request_id": None,
+        "stop_reason": None,
+        "validator_version": evidence_validator.VALIDATOR_VERSION,
+        "guard_version": interpretation_guard.GUARD_VERSION,
+        "speaker_warning_count": len(warnings),
+        "item_count": 0,
+        "invalid_evidence_count": 0,
+        "needs_review_count": 0,
+        "has_warnings": False,
+        "analysis_complete": False,
+        "output_file": None,
+        "error": None,
+        "chunking": chunking,
+    }
+    output_path = prepared.analysis_dir / spec.output_filename
+    manifest_path = prepared.analysis_dir / spec.manifest_filename
+    report = None
+    try:
+        notify(prepared.interview_id, spec.name, STATUS_RUNNING)
+        requests = [interaction_chunking.chunk_request(transcript, chunk, warnings) for chunk in chunks]
+        records = await asyncio.gather(*(
+            _cached_call(chunk_spec(spec), r["user_message"], client, cache, settings, force,
+                         f"{label}/bloc{r['chunk'].index}") for r in requests))
+        chunk_records = []
+        for request, record in zip(requests, records):
+            output = record["output"]
+            chunk_records.append({**request["chunk"].describe(), "speaker_warning_count": len(request["warnings"]),
+                                  "signal_count": len(output["signals"]) if output else 0,
+                                  **_public_record(record)})
+        succeeded = [(r["chunk"], rec) for r, rec in zip(requests, records) if rec["status"] in CALL_OK]
+
+        long_distance = {"status": "NOT_NEEDED", "llm_called": False, "selected_turn_count": 0,
+                         "candidate_count": 0, "dropped_candidate_count": 0, "signals_returned": 0,
+                         "signals_kept": 0, "signals_discarded_not_long_distance": 0}
+        ld_record = None
+        kept_long: list[dict] = []
+        if len(succeeded) < len(chunks):
+            long_distance["status"] = "SKIPPED_INCOMPLETE"  # refaite quand tous les blocs auront réussi
+        else:
+            selection = interaction_chunking.select_long_distance_turns(
+                transcript, chunks, [rec["output"]["signals"] for _, rec in succeeded])
+            long_distance.update(selected_turn_count=len(selection["positions"]),
+                                 candidate_count=selection["candidate_count"],
+                                 dropped_candidate_count=selection["dropped_count"])
+            if selection["needs_llm"]:
+                request = interaction_chunking.long_distance_request(transcript, chunks, selection, warnings)
+                ld_record = await _cached_call(LONG_DISTANCE, request["user_message"], client, cache, settings,
+                                               force, f"{label}/longue_distance")
+                long_distance.update(_public_record(ld_record), llm_called=ld_record["api_calls"] > 0,
+                                     speaker_warning_count=len(request["warnings"]))
+                if ld_record["status"] in CALL_OK:
+                    position = {t["turn_id"]: i for i, t in enumerate(transcript["turns"])}
+                    returned = ld_record["output"]["signals"]
+                    kept_long = [s for s in returned if interaction_chunking.is_long_distance(s, chunks, position)]
+                    long_distance.update(signals_returned=len(returned), signals_kept=len(kept_long),
+                                         signals_discarded_not_long_distance=len(returned) - len(kept_long))
+
+        calls = list(records) + ([ld_record] if ld_record else [])
+        billed = [c for c in calls if c["billed_this_run"]]
+        failed_chunks = [c for c in chunk_records if c["status"] not in CALL_OK]
+        ld_failed = ld_record is not None and ld_record["status"] not in CALL_OK
+        all_cached = all(c["cache_hit"] for c in calls)
+        manifest.update(
+            api_calls=sum(c["api_calls"] or 0 for c in calls), billed_this_run=bool(billed),
+            usage=_sum_usage([c["usage"] for c in (billed or (calls if all_cached else []))]),
+            duration_seconds=round(sum(c["duration_seconds"] or 0 for c in (billed or calls)), 3),
+            response_model=next((c["response_model"] for c in calls if c["response_model"]), None),
+            created_at=max((c["created_at"] for c in calls if c["created_at"]), default=None),
+            cache_hit=all_cached and not failed_chunks and not ld_failed,
+        )
+        chunking.update(
+            chunks=chunk_records, llm_calls_this_run=manifest["api_calls"],
+            interaction_calls_max=interaction_chunking.max_interaction_calls(chunks),
+            chunks_succeeded=len(succeeded), failed_chunks=[c["chunk"] for c in failed_chunks],
+            truncated_chunks=[c["chunk"] for c in failed_chunks if c["status"] == STATUS_TRUNCATED],
+            long_distance=long_distance)
+
+        if not succeeded:
+            first = failed_chunks[0]
+            manifest.update(status=STATUS_FAILED, error=first["error"])
+        else:
+            merged = interaction_chunking.merge_signals(
+                [{"label": f"bloc{chunk.index}", "chunk": chunk.index, "signals": rec["output"]["signals"]}
+                 for chunk, rec in succeeded] + [{"label": "longue_distance", "chunk": None, "signals": kept_long}],
+                chunks, transcript)
+            chunking.update(signals_before_dedup=merged["before"], signals_after_dedup=merged["after"],
+                            duplicates_removed=merged["duplicates_removed"])
+            validated = evidence_validator.validate_agent_output(
+                spec.name, merged["signals"], transcript, spec.id_letter, warnings)
+            report = validated["report"]
+            complete = not failed_chunks and not ld_failed
+            report["analysis_complete"] = complete
+            status = (STATUS_PARTIAL if not complete else STATUS_CACHED if manifest["cache_hit"]
+                      else _validation_status(report))
+            error = None
+            if not complete:
+                parts = [f"bloc {c['chunk']} ({c['first_turn_id']} → {c['last_turn_id']}) : {c['error']['message']}"
+                         for c in failed_chunks]
+                if ld_failed:
+                    parts.append(f"lecture à longue distance : {ld_record['error']['message']}")
+                error = {"code": "PARTIAL_ANALYSIS", "status_code": None, "request_id": None, "message": (
+                    f"Analyse INCOMPLÈTE : {len(succeeded)}/{len(chunks)} bloc(s) réussi(s). " + " ; ".join(parts)
+                    + ". Les blocs réussis sont conservés (et en cache) : relancez l'analyse pour ne refaire que "
+                    "les appels manquants. Si un bloc reste tronqué, réduisez TRACE_INTERACTION_CHUNK_TOKENS.")}
+            notes = [f"Bloc {chunk.index} : {rec['output']['reading_notes']}" for chunk, rec in succeeded
+                     if rec["output"].get("reading_notes")]
+            if ld_record is not None and ld_record["status"] in CALL_OK and ld_record["output"].get("reading_notes"):
+                notes.append(f"Lecture à longue distance : {ld_record['output']['reading_notes']}")
+            document = {
+                "agent": spec.name,
+                "agent_version": spec.version,
+                "schema_version": spec.schema_version,
+                "interview_id": prepared.interview_id,
+                "model": settings.model,
+                "status": status,
+                "analysis_complete": complete,
+                "cache_hit": manifest["cache_hit"],
+                "generated_at": manifest["created_at"],
+                "item_count": len(validated["items"]),
+                "needs_review_count": len(report["objects_needing_review"]),
+                "invalid_evidence_count": report["invalid_evidence_count"],
+                "reading_notes": "\n".join(notes) or None,
+                "chunking": chunking,
+                spec.items_key: validated["items"],
+            }
+            write_json_atomic(output_path, document)
+            manifest.update(status=status, item_count=document["item_count"], analysis_complete=complete,
+                            invalid_evidence_count=report["invalid_evidence_count"], error=error,
+                            needs_review_count=document["needs_review_count"], output_file=spec.output_filename,
+                            has_warnings=not complete or evidence_validator.has_problems(report))
+    except Exception as exc:  # noqa: BLE001 — isolé à cet agent, sans contenu d'entretien
+        logger.error("Analyse %s : erreur inattendue %s\n%s", label, type(exc).__name__,
+                     "".join(traceback.format_tb(exc.__traceback__)))
+        report = None
+        manifest.update(status=STATUS_FAILED, error=LLMError("UNEXPECTED_ERROR", type(exc).__name__).to_dict())
+
+    if manifest["status"] == STATUS_FAILED:
+        output_path.unlink(missing_ok=True)
+    write_json_atomic(manifest_path, manifest)
+    notify(prepared.interview_id, spec.name, manifest["status"])
+    logger.info("Analyse %s : %s (%d bloc(s))", label, manifest["status"], len(chunks))
     return {"manifest": manifest, "validation": report}
 
 
@@ -467,7 +819,15 @@ def _validation_document(prepared: PreparedInterview, results: dict[str, dict], 
 def _agent_summary(manifest: dict) -> dict:
     keys = ("status", "cache_hit", "item_count", "invalid_evidence_count", "needs_review_count", "api_calls",
             "billed_this_run", "usage", "duration_seconds", "error", "has_warnings", "speaker_warning_count")
-    return {k: manifest.get(k) for k in keys}
+    summary = {k: manifest.get(k) for k in keys}
+    chunking = manifest.get("chunking")
+    if chunking:  # Interaction Signal Reader : lecture en un appel ou par blocs
+        summary["chunking"] = {k: chunking.get(k) for k in (
+            "chunking_used", "chunk_count", "chunks_succeeded", "failed_chunks", "truncated_chunks",
+            "signals_before_dedup", "signals_after_dedup", "llm_calls_this_run", "interaction_calls_max")}
+        summary["chunking"]["long_distance_status"] = (chunking.get("long_distance") or {}).get("status")
+        summary["analysis_complete"] = manifest.get("analysis_complete", manifest.get("status") != STATUS_FAILED)
+    return summary
 
 
 def _audit_summary(manifest: dict) -> dict:
@@ -496,7 +856,9 @@ async def analyze_interview(prepared: PreparedInterview, client: LLMClient, cach
     if audit is not None:
         prepared = with_speaker_warnings(prepared, audit["warnings"])
     outcomes = await asyncio.gather(
-        *(run_agent(spec, prepared, client, cache, settings, force, on_status) for spec in AGENTS),
+        *(run_interaction_reader(spec, prepared, client, cache, settings, force, on_status)
+          if spec.name == INTERACTION.name
+          else run_agent(spec, prepared, client, cache, settings, force, on_status) for spec in AGENTS),
         return_exceptions=True,
     )
     results = {}
@@ -549,7 +911,8 @@ def _run_coroutine(coroutine):
 def summarize_usage(summaries: list[dict]) -> dict:
     """Consommation réelle de CETTE exécution (les résultats en cache ne coûtent rien)."""
     total = {"api_calls": 0, "input_tokens": 0, "output_tokens": 0, "cache_creation_input_tokens": 0,
-             "cache_read_input_tokens": 0, "cached_results": 0, "failed": 0, "duration_seconds": 0.0}
+             "cache_read_input_tokens": 0, "cached_results": 0, "failed": 0, "partial": 0,
+             "duration_seconds": 0.0}
     for summary in summaries:
         steps = list(summary["agents"].values())
         if summary.get("speaker_audit"):
@@ -558,6 +921,7 @@ def summarize_usage(summaries: list[dict]) -> dict:
             total["api_calls"] += agent.get("api_calls") or 0
             total["cached_results"] += 1 if agent.get("cache_hit") else 0
             total["failed"] += 1 if agent.get("status") == STATUS_FAILED else 0
+            total["partial"] += 1 if agent.get("status") == STATUS_PARTIAL else 0
             if agent.get("billed_this_run") and agent.get("usage"):
                 for key in ("input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"):
                     total[key] += agent["usage"].get(key) or 0
@@ -573,7 +937,9 @@ def _step_state(metadata: dict, agent: str) -> str:
         return "inactive"
     done = sum(s in DONE_STATUSES for s in analyzed)
     failed = sum(s == STATUS_FAILED for s in analyzed)
+    partial = sum(s == STATUS_PARTIAL for s in analyzed)
     state = f"terminé ({done}/{len(eligible)} entretien(s)"
+    state += f", {partial} incomplet(s)" if partial else ""
     return state + (f", {failed} échec(s))" if failed else ")")
 
 

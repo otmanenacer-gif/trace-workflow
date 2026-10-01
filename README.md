@@ -213,7 +213,10 @@ pour l'audit des locuteurs, [`docs/speaker_attribution_audit.md`](docs/speaker_a
   autocorrection, minimisation, affect explicitement nommé, référence au
   jugement d'un·e enseignant·e, contradiction entre tours, préférence,
   évaluation métadiscursive de sa propre formulation…) sans inférer
-  d'état psychologique.
+  d'état psychologique. Un entretien long est lu en blocs qui se chevauchent,
+  plus une lecture légère des passages éloignés, puis fusionné sans LLM
+  (étape 3.6, [`docs/interaction_chunking.md`](docs/interaction_chunking.md)) ;
+  un bloc tronqué rend l'analyse `PARTIAL`, jamais présentée comme complète.
 - **Preuves** : chaque pratique et chaque signal cite l'entretien ; un
   validateur déterministe vérifie que chaque citation est une sous-chaîne
   exacte du tour cité, que les `turn_id` existent et appartiennent à cet
@@ -231,7 +234,8 @@ pour l'audit des locuteurs, [`docs/speaker_attribution_audit.md`](docs/speaker_a
 - **Coût** : tokens d'entrée / sortie et nombre d'appels affichés ; aucun
   montant inventé.
 - **Configuration** : `ANTHROPIC_API_KEY` et `ANTHROPIC_MODEL` (environnement
-  ou `.env`) ; `TRACE_MAX_CONCURRENCY` (défaut 2) limite les appels simultanés.
+  ou `.env`) ; `TRACE_MAX_CONCURRENCY` (défaut 2) limite les appels simultanés ;
+  `TRACE_INTERACTION_CHUNK_TOKENS` (défaut 5 000) fixe la taille d'un bloc.
 
 ## Architecture
 
@@ -250,16 +254,19 @@ core/analysis_cache.py         cache déterministe des analyses
 core/evidence_validator.py     validation déterministe des citations
 core/interpretation_guard.py   détection du vocabulaire interprétatif dans les sorties
 core/speaker_attribution_auditor.py  étape 3.5 : audit des locuteurs (règles, extrait, revalidation)
+core/interaction_chunking.py   étape 3.6 : blocs, sélection à longue distance, fusion (Interaction Reader)
 agents/base.py                 citation, identité versionnée d'un agent, entretien compact
 agents/practice_extractor.py   agent 1 : version, schéma de sortie
 agents/interaction_signal_reader.py  agent 2 : version, schéma de sortie
 prompts/practice_extractor.md  consignes de l'agent 1
 prompts/interaction_signal_reader.md  consignes de l'agent 2
 prompts/speaker_attribution_auditor.md  consignes de l'auditeur des locuteurs
+prompts/interaction_long_distance_reader.md  consignes de la lecture à longue distance (entretien long)
 scripts/smoke_test_stage3.py   test réel (payant, sur confirmation) sur l'entretien synthétique
 docs/data_model.md             format des données transmis aux agents
 docs/agents_stage3.md          étape 3 : méthode, schémas, validation, cache, configuration
 docs/speaker_attribution_audit.md  étape 3.5 : audit de l'attribution des locuteurs
+docs/interaction_chunking.md   étape 3.6 : Interaction Reader sur les entretiens longs
 data/inputs|outputs/   données des runs (non versionnées)
 logs/                  journal trace.log (non versionné)
 tests/                 tests automatiques (pytest), documents synthétiques uniquement

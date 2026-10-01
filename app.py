@@ -82,6 +82,7 @@ STATUS_ICONS = {"PASS": "✅", "PASS_WITH_WARNINGS": "⚠️", "FAIL": "❌"}
 AI_STATUS_ICONS = {
     analysis.STATUS_PENDING: "⏳", analysis.STATUS_RUNNING: "🔄", analysis.STATUS_SUCCESS: "✅",
     analysis.STATUS_SUCCESS_WITH_WARNINGS: "⚠️", analysis.STATUS_CACHED: "♻️", analysis.STATUS_FAILED: "❌",
+    analysis.STATUS_PARTIAL: "🟠",
 }
 AI_AGENTS = {spec.name: spec for spec in analysis.AGENTS}
 AUDITOR = analysis.AUDITOR
@@ -123,7 +124,8 @@ def render_pipeline(run: dict | None, llm_enabled: bool) -> None:
         elif step in ai_steps:
             state = run["pipeline"].get(step, "inactive") if run else "inactive"
             if state != "inactive":
-                st.markdown(f"{'🟠' if 'échec' in state else '🟢'} **{index}. {step}** (IA) — {state}")
+                warn = "échec" in state or "incomplet" in state
+                st.markdown(f"{'🟠' if warn else '🟢'} **{index}. {step}** (IA) — {state}")
             elif llm_enabled:
                 st.markdown(f"🔵 **{index}. {step}** (IA) — prête, sur action explicite")
             else:
@@ -163,15 +165,27 @@ def render_analysis_launcher(run: dict, eligible: list[dict], settings: LLMSetti
         st.error(f"Transcriptions structurées illisibles : {exc}")
         return
     at_most = "" if plan["exact"] else "au plus "
+    chunk_plans = analysis.plan_interaction_chunking(run, selected, settings)
+    long_plans = [p for p in chunk_plans if p["chunking_used"]]
     st.info(
         "Cette action effectue **2 appels LLM par entretien non présent dans le cache** (les deux agents), "
         "précédés d'**au plus 1 appel d'audit des locuteurs** par entretien, uniquement si des tours à "
         "l'attribution douteuse sont détectés (sinon aucun). "
-        f"Pour cette sélection : **{at_most}{plan['calls']} appel(s) API** prévu(s), "
+        + ("Un entretien long est lu par l'Interaction Reader en plusieurs blocs (un appel par bloc), "
+           "plus une lecture légère à longue distance. " if long_plans else "")
+        + f"Pour cette sélection : **{at_most}{plan['calls']} appel(s) API** prévu(s), "
         f"{plan['cached']} résultat(s) déjà en cache (sans coût). "
         f"Présélection déterministe des locuteurs : {plan['candidate_turns']} tour(s) suspect(s), "
         f"{plan['audit_calls']} appel(s) d'audit."
     )
+    st.caption(
+        f"Interaction Reader : au plus **{sum(p['max_calls'] for p in chunk_plans)} appel(s)** "
+        "pour cette sélection (estimation maximale, avant prise en compte du cache)."
+    )
+    for p in long_plans:
+        st.info(f"Interaction Reader — {p['interview_id']} : entretien long : analyse en **{p['chunk_count']} blocs** "
+                f"(chevauchement inclus), puis 1 lecture à longue distance, soit au plus "
+                f"**{p['max_calls']} appels** Interaction Reader.")
     confirmed = True
     if mode == MODE_CORPUS:
         confirmed = st.checkbox("Je confirme lancer l'analyse IA sur tout le corpus.", key="ai_confirm_corpus")
@@ -206,12 +220,39 @@ def render_analysis_launcher(run: dict, eligible: list[dict], settings: LLMSetti
             st.error(f"Analyse IA interrompue ({type(exc).__name__}) : vérifiez les fichiers du run.")
             return
     usage = st.session_state.last_run["last_analysis"]["usage"]
-    if usage["failed"]:
-        st.session_state.ai_flash = ("warning", f"Analyse IA terminée avec {usage['failed']} échec(s) : voir le détail ci-dessous.")
+    if usage["failed"] or usage.get("partial"):
+        st.session_state.ai_flash = ("warning", f"Analyse IA terminée avec {usage['failed']} échec(s) et "
+                                     f"{usage.get('partial', 0)} analyse(s) incomplète(s) : voir le détail ci-dessous.")
     else:
         st.session_state.ai_flash = ("success", "Analyse IA terminée.")
     st.session_state.ai_reset = True
     st.rerun()  # l'estimation des appels (cache) et le pipeline reflètent immédiatement le nouvel état
+
+
+def chunk_label(agent: dict) -> str:
+    """« 4/4 » (blocs réussis / total) pour un entretien long, « 1 » sinon."""
+    chunking = agent.get("chunking") or {}
+    if not chunking.get("chunking_used"):
+        return "1"
+    return f"{chunking.get('chunks_succeeded') or 0}/{chunking.get('chunk_count')}"
+
+
+def render_chunking(agent: dict) -> None:
+    """Bilan de la lecture par blocs de l'Interaction Reader (entretien long)."""
+    chunking = agent.get("chunking") or {}
+    if not chunking.get("chunking_used"):
+        return
+    line = (f"**Interaction Reader** — entretien long : analyse en {chunking['chunk_count']} blocs "
+            f"(chevauchement inclus) · blocs réussis : **{chunking.get('chunks_succeeded') or 0}/"
+            f"{chunking['chunk_count']}** · signaux finaux : **{agent.get('item_count') or 0}**")
+    if chunking.get("signals_before_dedup") is not None:
+        line += f" (avant dédoublonnage : {chunking['signals_before_dedup']})"
+    line += f" · lecture à longue distance : {chunking.get('long_distance_status') or 'n/a'}"
+    st.markdown(line)
+    if chunking.get("truncated_chunks"):
+        st.error("Bloc(s) tronqué(s) (limite de sortie atteinte) : "
+                 + ", ".join(str(c) for c in chunking["truncated_chunks"])
+                 + ". Le résultat est INCOMPLET ; relancez l'analyse pour ne refaire que les blocs manquants.")
 
 
 def render_analysis_results(run: dict) -> None:
@@ -252,6 +293,7 @@ def render_analysis_results(run: dict) -> None:
             "Tokens facturés (entrée / sortie)": " / ".join(
                 format_count(sum(u.get(k) or 0 for u in billed)) for k in ("input_tokens", "output_tokens")),
             "Avertissements": "oui" if any(a.get("has_warnings") for a in agents.values()) else "non",
+            "Blocs (Interaction)": chunk_label(signals),
         })
     st.table(rows)
 
@@ -262,6 +304,7 @@ def render_analysis_results(run: dict) -> None:
             for name, agent in summary["agents"].items():
                 if agent.get("error"):
                     st.error(f"{AI_AGENTS[name].label} : {agent['error']['message']}")
+            render_chunking(summary["agents"]["interaction_signal_reader"])
             practice_json = read_analysis_file(summary, AI_AGENTS["practice_extractor"].output_filename)
             signals_json = read_analysis_file(summary, AI_AGENTS["interaction_signal_reader"].output_filename)
             validation_json = read_analysis_file(summary, config.EVIDENCE_VALIDATION_FILENAME)

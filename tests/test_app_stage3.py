@@ -137,6 +137,10 @@ def restore_project_modules():
     for name in [n for n in sys.modules if n.split(".")[0] in ("core", "agents")]:
         del sys.modules[name]
     sys.modules.update(saved)
+    for name, module in saved.items():  # `from core import analysis` lit l'attribut du paquet, pas sys.modules
+        package, _, attribute = name.rpartition(".")
+        if package in saved:
+            setattr(saved[package], attribute, module)
 
 
 def test_app_reloads_stale_analysis_module_after_hot_redeploy(restore_project_modules):
@@ -156,3 +160,56 @@ def test_app_reloads_stale_analysis_module_after_hot_redeploy(restore_project_mo
     at = AppTest.from_file(APP, default_timeout=30).run()
     assert not at.exception
     assert hasattr(sys.modules["core.analysis"], "AUDITOR")
+
+
+# --- Étape 3.6 : entretien long lu par blocs ----------------------------------------------------
+
+def long_interview_api(monkeypatch, interaction=None):
+    from tests import synthetic_long_interview as L
+    from tests.fake_llm import LONG_DISTANCE
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-FAKE-KEY-000")
+    monkeypatch.setenv("ANTHROPIC_MODEL", "fake-model")
+    transport = FakeTransport({PRACTICE: lambda p: text_response({"practices": [], "extraction_notes": None}),
+                               INTERACTION: interaction or L.simulated_chunk_reader,
+                               LONG_DISTANCE: L.simulated_long_distance_reader})
+    monkeypatch.setattr(llm_client, "AnthropicTransport", lambda settings: transport)
+    return transport
+
+
+def test_long_interview_announces_blocks_then_shows_chunk_results(tmp_path, monkeypatch):
+    from tests import synthetic_long_interview as L
+    transport = long_interview_api(monkeypatch)
+    at = app_with_run(si.make_ingested_run(tmp_path, L.long_files()))
+    assert not at.exception and transport.calls == []
+    assert ("Interaction Reader — ENTRETIEN_LONG : entretien long : analyse en **5 blocs** (chevauchement inclus)"
+            in texts(at.info))
+    assert "au plus **6 appels** Interaction Reader" in texts(at.info)
+    assert "Interaction Reader : au plus **6 appel(s)**" in texts(at.caption)
+    assert "(au plus 7 appel(s) API payant(s))" in at.button(key="ai_launch").label
+    at.button(key="ai_launch").click().run()
+    assert not at.exception and len(transport.calls) == 7
+    table = at.table[-1].value
+    assert list(table["Interaction Reader"]) == ["✅ SUCCESS"] and list(table["Blocs (Interaction)"]) == ["5/5"]
+    assert "entretien long : analyse en 5 blocs (chevauchement inclus) · blocs réussis : **5/5**" in texts(at.markdown)
+    assert "Télécharger interaction_signals.json" in [b.label for b in at.get("download_button")]
+    assert "(0 appel(s) API payant(s))" in at.button(key="ai_launch").label  # tout est en cache
+
+
+def test_truncated_block_is_shown_as_incomplete(tmp_path, monkeypatch):
+    from tests import synthetic_long_interview as L
+
+    def truncating(params):
+        if any(t["turn_id"] == L.ltid(200) for t in L.sent_turns(params)):
+            return text_response('{"signals": [', stop_reason="max_tokens")
+        return L.simulated_chunk_reader(params)
+
+    long_interview_api(monkeypatch, truncating)
+    at = app_with_run(si.make_ingested_run(tmp_path, L.long_files()))
+    at.button(key="ai_launch").click().run()
+    assert not at.exception
+    table = at.table[-1].value
+    assert list(table["Interaction Reader"]) == ["🟠 PARTIAL"] and list(table["Blocs (Interaction)"]) == ["4/5"]
+    assert "analyse(s) incomplète(s)" in texts(at.warning)
+    errors = texts(at.error)
+    assert "Analyse INCOMPLÈTE : 4/5 bloc(s) réussi(s)" in errors and "Bloc(s) tronqué(s)" in errors
+    assert "(au plus 2 appel(s) API payant(s))" in at.button(key="ai_launch").label  # bloc 3 + longue distance

@@ -182,6 +182,14 @@ préférence énoncée (`preference_statement`) en trait de la personne
 (autonomie, résistance, identité, position morale). Rire et silence ne sont
 relevés que s'ils sont **transcrits**.
 
+### Entretiens longs (étape 3.6)
+
+Au-delà d'environ 7 000 tokens estimés, l'Interaction Signal Reader lit
+l'entretien en blocs de tours qui se chevauchent (même agent, mêmes consignes,
+même schéma), puis une lecture légère rapproche les passages éloignés ; les
+signaux sont fusionnés de façon déterministe en un seul `interaction_signals.json`.
+Détails : [`interaction_chunking.md`](interaction_chunking.md).
+
 ### Schéma d'un signal (schema_version 1.2)
 
 | Champ | Contenu |
@@ -357,7 +365,10 @@ n'est pas connu localement de façon fiable.
 ## 10. Statuts et erreurs
 
 `PENDING` → `RUNNING` → `SUCCESS` | `SUCCESS_WITH_WARNINGS` (au moins une
-anomalie `error`/`warning` de validation) | `FAILED` | `CACHED`.
+anomalie `error`/`warning` de validation) | `FAILED` | `CACHED` | `PARTIAL`
+(Interaction Reader sur un entretien long : au moins un bloc en échec ou
+tronqué — `TRUNCATED` au niveau du bloc ; les blocs réussis sont conservés,
+`analysis_complete: false`, voir [`interaction_chunking.md`](interaction_chunking.md)).
 
 Erreurs API traduites en messages clairs (`core/llm_client.py`) : clé refusée
 (401), accès refusé (403), modèle introuvable (404), requête refusée (400, avec
@@ -376,7 +387,8 @@ citation : identifiant d'entretien, agent, statut, tokens, durée.
    console Anthropic) et `ANTHROPIC_MODEL` (par exemple `claude-opus-5-5`).
    Le modèle n'est écrit nulle part ailleurs.
 2. Optionnel : `TRACE_MAX_CONCURRENCY` (défaut 2), `TRACE_LLM_EFFORT`,
-   `TRACE_LLM_MAX_TOKENS`, `TRACE_LLM_TIMEOUT_SECONDS`, `TRACE_LLM_MAX_RETRIES`.
+   `TRACE_LLM_MAX_TOKENS`, `TRACE_LLM_TIMEOUT_SECONDS`, `TRACE_LLM_MAX_RETRIES`,
+   `TRACE_INTERACTION_CHUNK_TOKENS` (taille d'un bloc de l'Interaction Reader, défaut 5 000).
    `TRACE_LLM_TEMPERATURE` n'est envoyé que s'il est renseigné : les modèles
    récents refusent les paramètres d'échantillonnage (erreur 400). La
    reproductibilité repose donc d'abord sur le cache (mêmes entrées → même
@@ -410,6 +422,7 @@ sont dans `tests/synthetic_interviews.py`.
 - `tests/test_speaker_attribution_auditor.py` — présélection, appel unique ou nul, cache, transcript inchangé, avertissements
 - `tests/test_interpretation_guard.py` — « réparation » ordinaire / interprétative
 - `tests/test_stage3_5_synthetic.py` — scénario global de l'étape 3.5
+- `tests/test_interaction_chunking.py` — étape 3.6 : entretien long (349 tours synthétiques), blocs, chevauchement, fusion, longue distance, bloc tronqué, cache par bloc, avertissements
 - `tests/test_app_stage3.py` — interface (Streamlit AppTest)
 - `tests/e2e/browser_check.py` — navigateur réel (Playwright), lancé à la main
 
@@ -429,8 +442,10 @@ sont dans `tests/synthetic_interviews.py`.
   --stage35` (3 appels, payant) permet de le vérifier sur l'entretien synthétique.
 - Une citation exacte mais trop courte (« oui ») est valide techniquement
   sans être forcément probante.
-- Un entretien très long est envoyé en un seul appel (pas de découpage) ; au-delà
-  de la limite de réponse, l'analyse échoue avec `TRUNCATED`.
+- Un entretien long est lu par l'Interaction Signal Reader en blocs qui se
+  chevauchent (étape 3.6, [`interaction_chunking.md`](interaction_chunking.md)) ;
+  le Practice Extractor reste en un seul appel (au-delà de la limite de réponse,
+  il échouerait avec `TRUNCATED`).
 - Les tours de locuteur `unknown` sont transmis tels quels : l'agent ne sait
   pas toujours qui parle.
 - Le cache de prompt de l'API ne s'active que si les consignes dépassent la

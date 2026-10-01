@@ -13,6 +13,8 @@ inventée côté Practice Extractor, afin de montrer la détection des fausses
 citations. Pour l'entretien synthétique de l'étape 3.5 (Entretien_etape_3_5.txt,
 dont un tour est volontairement mal attribué), les trois réponses simulées
 (audit des locuteurs, pratiques, signaux) sont celles de tests/test_stage3_5_synthetic.py.
+Pour l'entretien long synthétique de l'étape 3.6 (Entretien_long.txt, 349 tours), chaque
+bloc et la lecture à longue distance sont simulés par tests/synthetic_long_interview.py.
 Pour tout autre entretien, les agents simulés ne renvoient rien.
 """
 
@@ -30,7 +32,8 @@ os.environ["ANTHROPIC_MODEL"] = "fake-model"
 import core.llm_client as llm_client  # noqa: E402
 from core import config  # noqa: E402
 from tests import synthetic_interviews as si  # noqa: E402
-from tests.fake_llm import AUDITOR, INTERACTION, PRACTICE, FakeTransport, text_response  # noqa: E402
+from tests import synthetic_long_interview as long_interview  # noqa: E402
+from tests.fake_llm import AUDITOR, INTERACTION, LONG_DISTANCE, PRACTICE, FakeTransport, text_response  # noqa: E402
 
 if os.environ.get("TRACE_E2E_CACHE_DIR"):
     config.CACHE_DIR = Path(os.environ["TRACE_E2E_CACHE_DIR"])
@@ -54,7 +57,13 @@ def _practices(params):
     return text_response({"practices": [], "extraction_notes": None}, input_tokens=300, output_tokens=20)
 
 
+def _is_long(params: dict) -> bool:
+    return long_interview.LONG_INTERVIEW_ID in params["messages"][0]["content"]
+
+
 def _signals(params):
+    if _is_long(params):
+        return long_interview.simulated_chunk_reader(params)
     if _is_stage35(params):
         return text_response(si.STAGE35_SIGNALS, input_tokens=2200, output_tokens=900)
     if _is_synthetic(params):
@@ -69,6 +78,7 @@ def _audit(params):
 
 
 llm_client.AnthropicTransport = lambda settings: FakeTransport(
-    {PRACTICE: _practices, INTERACTION: _signals, AUDITOR: _audit})
+    {PRACTICE: _practices, INTERACTION: _signals, AUDITOR: _audit,
+     LONG_DISTANCE: long_interview.simulated_long_distance_reader})
 
 runpy.run_path(str(ROOT / "app.py"), run_name="__main__")
