@@ -1,10 +1,10 @@
 # Étape 3.7 — stabilisation de l'étape 3 sur les entretiens longs
 
-> **Exécution** : les agents sont joués par Claude Code (workflow multi-agents,
-> [`TRACE_WORKFLOW.md`](../TRACE_WORKFLOW.md)), sans aucun appel à une API de modèle. Dans ce document, un
-> « appel » désigne une **tâche d'agent** du workflow ; les mentions de tokens facturés, de cache de l'API ou
-> de `TRACE_LLM_MAX_TOKENS` décrivent la conception d'origine (exécution par API, retirée) : les champs
-> correspondants des manifests sont conservés et valent toujours 0 / `null`.
+> **Exécution** : les agents sont exécutés localement par un modèle servi par Ollama
+> ([`local_runtime.md`](local_runtime.md)), sans aucune API ni clé. Dans ce document, un « appel » désigne un
+> appel au modèle local ; les mentions de tokens facturés, de cache de l'API ou de `TRACE_LLM_MAX_TOKENS`
+> décrivent la conception d'origine (exécution par API, retirée) : `api_calls` et `billed_this_run` valent
+> toujours 0 / `false`.
 
 Dernier patch de l'étape 3 avant l'étape 4. Rien de l'étape 4 n'est construit ici.
 

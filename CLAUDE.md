@@ -1,12 +1,16 @@
-# TRACE — consignes pour Claude Code
+# TRACE — notes pour le développement du dépôt
 
-- Exécuter TRACE sur un entretien, ou les tâches TRACE en attente d'un run : suivre **`TRACE_WORKFLOW.md`**
-  (commandes `python scripts/trace_workflow.py …`, un sous-agent `trace-agent` par tâche).
-- Les **étapes 3 à 6** passent par ce workflow : étapes 3 à 5 par run (`run <run> --until 5`), étape 6 par
-  corpus de sorties de l'étape 5 (`stage6 <runs, dossiers ou fichiers>`, puis `stage6 --corpus <corpus_id>`). Une
-  étape (ou un corpus) déjà complète n'est jamais rejouée. Pas d'étape 7 : s'arrêter après l'étape demandée.
-- TRACE est un workflow multi-agents exécuté dans Claude Code : aucun appel à une API de modèle (Anthropic ou
-  autre), aucun SDK, aucune clé ; n'en ajouter aucun. Ne jamais utiliser `--force` sans demande explicite.
+Ce fichier ne sert qu'au DÉVELOPPEMENT. Claude Code n'est pas nécessaire pour utiliser TRACE : les étapes 1 à 6
+s'exécutent localement (Streamlit ou `python scripts/trace_local.py`), les agents étant joués par un modèle local
+servi par Ollama (voir `docs/local_runtime.md`).
+
+- Architecture : `app.py` → `core/local_pipeline.py` (gardes, étapes 3 à 6) → orchestrateurs habituels
+  (`core/analysis.py`, `accountability.py`, `trajectory.py`, `cross_interview.py`) → `core/local_agent_runner.py`
+  (Ollama local, JSON Schema, Pydantic, `core/agent_checks.py`, corrections locales) → validateurs habituels.
+- Aucun appel à une API de modèle externe (Anthropic, OpenAI, Gemini…), aucun SDK, aucune clé, aucun repli ;
+  Ollama uniquement sur la boucle locale. N'en ajouter aucun.
 - Les prompts `prompts/*.md`, les schémas (`agents/`) et les validateurs (`core/`) font foi : ne jamais les modifier
-  pour faire passer une réponse.
-- Tests : `python -m pytest` (aucun appel réseau, agents simulés).
+  pour faire passer une réponse ; aucune règle méthodologique ne se modifie sans demande explicite.
+- Tests : `python -m pytest` (aucun modèle réel, aucun réseau : faux Ollama derrière le vrai runner local).
+- Test navigateur (à la main) : `python tests/e2e/browser_check.py` (Playwright + Chromium).
+- Pas d'étape 7 sans demande explicite.

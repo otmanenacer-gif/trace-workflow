@@ -2,16 +2,15 @@
 
     python tests/e2e/browser_check.py [--screenshots DOSSIER] [--chromium CHEMIN]
 
-Les étapes 3 à 6 passent par le workflow Claude Code (boutons « Préparer / reprendre l'étape N ») ; avec
-tests/e2e/fake_llm_app.py, chaque tâche écrite est aussitôt jouée par les agents simulés (response.json), puis
-validée par TRACE. Scénarios, chacun avec un serveur Streamlit local :
-A. app.py tel quel, sans clé : ingestion, puis étape 3 : les tâches d'agent sont écrites et listées « en attente »
-   avec l'instruction à donner à Claude Code ; aucune étape désactivée ;
+Les étapes 3 à 6 sont exécutées localement par TRACE (boutons « Exécuter l'étape N (local, Ollama) ») ; avec
+tests/e2e/fake_llm_app.py, le vrai runner local interroge un faux Ollama (agents simulés), puis TRACE valide. Scénarios, chacun avec un serveur Streamlit local :
+A. app.py tel quel, sans clé ni Ollama : bloc « Exécution : locale / Runtime : Ollama / Données externes : aucune »,
+   ingestion OK, étape 3 : erreur claire « Ollama ne répond pas », aucun autre fournisseur ;
 B. tests/e2e/fake_llm_app.py (agents simulés) : import de l'entretien synthétique,
-   ingestion, puis étape 3 en mode test (2 tâches d'agent), statuts, comptes,
+   ingestion, puis étape 3 en mode test (2 appels au modèle local), statuts, comptes,
    citation inventée détectée, relance non rejouée (étape complète), mode corpus ;
 C. étape 3.5 (agents simulés) : entretien synthétique dont un tour est mal attribué,
-   1 tâche d'audit + 2 agents, avertissement affiché, transcription inchangée ;
+   1 appel d'audit + 2 agents, avertissement affiché, transcription inchangée ;
 D. étape 3.6 (agents simulés) : entretien long synthétique (349 tours), 5 blocs + 1 lecture à longue distance,
    bilan des blocs, téléchargement de interaction_signals.json fusionné (citations valides) ;
 E. étape 3.7 (agents simulés) : entretien long synthétique saturé de remplisseurs (330 tours),
@@ -19,27 +18,27 @@ E. étape 3.7 (agents simulés) : entretien long synthétique saturé de remplis
    lecteur Interaction qui surcode, bilan (blocs, pratiques/signaux avant et après
    dédoublonnage, anomalies de validation), téléchargements JSON, relance non rejouée ;
 F. étape 4 (agents simulés) : entretien synthétique de référence, étape 3 puis épisodes d'accountability
-   (6 candidats, 1 tâche d'agent), tableau accountability / ordinaires / incertains, aperçu,
+   (6 candidats, 1 appel au modèle local), tableau accountability / ordinaires / incertains, aperçu,
    téléchargements JSON vérifiés, relance non rejouée (étape complète) ;
-G. étape 4 sur l'entretien long synthétique (320 tours) : 8 candidats pour 31 pratiques, 1 tâche d'agent,
+G. étape 4 sur l'entretien long synthétique (320 tours) : 8 candidats pour 31 pratiques, 1 appel au modèle local,
    5 épisodes, 3 pratiques ordinaires examinées, 20 sans marqueur ;
 H. restauration (serveur neuf, cache vide, comme après un redéploiement) : l'entretien de l'étape 4 est
    réimporté, ses 4 JSON d'étape 3 (calculés au préalable par les agents simulés) sont importés dans
-   « Restaurer des résultats Stage 3 existants », puis l'étape 4 est lancée : aucune tâche d'étape 3,
-   1 tâche d'agent d'étape 4, résultats identiques ;
+   « Restaurer des résultats Stage 3 existants », puis l'étape 4 est lancée : aucun appel d'étape 3,
+   1 appel au modèle local d'étape 4, résultats identiques ;
 I. étape 4.1 : entretien de régression « OTMANE » synthétique (388 tours, longs tours à plusieurs pratiques) :
-   26 candidats, représentation normalisée, 1 tâche d'agent, 17 épisodes / 8 ordinaires examinées / 22 sans marqueur,
+   26 candidats, représentation normalisée, 1 appel au modèle local, 17 épisodes / 8 ordinaires examinées / 22 sans marqueur,
    aucune fusion de composantes déconnectées, aucun avertissement ;
-J. étape 5 après l'étape 4 (entretien de référence, sans temporalité) : 1 tâche d'agent, configuration contextuelle,
+J. étape 5 après l'étape 4 (entretien de référence, sans temporalité) : 1 appel au modèle local, configuration contextuelle,
    aperçu, 3 téléchargements JSON vérifiés, relance non rejouée (étape complète) ;
 K. étape 5 sur un entretien à vraie temporalité (« Au lycée » / « Maintenant ») : trajectoire temporelle explicite ;
 L. restauration des étapes 3 PUIS 4 (serveur neuf, cache vide) : « Stage 4 restauré depuis fichiers — 0 appel API »,
-   puis étape 5 directement : 1 tâche d'agent, aucune exécution des étapes 3 et 4 ;
-M. étape 5 sur l'entretien long « OTMANE-like » (190 tours, 50 pratiques, 20 épisodes) : 1 tâche d'agent,
+   puis étape 5 directement : 1 appel au modèle local, aucune exécution des étapes 3 et 4 ;
+M. étape 5 sur l'entretien long « OTMANE-like » (190 tours, 50 pratiques, 20 épisodes) : 1 appel au modèle local,
    configuration mixte ;
-N. étape 6, sans run : import de 2 triplets d'étape 5 → comparaison EXPLORATOIRE (1 tâche d'agent) ;
+N. étape 6, sans run : import de 2 triplets d'étape 5 → comparaison EXPLORATOIRE (1 appel au modèle local) ;
 O. étape 6 sur le corpus synthétique de 17 entretiens + un entretien invalide + un fichier illisible : tableau du corpus
-   (18 entretiens, 17 exploitables, raison d'exclusion), 1 tâche d'agent, cas négatifs et éléments à revoir visibles,
+   (18 entretiens, 17 exploitables, raison d'exclusion), 1 appel au modèle local, cas négatifs et éléments à revoir visibles,
    3 téléchargements JSON vérifiés ;
 P. relance de l'étape 6 sur le même corpus : corpus déjà complet, non rejoué.
 
@@ -81,13 +80,13 @@ from tests import synthetic_stage5_long as stage5_long  # noqa: E402
 from tests import synthetic_stage6 as stage6  # noqa: E402
 
 TIMEOUT_MS = 30_000
-WORKFLOW_BUTTON = "Préparer / reprendre l'étape {} (workflow Claude Code, 0 appel API)"
-WORKFLOW_DONE = "Étape {} terminée (workflow Claude Code, 0 appel API)."
+WORKFLOW_BUTTON = "Exécuter l'étape {} (local, Ollama)"
+WORKFLOW_DONE = "Étape {} terminée (exécution locale, modèle qwen2.5:14b, 0 appel API)."
 NO_COST = "0 appel(s) API — 0 tokens entrée — 0 tokens sortie"
 
 
 def run_workflow_stage(page, stage: int) -> None:
-    """Clique « Préparer / reprendre l'étape N » et attend la fin de l'étape (tâches jouées par les agents simulés)."""
+    """Clique « Exécuter l'étape N (local, Ollama) » et attend la fin de l'étape (faux Ollama, agents simulés)."""
     wait_idle(page)
     page.get_by_role("button", name=WORKFLOW_BUTTON.format(stage)).click()
     expect(page.get_by_text(WORKFLOW_DONE.format(stage)).first).to_be_visible(timeout=TIMEOUT_MS)
@@ -148,22 +147,23 @@ def scenario_without_key(browser, url: str, interview: Path, shots: Path) -> Non
     page = browser.new_page(viewport={"width": 1400, "height": 1000})
     page.goto(url)
     expect(page.get_by_role("heading", name="TRACE", exact=True)).to_be_visible(timeout=TIMEOUT_MS)
-    expect(page.get_by_text("prête, workflow Claude Code (0 appel API)").first).to_be_visible(timeout=TIMEOUT_MS)
+    expect(page.get_by_text("prête, exécution locale (Ollama)").first).to_be_visible(timeout=TIMEOUT_MS)
+    expect(page.get_by_text("Données externes", exact=False).first).to_be_visible()
     assert page.get_by_text("désactivée", exact=False).count() == 0
     upload_and_ingest(page, interview)
     page.get_by_role("button", name=WORKFLOW_BUTTON.format(3)).click()
-    expect(page.get_by_text("tâche(s) d'agent en attente", exact=False).first).to_be_visible(timeout=TIMEOUT_MS)
-    expect(page.get_by_text("Exécute les tâches TRACE en attente du run", exact=False).first).to_be_visible()
+    # aucun Ollama sur la machine du test : erreur claire, rien n'est écrit, aucun autre fournisseur
+    expect(page.get_by_text("Aucun autre fournisseur", exact=False).first).to_be_visible(timeout=TIMEOUT_MS)
     assert_no_exception(page)
     page.screenshot(path=str(shots / "A_sans_cle.png"), full_page=True)
-    print("A. sans clé : ingestion OK, étape 3 : tâches d'agent écrites, en attente de Claude Code, 0 appel API")
+    print("A. sans clé ni Ollama : ingestion OK, étape 3 : erreur claire (Ollama ne répond pas), aucun repli")
 
 
 def scenario_fake_llm(browser, url: str, interview: Path, shots: Path) -> None:
     page = browser.new_page(viewport={"width": 1400, "height": 1000})
     page.goto(url)
     upload_and_ingest(page, interview)
-    expect(page.get_by_text("Workflow Claude Code", exact=False).first).to_be_visible()
+    expect(page.get_by_text("Exécution locale", exact=False).first).to_be_visible()
     page.screenshot(path=str(shots / "B1_avant_lancement.png"), full_page=True)
 
     run_workflow_stage(page, 3)
@@ -174,7 +174,7 @@ def scenario_fake_llm(browser, url: str, interview: Path, shots: Path) -> None:
     row = table.locator("tbody tr").first
     cells = [c.strip() for c in row.locator("td").all_inner_texts()]
     print("   ligne de résultats :", cells)
-    assert cells[1:4] == ["✅ SUCCESS", "0", "0"], cells  # audit des locuteurs : aucun tour suspect, aucune tâche
+    assert cells[1:4] == ["✅ SUCCESS", "0", "0"], cells  # audit des locuteurs : aucun tour suspect, aucun appel
     assert cells[6:9] == ["6", "10", "1"], cells  # pratiques, signaux, citations invalides
     assert cells[-1] == "1", cells  # entretien court : un seul bloc (un appel Interaction Reader)
     page.get_by_text("Analyse IA — ENTRETIEN_SYNTHETIQUE — aperçu").click()
@@ -210,7 +210,7 @@ def scenario_stage35(browser, url: str, interview: Path, shots: Path) -> None:
     expect(page.get_by_text("Ces suggestions ne modifient pas la transcription originale.")).to_be_visible()
     expect(page.get_by_role("button", name="Télécharger speaker_attribution_audit.json")).to_be_visible()
     page.screenshot(path=str(shots / "C_etape_3_5_audit_locuteurs.png"), full_page=True)
-    print("C. étape 3.5 : 1 tâche d'audit + 2 agents, tour mal attribué signalé, transcription non modifiable")
+    print("C. étape 3.5 : 1 appel d'audit + 2 agents, tour mal attribué signalé, transcription non modifiable")
 
 
 def wait_idle(page) -> None:
@@ -340,7 +340,7 @@ def scenario_stage4(browser, url: str, interview: Path, shots: Path) -> None:
     assert uncertain["speaker_warnings"] and uncertain["needs_review"] is True
     assert validation["status"] == "SUCCESS" and validation["error_count"] == validation["warning_count"] == 0
     assert_no_exception(page)
-    print("F. étape 4 : 6 candidats, 1 tâche d'agent, 4 épisodes / 1 ordinaire examinée + 4 sans marqueur / "
+    print("F. étape 4 : 6 candidats, 1 appel au modèle local, 4 épisodes / 1 ordinaire examinée + 4 sans marqueur / "
           "1 incertain, téléchargements JSON OK, 0 appel API")
 
     run_workflow_stage(page, 4)
@@ -360,7 +360,7 @@ def scenario_stage4_long(browser, url: str, interview: Path, shots: Path) -> Non
     assert row == [stage4_long.INTERVIEW_ID, "COMPLETE", "✅ SUCCESS", "8", "5", "3", "20", "0", "0", "0", "0"], row
     assert_no_exception(page)
     page.screenshot(path=str(shots / "G_etape_4_long.png"), full_page=True)
-    print("G. étape 4, entretien long : 31 pratiques → 8 candidats, 1 tâche, 5 épisodes, 3 ordinaires examinées, "
+    print("G. étape 4, entretien long : 31 pratiques → 8 candidats, 1 appel local, 5 épisodes, 3 ordinaires examinées, "
           "20 sans marqueur")
 
 
@@ -411,7 +411,7 @@ def scenario_restore(browser, url: str, interview: Path, downloads: list[Path], 
     assert_no_exception(page)
     page.screenshot(path=str(shots / "H2_restauration_etape_4.png"), full_page=True)
     print("H. restauration : 4 JSON importés, « Stage 3 restauré depuis fichiers — 0 appel API », "
-          "aucune tâche d'étape 3, étape 4 : 1 tâche, 4 épisodes / 1 ordinaire + 4 sans marqueur / 1 incertain")
+          "aucun appel d'étape 3, étape 4 : 1 appel local, 4 épisodes / 1 ordinaire + 4 sans marqueur / 1 incertain")
 
 
 def scenario_otmane(browser, url: str, interview: Path, shots: Path) -> None:
@@ -429,7 +429,7 @@ def scenario_otmane(browser, url: str, interview: Path, shots: Path) -> None:
     assert "coupable" not in json.dumps(episodes["episodes"], ensure_ascii=False)
     assert_no_exception(page)
     page.screenshot(path=str(shots / "I_etape_4_1_otmane.png"), full_page=True)
-    print("I. étape 4.1 « OTMANE » synthétique : 26 candidats, 1 tâche, 25 épisodes utilisables, aucune fusion "
+    print("I. étape 4.1 « OTMANE » synthétique : 26 candidats, 1 appel local, 25 épisodes utilisables, aucune fusion "
           "déconnectée, mot de l'enquêteur non attribué")
 
 
@@ -467,7 +467,7 @@ def stage5_after_stage4(page, shots: Path) -> None:
     assert len(document["exceptions"]) == len(document["ordinary_zones"]) == 1
     assert validation["error_count"] == validation["warning_count"] == 0
     assert manifest["api_calls"] == 0 and manifest["llm_called"] is True and manifest["stage4_status"] == "COMPLETE"
-    print("J. étape 5 après l'étape 4 : 1 tâche, configuration contextuelle, 3 affirmations, 2 critères, "
+    print("J. étape 5 après l'étape 4 : 1 appel local, configuration contextuelle, 3 affirmations, 2 critères, "
           "téléchargements JSON OK, 0 appel API")
     run_workflow_stage(page, 5)
     row = stage5_row(page)
@@ -513,7 +513,7 @@ def scenario_stage5_long(browser, url: str, interview: Path, shots: Path) -> Non
                    "mixte (changement temporel explicite et variations contextuelles)", "10", "2", "2", "1", "1", "1",
                    "2", "5", "0", "0"], row
     page.screenshot(path=str(shots / "M_etape_5_long.png"), full_page=True)
-    print("M. étape 5, entretien long OTMANE-like : 50 pratiques, 20 épisodes, 1 tâche, configuration mixte")
+    print("M. étape 5, entretien long OTMANE-like : 50 pratiques, 20 épisodes, 1 appel local, configuration mixte")
 
 
 def stage4_downloads(work: Path) -> list[Path]:
@@ -567,8 +567,8 @@ def scenario_restore_stage4(browser, url: str, interview: Path, downloads: list[
     expect(page.get_by_text("(restaurée depuis fichiers)", exact=False).first).to_be_visible(timeout=TIMEOUT_MS)
     assert_no_exception(page)
     page.screenshot(path=str(shots / "L2_restauration_etape_4_etape_5.png"), full_page=True)
-    print("L. restauration étapes 3 et 4 : « Stage 4 restauré depuis fichiers — 0 appel API », étape 5 : 1 tâche, "
-          "aucune tâche d'étape 3 ou 4")
+    print("L. restauration étapes 3 et 4 : « Stage 4 restauré depuis fichiers — 0 appel API », étape 5 : 1 appel local, "
+          "aucun appel d'étape 3 ou 4")
 
 
 STAGE6_LABEL = "Sorties de l'étape 5"
@@ -614,7 +614,7 @@ def scenario_stage6_exploratory(browser, url: str, corpus_dir: Path, shots: Path
     assert document["exploratory"] is True and (document["corpus_n_total"], document["corpus_n_usable"]) == (2, 2)
     assert all(c["confidence"] != "high" for c in document["cross_case_claims"])
     page.screenshot(path=str(shots / "N_etape_6_exploratoire.png"), full_page=True)
-    print("N. étape 6 exploratoire : 2 entretiens importés depuis fichiers, 1 tâche, aucune confiance « high »")
+    print("N. étape 6 exploratoire : 2 entretiens importés depuis fichiers, 1 appel local, aucune confiance « high »")
 
 
 def scenario_stage6_corpus(browser, url: str, corpus_dir: Path, shots: Path) -> None:
@@ -650,7 +650,7 @@ def scenario_stage6_corpus(browser, url: str, corpus_dir: Path, shots: Path) -> 
     assert validation["error_count"] == 0 and validation["excluded_interviews"][0]["interview_id"] == "ENT_X_INVALIDE"
     assert manifest["api_calls"] == 0 and manifest["llm_called"] is True and manifest["map_reduce_used"] is False
     assert manifest["upstream_stage_calls"] == 0 and manifest["estimated_input_tokens"] < 12_000
-    print(f"O. étape 6 sur 17 entretiens (+1 invalide, +1 illisible) : 1 tâche, 0 appel API, "
+    print(f"O. étape 6 sur 17 entretiens (+1 invalide, +1 illisible) : 1 appel local, 0 appel API, "
           f"{manifest['estimated_input_tokens']} tokens estimés, {manifest['payload_chars']} caractères, "
           "3 cas négatifs (ENT_D, ENT_H, ENT_L), 1 pattern à revoir, téléchargements JSON OK")
 

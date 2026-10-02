@@ -1,12 +1,11 @@
-"""Interface Streamlit de l'étape 3 (AppTest : sans navigateur, agents simulés joués à travers le workflow)."""
+"""Interface Streamlit de l'étape 3 (AppTest : sans navigateur, faux Ollama derrière le vrai runner local)."""
 
 import pytest
 from streamlit.testing.v1 import AppTest
 
 from core import config
-from core.claude_code_workflow import WorkflowClient
 from tests import synthetic_interviews as si
-from tests.fake_llm import AUDITOR, INTERACTION, LONG_DISTANCE, PRACTICE, FakeAgents, answering_workflow, text_response
+from tests.fake_llm import AUDITOR, INTERACTION, LONG_DISTANCE, PRACTICE, use_fake_runtime, text_response
 
 APP = str(config.PROJECT_ROOT / "app.py")
 
@@ -21,11 +20,9 @@ def texts(elements):
     return " ".join(str(e.value) for e in elements)
 
 
-def simulate(monkeypatch, responders: dict) -> FakeAgents:
-    """Les agents répondent dans response.json dès qu'une tâche est écrite (comme un sous-agent Claude Code)."""
-    agents = FakeAgents(responders)
-    monkeypatch.setattr(WorkflowClient, "complete_json", answering_workflow(agents))
-    return agents
+def simulate(monkeypatch, responders: dict):
+    """Les agents sont exécutés par le vrai runner local, sur un faux Ollama (aucun modèle, aucun réseau)."""
+    return use_fake_runtime(monkeypatch, responders)
 
 
 @pytest.fixture
@@ -35,29 +32,53 @@ def fake_agents(monkeypatch):
 
 
 def test_app_starts_without_api_key():
-    # Étapes 3 à 6 : workflow Claude Code, aucune clé ; aucune étape IA n'est désactivée.
+    # Étapes 3 à 6 : exécution locale (Ollama), aucune clé ; aucune étape IA n'est désactivée.
     at = AppTest.from_file(APP, default_timeout=30).run()
     assert not at.exception
     assert "désactivée" not in texts(at.markdown) and "ANTHROPIC" not in texts(at.markdown) + texts(at.warning)
-    assert texts(at.markdown).count("prête, workflow Claude Code (0 appel API)") == 5  # étapes 2 à 6 du pipeline
-    assert "workflow multi-agents exécuté dans Claude Code" in texts(at.markdown)
+    assert texts(at.markdown).count("prête, exécution locale (Ollama)") == 5  # étapes 2 à 6 du pipeline
+    assert ("**Exécution :** locale · **Runtime :** Ollama · **Modèle :** `qwen2.5:14b` · **Données externes :** "
+            "aucune") in texts(at.markdown)
+    assert "Ollama ne répond pas" in texts(at.error)  # aucun vrai Ollama pendant les tests : état affiché clairement
+
+
+def test_runtime_panel_shows_a_ready_local_ollama(fake_agents):
+    at = AppTest.from_file(APP, default_timeout=30).run()
+    assert not at.exception and "modèle `qwen2.5:14b` installé" in texts(at.success)
+    assert "aucune donnée envoyée hors de cet ordinateur" in texts(at.success)
+
+
+def test_missing_model_is_shown_with_the_install_command(monkeypatch):
+    from tests.fake_llm import use_fake_runtime as fake
+    fake(monkeypatch, {}, models=["llama3.2:3b"])
+    at = AppTest.from_file(APP, default_timeout=30).run()
+    assert not at.exception and "`ollama pull qwen2.5:14b`" in texts(at.error)
+
+
+def test_running_a_stage_with_ollama_stopped_shows_a_clear_error(tmp_path, monkeypatch):
+    from tests.fake_llm import use_fake_runtime as fake
+    ollama = fake(monkeypatch, {}, available=False)
+    at = app_with_run(si.make_ingested_run(tmp_path))
+    at.button(key="run_stage3").click().run()
+    assert not at.exception and ollama.calls == []
+    assert "Ollama ne répond pas" in texts(at.error) and "Aucun autre fournisseur" in texts(at.error)
 
 
 def test_no_analysis_without_explicit_click(tmp_path, fake_agents):
     at = app_with_run(si.make_ingested_run(tmp_path))
     assert not at.exception
     assert fake_agents.calls == []
-    assert "Analyse IA — Étape 3" in texts(at.header) and "Workflow Claude Code" in texts(at.info)
-    assert not at.button(key="wf_stage3").disabled
+    assert "Analyse IA — Étape 3" in texts(at.header) and "Exécution locale" in texts(at.info)
+    assert not at.button(key="run_stage3").disabled
     assert not [b for b in at.button if b.key in ("ai_launch", "ai_force", "ai_confirm_corpus")]  # anciens lanceurs
 
 
 def test_test_mode_runs_both_agents_and_shows_results(tmp_path, fake_agents):
     at = app_with_run(si.make_ingested_run(tmp_path))
-    at.button(key="wf_stage3").click().run()
+    at.button(key="run_stage3").click().run()
     assert not at.exception
     assert sorted(c["agent"] for c in fake_agents.calls) == [INTERACTION, PRACTICE]
-    assert "Étape 3 terminée (workflow Claude Code, 0 appel API)." in texts(at.success)
+    assert "Étape 3 terminée (exécution locale, modèle qwen2.5:14b, 0 appel API)." in texts(at.success)
     table = at.table[-1].value
     assert list(table["Practice Extractor"]) == ["✅ SUCCESS"] and list(table["Interaction Reader"]) == ["✅ SUCCESS"]
     assert list(table["Pratiques"]) == [6] and list(table["Signaux"]) == [10]
@@ -69,9 +90,9 @@ def test_test_mode_runs_both_agents_and_shows_results(tmp_path, fake_agents):
     assert "🟢 **2. Extraction des pratiques** (IA) — terminé (1/1 entretien(s))" in texts(at.markdown)
 
     # Second clic : l'étape est complète et à jour, elle n'est pas rejouée
-    at.button(key="wf_stage3").click().run()
+    at.button(key="run_stage3").click().run()
     assert not at.exception and len(fake_agents.calls) == 2
-    assert "Étape 3 terminée (workflow Claude Code, 0 appel API)." in texts(at.success)
+    assert "Étape 3 terminée (exécution locale, modèle qwen2.5:14b, 0 appel API)." in texts(at.success)
     assert list(at.table[-1].value["Practice Extractor"]) == ["✅ SUCCESS"]
 
 
@@ -79,8 +100,10 @@ def test_corpus_mode_runs_every_interview(tmp_path, fake_agents):
     files = [(si.FILENAME, si.TEXT.encode("utf-8")), si.other_interview("Bob.txt", "Oui, pour traduire.")]
     at = app_with_run(si.make_ingested_run(tmp_path, files))
     at.radio(key="wf_mode").set_value("Corpus complet").run()
-    at.button(key="wf_stage3").click().run()
-    assert not at.exception and len(fake_agents.calls) == 4
+    at.button(key="run_stage3").click().run()
+    assert not at.exception
+    sent = " ".join(c["params"]["messages"][0]["content"] for c in fake_agents.calls)
+    assert si.INTERVIEW_ID + "_T" in sent and "BOB_T" in sent  # les deux entretiens du run
     assert len(at.table[-1].value) == 2
 
 
@@ -89,7 +112,7 @@ def test_speaker_audit_is_shown_and_never_editable(tmp_path, monkeypatch):
                                     INTERACTION: lambda p: text_response({"signals": [], "reading_notes": None}),
                                     AUDITOR: lambda p: text_response(si.AUDIT_ASSESSMENTS)})
     at = app_with_run(si.make_ingested_run(tmp_path, si.AUDIT_FILES))
-    at.button(key="wf_stage3").click().run()
+    at.button(key="run_stage3").click().run()
     assert not at.exception and len(agents.calls) == 3 and agents.calls[0]["agent"] == AUDITOR
     table = at.table[-1].value
     assert list(table["Audit locuteurs"]) == ["✅ SUCCESS"]
@@ -150,7 +173,7 @@ def test_long_interview_shows_chunk_results(tmp_path, monkeypatch):
     agents = long_interview_agents(monkeypatch)
     at = app_with_run(si.make_ingested_run(tmp_path, L.long_files()))
     assert not at.exception and agents.calls == []
-    at.button(key="wf_stage3").click().run()
+    at.button(key="run_stage3").click().run()
     # étape 3.7 : le Practice Extractor lit aussi l'entretien long par blocs (6 blocs) : 6 + 5 + 1 tâches
     assert not at.exception and len(agents.calls) == 12
     table = at.table[-1].value
@@ -169,9 +192,8 @@ def test_failed_block_is_shown_as_incomplete_and_listed_for_correction(tmp_path,
 
     long_interview_agents(monkeypatch, incomplete)
     at = app_with_run(si.make_ingested_run(tmp_path, L.long_files()))
-    at.button(key="wf_stage3").click().run()
+    at.button(key="run_stage3").click().run()
     assert not at.exception
-    assert "réponse à corriger" in list(next(t.value for t in at.table if "Tâche" in t.value.columns)["État"])
     table = at.table[-1].value
     assert list(table["Interaction Reader"]) == ["🟠 PARTIAL"] and list(table["Blocs (Interaction)"]) == ["4/5"]
     errors = texts(at.error)
@@ -192,7 +214,7 @@ def test_stage37_long_interview_reports_both_chunked_agents(tmp_path, monkeypatc
     agents = stage37_agents(monkeypatch)
     at = app_with_run(si.make_ingested_run(tmp_path, S.files()))
     assert not at.exception and agents.calls == []
-    at.button(key="wf_stage3").click().run()
+    at.button(key="run_stage3").click().run()
     assert not at.exception and len(agents.calls) == 9  # 1 audit + 4 + 3 + 1
     table = at.table[-1].value
     assert list(table["Practice Extractor"]) == ["✅ SUCCESS"] and list(table["Interaction Reader"]) == ["✅ SUCCESS"]
@@ -208,7 +230,7 @@ def test_stage37_long_interview_reports_both_chunked_agents(tmp_path, monkeypatc
     labels = [b.label for b in at.get("download_button")]
     for name in ("practice_extractor.json", "interaction_signals.json", "evidence_validation.json"):
         assert f"Télécharger {name}" in labels
-    at.button(key="wf_stage3").click().run()  # relance : complète et à jour, non rejouée
+    at.button(key="run_stage3").click().run()  # relance : complète et à jour, non rejouée
     assert not at.exception and len(agents.calls) == 9
 
 
@@ -223,7 +245,7 @@ def test_stage37_failed_practice_block_is_shown_as_incomplete(tmp_path, monkeypa
 
     stage37_agents(monkeypatch, incomplete)
     at = app_with_run(si.make_ingested_run(tmp_path, S.files()))
-    at.button(key="wf_stage3").click().run()
+    at.button(key="run_stage3").click().run()
     assert not at.exception
     table = at.table[-1].value
     assert list(table["Practice Extractor"]) == ["🟠 PARTIAL"] and list(table["Blocs (Practice)"]) == ["3/4"]

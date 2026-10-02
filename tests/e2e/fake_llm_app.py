@@ -2,9 +2,9 @@
 
     streamlit run tests/e2e/fake_llm_app.py
 
-Aucun appel réseau, aucune clé : les étapes 3 à 6 passent par le workflow Claude Code de TRACE
-(core/claude_code_workflow.py), mais chaque tâche écrite est aussitôt « jouée » par tests/fake_llm.FakeAgents,
-qui écrit response.json là où un sous-agent Claude Code l'écrirait ; TRACE la valide ensuite comme d'habitude.
+Aucun modèle réel, aucun appel réseau, aucune clé : les étapes 3 à 6 passent par le pipeline local de TRACE
+(core/local_pipeline.py) et le VRAI LocalAgentRunner, branché sur un faux Ollama (tests/fake_llm.FakeOllama) dont
+les réponses sont celles des agents simulés ; TRACE les valide ensuite comme d'habitude.
 Sert au test navigateur (tests/e2e/browser_check.py) et à une démonstration locale du parcours complet.
 Ne jamais utiliser pour de vraies analyses.
 
@@ -42,7 +42,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 from core import config  # noqa: E402
-from core.claude_code_workflow import WorkflowClient  # noqa: E402
+from core import local_pipeline  # noqa: E402
 from tests import synthetic_interviews as si  # noqa: E402
 from tests import synthetic_long_interview as long_interview  # noqa: E402
 from tests import synthetic_stage37 as stage37  # noqa: E402
@@ -53,7 +53,7 @@ from tests import synthetic_stage5 as stage5  # noqa: E402
 from tests import synthetic_stage5_long as stage5_long  # noqa: E402
 from tests import synthetic_stage6 as stage6  # noqa: E402
 from tests.fake_llm import (ACCOUNTABILITY, AUDITOR, COMPARATOR, INTERACTION, LONG_DISTANCE, PRACTICE,  # noqa: E402
-                            TRAJECTORY, FakeAgents, answering_workflow, text_response)
+                            TRAJECTORY, FakeLocalAgentRunner, FakeOllama, text_response)
 
 if os.environ.get("TRACE_E2E_CACHE_DIR"):
     config.CACHE_DIR = Path(os.environ["TRACE_E2E_CACHE_DIR"])
@@ -210,9 +210,16 @@ def _trajectory(params):
     return _GENERIC_STAGE5(params)
 
 
-WorkflowClient.complete_json = answering_workflow(FakeAgents(
+_OLLAMA = FakeOllama(
     {PRACTICE: _practices, INTERACTION: _signals, AUDITOR: _audit, LONG_DISTANCE: _long_distance,
      ACCOUNTABILITY: _accountability, TRAJECTORY: _trajectory,
-     COMPARATOR: stage6.scripted_comparator(stage6.GOOD_PLAN)}))
+     COMPARATOR: stage6.scripted_comparator(stage6.GOOD_PLAN)})
+
+
+def _make_runner(settings, *, journal_dir=None, checker=None):
+    return FakeLocalAgentRunner(settings=settings, ollama=_OLLAMA, checker=checker, journal_dir=journal_dir)
+
+
+local_pipeline.make_runner = _make_runner
 
 runpy.run_path(str(ROOT / "app.py"), run_name="__main__")

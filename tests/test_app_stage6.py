@@ -1,13 +1,12 @@
-"""Interface Streamlit de l'étape 6 (AppTest : sans navigateur, agents simulés joués à travers le workflow)."""
+"""Interface Streamlit de l'étape 6 (AppTest : sans navigateur, faux Ollama derrière le vrai runner local)."""
 
 import pytest
 from streamlit.testing.v1 import AppTest
 
 from core import config
-from core.claude_code_workflow import WorkflowClient
 from tests import synthetic_stage5 as S5
 from tests import synthetic_stage6 as S6
-from tests.fake_llm import COMPARATOR, FakeAgents, answering_workflow
+from tests.fake_llm import COMPARATOR, use_fake_runtime
 
 APP = str(config.PROJECT_ROOT / "app.py")
 
@@ -19,9 +18,7 @@ def texts(elements):
 @pytest.fixture
 def fake_agents(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "CROSS_INTERVIEW_DIR", tmp_path / "cross_interview")
-    agents = FakeAgents({COMPARATOR: S6.scripted_comparator(S6.GOOD_PLAN)})
-    monkeypatch.setattr(WorkflowClient, "complete_json", answering_workflow(agents))
-    return agents
+    return use_fake_runtime(monkeypatch, {COMPARATOR: S6.scripted_comparator(S6.GOOD_PLAN)})
 
 
 def app(run=None):
@@ -46,8 +43,8 @@ def test_stage6_section_is_available_without_a_run(fake_agents):
     assert "Étape 6 — Comparaison inter-entretiens" in texts(at.header)
     assert "Constituer le corpus Stage 6" in texts(at.subheader)
     assert "Aucune sortie de l'étape 5 importée." in texts(at.info)
-    assert not [b for b in at.button if b.key in ("wf_stage6", "stage6_launch")]
-    assert ("6. Comparaison transversale** (IA) — prête, workflow Claude Code (0 appel API), sur import des sorties "
+    assert not [b for b in at.button if b.key in ("run_stage6", "stage6_launch")]
+    assert ("6. Comparaison transversale** (IA) — prête, exécution locale (Ollama), sur import des sorties "
             "de l'étape 5") in texts(at.markdown)
 
 
@@ -60,15 +57,15 @@ def test_two_interviews_exploratory_then_no_replay(fake_agents):
     assert "**N importés : 2** · **N exploitables : 2** · mode : **EXPLORATOIRE (deux entretiens)**" in texts(
         at.markdown)
     assert "comparaison sera marquée EXPLORATOIRE" in texts(at.warning)
-    at.button(key="wf_stage6").click().run()
+    at.button(key="run_stage6").click().run()
     assert not at.exception and len(fake_agents.calls) == 1
-    assert "Étape 6 terminée (workflow Claude Code, 0 appel API)." in texts(at.success)
+    assert "Étape 6 terminée (exécution locale, modèle qwen2.5:14b, 0 appel API)." in texts(at.success)
     assert "Dernière exécution (étape 6) :** 0 appel(s) API" in texts(at.markdown)
     assert "Comparaison EXPLORATOIRE" in texts(at.warning)
     labels = [b.label for b in at.get("download_button")]
     for name in ("cross_interview_comparison.json", "cross_interview_validation.json", "cross_interview_manifest.json"):
         assert f"Télécharger {name}" in labels
-    at.button(key="wf_stage6").click().run()  # corpus identique, déjà complet : non rejoué
+    at.button(key="run_stage6").click().run()  # corpus identique, déjà complet : non rejoué
     assert not at.exception and len(fake_agents.calls) == 1
     assert "Comparaison EXPLORATOIRE" in texts(at.warning)
 
@@ -79,19 +76,19 @@ def test_invalid_interview_is_excluded_with_its_reason(fake_agents):
     assert list(table["statut"]) == ["✅ exploitable"] * 4 + ["❌ exclu"]
     assert "**N importés : 5** · **N exploitables : 4**" in texts(at.markdown)
     assert "ENT_X_INVALIDE exclu : validation_error_count = 2" in texts(at.error)
-    at.button(key="wf_stage6").click().run()
+    at.button(key="run_stage6").click().run()
     assert not at.exception and "N importés : **5** · N exploitables : **4**" in texts(at.markdown)
 
 
 def test_single_interview_blocks_stage6(fake_agents):
     at = upload(app(), ["ENT_A"])
     assert "Étape 6 bloquée" in texts(at.error)
-    assert not [b for b in at.button if b.key == "wf_stage6"] and fake_agents.calls == []
+    assert not [b for b in at.button if b.key == "run_stage6"] and fake_agents.calls == []
 
 
 def test_seventeen_interviews_show_negative_cases_and_review(fake_agents):
     at = upload(app(), S6.IDS_17)
-    at.button(key="wf_stage6").click().run()
+    at.button(key="run_stage6").click().run()
     assert not at.exception
     assert "cas négatifs : **3**" in texts(at.markdown) and "frontières récurrentes : **2**" in texts(at.markdown)
     negative = next(df.value for df in at.dataframe if "complique" in df.value.columns)
@@ -121,5 +118,5 @@ def test_stage5_outputs_of_the_current_run_can_be_included(fake_agents, tmp_path
 def test_without_key_the_corpus_is_checked_and_nothing_is_launched_before_the_click(fake_agents):
     at = upload(app(), S6.IDS_2)
     assert not at.exception and "N exploitables : 2" in texts(at.markdown)
-    assert [b for b in at.button if b.key == "wf_stage6"] and fake_agents.calls == []
+    assert [b for b in at.button if b.key == "run_stage6"] and fake_agents.calls == []
     assert not [b for b in at.button if b.key == "stage6_launch"]  # aucun ancien lanceur par API

@@ -1,12 +1,13 @@
-"""Garde-fous communs : AUCUN test ne peut joindre le réseau ni dépendre de l'environnement local.
+"""Garde-fous communs : AUCUN test ne peut joindre le réseau, ni un vrai Ollama, ni dépendre de l'environnement.
 
 - les variables TRACE_* lues par TRACE sont retirées de l'environnement ;
 - le fichier .env local n'est jamais chargé ;
-- toute connexion réseau TCP (IPv4 / IPv6) est refusée immédiatement ;
-- le cache d'analyse pointe vers un dossier temporaire.
+- toute connexion réseau TCP (IPv4 / IPv6), y compris vers la boucle locale (donc vers un vrai Ollama), est
+  refusée immédiatement ;
+- le cache d'analyse et les sorties de l'étape 6 pointent vers des dossiers temporaires.
 
-Les agents sont simulés (tests/fake_llm.FakeAgents) ou joués par des réponses écrites dans les paquets de tâche
-du workflow (core/claude_code_workflow.py) : aucun SDK de modèle, aucune clé.
+Les agents sont simulés : faux Ollama derrière le vrai LocalAgentRunner (tests/fake_llm.FakeLocalAgentRunner,
+use_fake_runtime) ou double minimal des orchestrateurs (FakeAgents). Aucun modèle réel, aucun SDK, aucune clé.
 """
 
 import socket
@@ -16,7 +17,7 @@ import pytest
 import core.llm_client as llm_client
 from core import config
 
-_ENV_VARS = (llm_client.ENV_INTERACTION_CHUNK_TOKENS, llm_client.ENV_PRACTICE_CHUNK_TOKENS)
+_ENV_VARS = llm_client.ENV_VARS
 
 _real_connect = socket.socket.connect
 _real_connect_ex = socket.socket.connect_ex
@@ -36,5 +37,6 @@ def no_network(monkeypatch, tmp_path):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(config, "load_env_file", lambda path=None: [])
     monkeypatch.setattr(config, "CACHE_DIR", tmp_path / "analysis_cache")
+    monkeypatch.setattr(config, "CROSS_INTERVIEW_DIR", tmp_path / "cross_interview")
     monkeypatch.setattr(socket.socket, "connect", _guard(_real_connect))
     monkeypatch.setattr(socket.socket, "connect_ex", _guard(_real_connect_ex))

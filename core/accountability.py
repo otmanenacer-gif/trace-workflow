@@ -396,7 +396,7 @@ async def run_stage4_interview(prepared: Stage4Input, client, cache: AnalysisCac
         billed = [r for r in records if r["billed_this_run"]]
         all_cached = bool(records) and all(r["cache_hit"] for r in records)
         manifest.update(
-            # appel API, ou réponse d'agent du workflow Claude Code (0 appel API, statut SUCCESS)
+            # réponse obtenue pendant cette exécution (modèle local : 0 appel API, statut SUCCESS)
             cache_hit=all_cached,
             llm_called=any(r["api_calls"] or r["status"] == STATUS_SUCCESS for r in records),
             cache_key=records[0]["cache_key"] if len(records) == 1 else None,
@@ -513,8 +513,8 @@ def _summary(prepared: Stage4Input, manifest: dict) -> dict:
 
 async def run_stage4_interviews(prepared_list: list[Stage4Input], settings: LLMSettings, *, client,
                                 cache: AnalysisCache | None = None, force: bool = False) -> list[dict]:
-    """`client` : client des agents (`complete_json`, `aclose`), injecté par le workflow Claude Code
-    (core/claude_code_workflow.WorkflowClient, AUCUN appel réseau) ou par les tests (agents simulés). Il n'est
+    """`client` : client des agents (`complete_json`, `aclose`), injecté par le pipeline local
+    (core/local_agent_runner.LocalAgentRunner : modèle local via Ollama, aucune API) ou par les tests (agents simulés). Il n'est
     sollicité que pour un entretien qui a des candidats."""
     cache = cache or AnalysisCache()
     try:
@@ -560,7 +560,7 @@ def analyze_run_stage4(metadata: dict, interview_ids: list[str] | None = None, *
                        force: bool = False) -> dict:
     """Étape 4 sur les entretiens choisis d'un run (étape 3 déjà exécutée). Met à jour metadata.json.
 
-    `client` : client des agents, injecté par le workflow Claude Code (aucune clé, aucun appel API).
+    `client` : client des agents, injecté par le pipeline local (modèle local via Ollama, aucune clé, aucune API).
     """
     settings = settings or LLMSettings.from_env()
     files = eligible_files(metadata)

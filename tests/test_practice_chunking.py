@@ -251,7 +251,7 @@ def test_failed_practice_chunk_is_partial_then_relaunch_redoes_only_it(tmp_path,
     assert doc["status"] == manifest["status"] == "PARTIAL"
     assert doc["analysis_complete"] is False and manifest["analysis_complete"] is False
     assert manifest["error"]["code"] == "PARTIAL_ANALYSIS" and "3/4" in manifest["error"]["message"]
-    assert "corrigez la réponse de l'agent" in manifest["error"]["message"]
+    assert "seuls les blocs manquants sont refaits par le modèle local" in manifest["error"]["message"]
     info = manifest["chunking"]
     assert info["failed_chunks"] == [2] and info["truncated_chunks"] == [] and info["chunks_succeeded"] == 3
     assert info["chunks"][1]["status"] == "FAILED" and info["chunks"][1]["error"]["code"] == "INVALID_JSON"

@@ -580,7 +580,7 @@ async def _long_distance_pass(prepared: PreparedInterview, chunks: list, succeed
     request = interaction_chunking.long_distance_request(transcript, chunks, selection, warnings)
     record = await _cached_call(LONG_DISTANCE, request["user_message"], client, cache, settings, force,
                                 f"{label}/longue_distance")
-    # lecture effectuée pendant ce passage : appel API, ou réponse d'agent du workflow Claude Code (0 appel API)
+    # lecture effectuée pendant cette exécution (modèle local : 0 appel API)
     llm_called = record["api_calls"] > 0 or record["status"] == STATUS_SUCCESS
     long_distance.update(_public_record(record), llm_called=llm_called, speaker_warning_count=len(request["warnings"]))
     kept: list[dict] = []
@@ -689,9 +689,8 @@ async def run_chunked_agent(spec: AgentSpec, prepared: PreparedInterview, chunks
                     parts.append(f"lecture à longue distance : {ld_record['error']['message']}")
                 error = {"code": "PARTIAL_ANALYSIS", "status_code": None, "request_id": None, "message": (
                     f"Analyse INCOMPLÈTE : {len(succeeded)}/{len(chunks)} bloc(s) réussi(s). " + " ; ".join(parts)
-                    + ". Les blocs réussis sont conservés : corrigez la réponse de l'agent des blocs en échec "
-                    "(workflow Claude Code, TRACE_WORKFLOW.md) puis rejouez l'étape, qui ne refait que les blocs "
-                    "manquants.")}
+                    + ". Les blocs réussis sont conservés (cache TRACE) : relancez l'étape, seuls les blocs "
+                    "manquants sont refaits par le modèle local.")}
             notes = [f"Bloc {chunk.index} : {rec['output'][notes_key]}" for chunk, rec in succeeded
                      if rec["output"].get(notes_key)]
             if ld_record is not None and ld_record["status"] in CALL_OK and ld_record["output"].get("reading_notes"):
@@ -978,8 +977,8 @@ async def analyze_interviews(prepared_list: list[PreparedInterview], settings: L
                              on_status: StatusCallback | None = None) -> list[dict]:
     """Analyse plusieurs entretiens.
 
-    `client` : client des agents (`complete_json`, `aclose`), injecté par le workflow Claude Code
-    (core/claude_code_workflow.WorkflowClient, AUCUN appel réseau) ou par les tests (agents simulés).
+    `client` : client des agents (`complete_json`, `aclose`), injecté par le pipeline local
+    (core/local_agent_runner.LocalAgentRunner : modèle local via Ollama, aucune API) ou par les tests (agents simulés).
     """
     cache = cache or AnalysisCache()
     try:
@@ -1043,7 +1042,7 @@ def analyze_run(metadata: dict, interview_ids: list[str] | None = None, *, clien
     """Analyse les entretiens choisis d'un run ingéré et met à jour metadata.json.
 
     `interview_ids=None` : tous les entretiens analysables. `client` : client des agents, injecté par le
-    workflow Claude Code (aucune clé, aucun appel API).
+    pipeline local (modèle local via Ollama, aucune clé, aucune API).
     """
     settings = settings or LLMSettings.from_env()
     files = eligible_files(metadata)

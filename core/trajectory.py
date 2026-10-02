@@ -358,7 +358,7 @@ async def run_stage5_interview(prepared: Stage5Input, client, cache: AnalysisCac
                                label, estimated)
             record = await _call(prepared, client, cache, settings, force, label)
             manifest.update(
-                # appel API, ou réponse d'agent du workflow Claude Code (0 appel API, statut SUCCESS)
+                # réponse obtenue pendant cette exécution (modèle local : 0 appel API, statut SUCCESS)
                 cache_key=record["cache_key"], cache_hit=record["cache_hit"],
                 llm_called=bool(record["api_calls"]) or record["status"] == STATUS_SUCCESS,
                 api_calls=record["api_calls"] or 0, billed_this_run=record["billed_this_run"], usage=record["usage"],
@@ -453,8 +453,8 @@ def _summary(prepared: Stage5Input, manifest: dict) -> dict:
 
 async def run_stage5_interviews(prepared_list: list[Stage5Input], settings: LLMSettings, *, client,
                                 cache: AnalysisCache | None = None, force: bool = False) -> list[dict]:
-    """`client` : client des agents (`complete_json`, `aclose`), injecté par le workflow Claude Code
-    (core/claude_code_workflow.WorkflowClient, AUCUN appel réseau) ou par les tests (agents simulés). Il n'est
+    """`client` : client des agents (`complete_json`, `aclose`), injecté par le pipeline local
+    (core/local_agent_runner.LocalAgentRunner : modèle local via Ollama, aucune API) ou par les tests (agents simulés). Il n'est
     sollicité que pour un entretien qui a assez de matériau."""
     cache = cache or AnalysisCache()
     try:
@@ -501,7 +501,7 @@ def analyze_run_stage5(metadata: dict, interview_ids: list[str] | None = None, *
                        force: bool = False) -> dict:
     """Étape 5 sur les entretiens choisis d'un run (étape 4 déjà disponible). Met à jour metadata.json.
 
-    `client` : client des agents, injecté par le workflow Claude Code (aucune clé, aucun appel API).
+    `client` : client des agents, injecté par le pipeline local (modèle local via Ollama, aucune clé, aucune API).
     """
     settings = settings or LLMSettings.from_env()
     files = eligible_files(metadata)

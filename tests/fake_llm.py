@@ -1,9 +1,18 @@
-"""Agents simulés pour les tests : aucune connexion réseau, aucun SDK, aucune clé.
+"""Agents simulés pour les tests : aucun modèle réel, aucune connexion réseau, aucun SDK, aucune clé.
 
-`FakeAgents` remplace, dans les orchestrateurs des étapes 3 à 6, le client des agents du workflow Claude Code
-(core.claude_code_workflow.WorkflowClient) : même interface (`complete_json`, `aclose`), même validation de la
-réponse (core.llm_client.parse_json_output : INVALID_JSON, SCHEMA_VALIDATION…) et même comptabilité (0 appel API,
-usage nul), mais la réponse de chaque agent est fournie par le test au lieu d'être écrite par Claude Code.
+- `FakeOllama` : faux Ollama (transport du LocalAgentRunner) ; chaque requête /api/chat est servie par un
+  « répondeur » du test, choisi d'après l'agent (déduit du schéma demandé). Il peut aussi simuler un Ollama arrêté
+  ou un modèle absent.
+- `FakeLocalAgentRunner` : le VRAI LocalAgentRunner (core/local_agent_runner.py) branché sur ce faux Ollama :
+  mêmes requêtes, même parsing, même validation Pydantic, mêmes corrections locales, même contrôle méthodologique.
+- `use_fake_runtime` : remplace le runner du pipeline local (core/local_pipeline.make_runner) dans un test, pour
+  exécuter les étapes 3 à 6 (ou l'interface Streamlit) de bout en bout sans modèle réel.
+- `FakeAgents` : double minimal du client des agents, branché directement sur les orchestrateurs (tests
+  d'orchestration) : une réponse par appel, sans correction.
+
+Répondeur : une réponse (`text_response(...)`, dict, texte), une exception, une liste (consommée dans l'ordre) ou
+une fonction (params) -> réponse (éventuellement async). `params` : `system`, `messages`, `output_schema`, `label`
+(et, pour FakeOllama, `attempt` et `history` : la conversation de correction).
 """
 
 from __future__ import annotations
@@ -13,7 +22,9 @@ import inspect
 import json
 from dataclasses import dataclass
 
-from core.llm_client import LLMError, LLMResult, LLMSettings, parse_json_output, usage_to_dict
+from core.llm_client import (DEFAULT_LOCAL_MODEL, LLMError, LLMResult, LLMSettings, parse_json_output,
+                             usage_to_dict)
+from core.local_agent_runner import LocalAgentRunner, model_installed
 
 PRACTICE = "practice_extractor"
 INTERACTION = "interaction_signal_reader"
@@ -28,7 +39,7 @@ FAKE_MODEL = "fake-model"  # étiquette du moteur dans les manifests des tests (
 
 @dataclass
 class AgentReply:
-    """Réponse d'un agent simulé : le texte que l'agent écrirait dans response.json."""
+    """Réponse d'un agent simulé : le texte JSON que le modèle local renverrait."""
 
     text: str
 
@@ -113,34 +124,103 @@ def fake_settings(**overrides) -> LLMSettings:
     return LLMSettings(**values)
 
 
-def answering_workflow(agents: FakeAgents):
-    """`WorkflowClient.complete_json` où chaque tâche sans réponse est jouée aussitôt par `agents` : la réponse est
-    écrite dans response.json (là où un sous-agent Claude Code l'écrirait), puis lue et validée par le vrai
-    workflow. Un répondeur qui échoue (LLMError) écrit une réponse non conforme : la tâche reste « à corriger ».
+# --- Faux Ollama et runner local simulé ----------------------------------------------------------------
 
-    Usage : monkeypatch.setattr(WorkflowClient, "complete_json", answering_workflow(agents)).
-    """
-    from core import claude_code_workflow as wf
+@dataclass
+class OllamaRaw:
+    """Réponse brute d'Ollama imposée par un répondeur (ex. `done_reason="length"` : réponse tronquée)."""
 
-    # le vrai `complete_json`, même si un remplacement précédent est en place (relance du script Streamlit)
-    original = getattr(wf.WorkflowClient.complete_json, "workflow_original", wf.WorkflowClient.complete_json)
+    text: str
+    done_reason: str = "stop"
 
-    async def complete_json(self, *, system_prompt, user_content, output_schema, response_model, label):
-        task_id = wf.task_id_for(label, system_prompt, user_content, output_schema)
-        response = self.tasks_root / task_id / wf.RESPONSE_FILENAME
-        if not response.is_file():
-            params = {"system": [{"type": "text", "text": system_prompt}],
-                      "messages": [{"role": "user", "content": user_content}],
-                      "output_schema": output_schema, "label": label}
-            try:
-                reply = await agents._respond(params)
-                text = reply.text if isinstance(reply, AgentReply) else reply
-            except LLMError:
-                text = "{}"  # réponse non conforme au schéma : SCHEMA_VALIDATION
-            response.parent.mkdir(parents=True, exist_ok=True)
-            response.write_text(text, encoding="utf-8")
-        return await original(self, system_prompt=system_prompt, user_content=user_content,
-                              output_schema=output_schema, response_model=response_model, label=label)
 
-    complete_json.workflow_original = original
-    return complete_json
+def _resolve(handler, params):
+    result = handler(params) if callable(handler) and not isinstance(handler, BaseException) else handler
+    if inspect.isawaitable(result):
+        result = asyncio.run(result)  # appelé dans un fil d'exécution sans boucle (asyncio.to_thread)
+    return result
+
+
+class FakeOllama:
+    """Faux Ollama local : `version()`, `models()`, `chat(payload)` (même forme de réponse qu'Ollama)."""
+
+    def __init__(self, responders: dict, *, models=(FAKE_MODEL, DEFAULT_LOCAL_MODEL), available: bool = True):
+        self.responders = {k: (list(v) if isinstance(v, list) else v) for k, v in responders.items()}
+        self.installed = list(models)
+        self.available = available
+        self.calls: list[dict] = []
+
+    def _check(self) -> None:
+        if not self.available:
+            raise LLMError("OLLAMA_UNAVAILABLE", "http://localhost:11434 : faux Ollama arrêté")
+
+    def version(self) -> str:
+        self._check()
+        return "0.0-test"
+
+    def models(self) -> list[str]:
+        self._check()
+        return list(self.installed)
+
+    def chat(self, payload: dict) -> dict:
+        self._check()
+        if not model_installed(payload["model"], self.installed):
+            raise LLMError("MODEL_NOT_FOUND", payload["model"])
+        messages = payload["messages"]
+        params = {"system": [{"type": "text", "text": messages[0]["content"]}],
+                  "messages": [{"role": "user", "content": messages[1]["content"]}],
+                  "output_schema": payload["format"], "attempt": (len(messages) - 2) // 2 + 1,
+                  "history": messages[2:], "options": payload.get("options")}
+        agent = agent_of(params)
+        self.calls.append({"agent": agent, "params": params, "payload": payload})
+        handler = self.responders[agent]
+        if isinstance(handler, list):
+            handler = handler.pop(0)
+        result = _resolve(handler, params)
+        if isinstance(result, BaseException):
+            raise result
+        done_reason = "stop"
+        if isinstance(result, OllamaRaw):
+            text, done_reason = result.text, result.done_reason
+        elif isinstance(result, AgentReply):
+            text = result.text
+        else:
+            text = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False)
+        return {"model": payload["model"], "message": {"role": "assistant", "content": text}, "done": True,
+                "done_reason": done_reason, "prompt_eval_count": len(messages[1]["content"]) // 4,
+                "eval_count": len(text) // 4}
+
+    def calls_for(self, agent: str) -> list[dict]:
+        return [c for c in self.calls if c["agent"] == agent]
+
+
+class FakeLocalAgentRunner(LocalAgentRunner):
+    """Le vrai LocalAgentRunner, sur un faux Ollama (`ollama`) : aucun modèle réel, aucun réseau."""
+
+    def __init__(self, responders: dict | None = None, settings: LLMSettings | None = None, *,
+                 ollama: FakeOllama | None = None, checker=None, journal_dir=None, **ollama_options):
+        from core.agent_checks import AGENT_SPECS
+        self.ollama = ollama or FakeOllama(responders or {}, **ollama_options)
+        super().__init__(settings or fake_settings(), transport=self.ollama, checker=checker,
+                         journal_dir=journal_dir, specs=AGENT_SPECS)
+
+    @property
+    def calls(self) -> list[dict]:
+        return self.ollama.calls
+
+    def calls_for(self, agent: str) -> list[dict]:
+        return self.ollama.calls_for(agent)
+
+
+def use_fake_runtime(monkeypatch, responders: dict | None = None, *, ollama: FakeOllama | None = None,
+                     **ollama_options) -> FakeOllama:
+    """Le pipeline local (et donc Streamlit) exécute les agents sur un faux Ollama partagé. Renvoie ce faux
+    Ollama (ses `calls` cumulent toutes les étapes)."""
+    from core import local_pipeline
+    ollama = ollama or FakeOllama(responders or {}, **ollama_options)
+
+    def make_runner(settings, *, journal_dir=None, checker=None):
+        return FakeLocalAgentRunner(settings=settings, ollama=ollama, checker=checker, journal_dir=journal_dir)
+
+    monkeypatch.setattr(local_pipeline, "make_runner", make_runner)
+    return ollama

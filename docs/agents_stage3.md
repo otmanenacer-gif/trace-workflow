@@ -1,8 +1,10 @@
 # Étape 3 — deux agents d'analyse indépendants
 
-> **Exécution** : les agents sont joués par Claude Code (workflow multi-agents, [`TRACE_WORKFLOW.md`](../TRACE_WORKFLOW.md)),
-> sans aucun appel à une API de modèle. Dans ce document, un « appel » désigne une **tâche d'agent** du workflow
-> (un paquet `task.json` → une réponse `response.json`).
+> **Exécution** : les agents sont exécutés localement par un modèle servi par Ollama
+> ([`local_runtime.md`](local_runtime.md)), sans aucune API ni clé. Dans ce document, un « appel » désigne un
+> appel au modèle local ; les mentions de tokens facturés, de cache de l'API ou de `TRACE_LLM_MAX_TOKENS`
+> décrivent la conception d'origine (exécution par API, retirée) : `api_calls` et `billed_this_run` valent
+> toujours 0 / `false`.
 
 Cette étape ajoute le premier étage d'analyse par LLM. Deux agents lisent
 **le même entretien structuré**, **séparément** et **en parallèle**, après un
@@ -342,9 +344,8 @@ revérifiés à la lecture (une entrée corrompue ou incohérente est ignorée).
 - Étape 3.5 : les versions 1.2 des deux agents (consignes et schémas modifiés)
   ne réutilisent aucune entrée 1.1 ; l'audit a sa propre entrée
   (`data/cache/analysis/speaker_attribution_auditor/`).
-- Workflow Claude Code : ce cache n'est pas utilisé (`NoCache`) ; `response.json` fait foi et la garde
-  contre les réexécutions (étape complète et à jour non rejouée) joue son rôle ; `--force` (sur demande
-  explicite) rejoue une étape.
+- Exécution locale : le cache est utilisé (le modèle Ollama fait partie de la clé) ; en plus, une étape complète
+  et à jour n'est jamais rejouée (garde de core/local_pipeline.py) ; `--force` (CLI) rejoue une étape.
 
 Chaque exécution écrit un manifest par agent (`practice_manifest.json`,
 `interaction_manifest.json`) :
@@ -353,26 +354,25 @@ Chaque exécution écrit un manifest par agent (`practice_manifest.json`,
 {
   "agent": "practice_extractor", "agent_version": "1.2", "schema_version": "1.2",
   "prompt_sha256": "…", "schema_sha256": "…", "source_sha256": "…", "transcript_sha256": "…",
-  "model": "workflow_claude_code", "request_params": {"effort": null, "temperature": null},
+  "model": "qwen2.5:14b", "request_params": {"effort": null, "temperature": 0.0},
   "cache_key": "…", "cache_hit": false, "status": "SUCCESS",
   "created_at": "…", "run_at": "…", "api_calls": 0, "billed_this_run": false,
-  "usage": {"input_tokens": null, "output_tokens": null,
+  "usage": {"input_tokens": 9120, "output_tokens": 1830,
             "cache_creation_input_tokens": null, "cache_read_input_tokens": null},
-  "duration_seconds": 0.0, "response_model": "claude_code", "request_id": "<identifiant de la tâche>",
-  "stop_reason": null, "speaker_warning_count": 0,
+  "duration_seconds": 84.2, "response_model": "qwen2.5:14b", "request_id": "<identifiant de l'appel local>",
+  "stop_reason": "stop", "speaker_warning_count": 0,
   "item_count": 6, "invalid_evidence_count": 0, "needs_review_count": 1, "error": null
 }
 ```
 
-`api_calls`, `billed_this_run`, `usage`, `request_params`, `stop_reason` sont des champs **legacy** (anciennes
-exécutions par API) : conservés pour ne pas changer le format des sorties ni la relecture d'anciens fichiers,
-ils valent toujours 0 / `false` / `null` ; `request_id` porte l'identifiant de la tâche du workflow.
+`api_calls` et `billed_this_run` sont des champs **legacy** (anciennes exécutions par API) : conservés pour ne pas
+changer le format des sorties, ils valent toujours 0 / `false`. `usage` : tokens traités par le modèle local ;
+`request_id` : identifiant de l'appel local, dont le journal est dans `<run>/local_runs/stage3/`.
 
 ## 9. Coût
 
-Aucun : 0 appel API, 0 token facturé. L'interface affiche « 0 appel(s) API — 0 tokens entrée — 0 tokens
-sortie » pour la dernière exécution. Le nombre de tâches d'agent se lit dans l'état du workflow (« n/m
-tâche(s) avec une réponse conforme ») et dans `workflow/stage3/status.json`.
+Aucun : 0 appel API, 0 token facturé, exécution sur l'ordinateur de l'utilisateur. Le nombre d'appels au modèle
+local et de corrections se lit dans le bilan de l'étape (interface, `local_runs/stage3/status.json`).
 
 ## 10. Statuts et erreurs
 
@@ -381,46 +381,43 @@ anomalie `error`/`warning` de validation) | `FAILED` | `CACHED` | `PARTIAL`
 (entretien long : au moins un bloc en échec ; les blocs réussis sont conservés,
 `analysis_complete: false`, voir [`interaction_chunking.md`](interaction_chunking.md)).
 
-Erreurs d'agent (`core/llm_client.py`) : `AWAITING_AGENT` (réponse pas encore écrite : la tâche reste en
-attente), `EMPTY_RESPONSE`, `INVALID_JSON`, `SCHEMA_VALIDATION` (emplacements et types d'erreur seulement,
-jamais de contenu d'entretien). Une réponse invalide n'est jamais corrigée en silence : la tâche est listée
-« à corriger » et l'agent la reprend (`python scripts/trace_workflow.py check`, au plus 3 corrections). Aucun
-repli vers une API. Les journaux ne contiennent ni transcript ni citation : identifiant d'entretien, agent,
-statut.
+Erreurs (`core/llm_client.py`) : réponse (`EMPTY_RESPONSE`, `INVALID_JSON`, `SCHEMA_VALIDATION`, `TRUNCATED` —
+emplacements et types d'erreur seulement, jamais de contenu d'entretien) et runtime (`OLLAMA_UNAVAILABLE`,
+`MODEL_NOT_FOUND`, `NON_LOCAL_URL`, `OLLAMA_TIMEOUT`). Une réponse non conforme n'est jamais corrigée en silence :
+le modèle local la corrige lui-même (au plus `TRACE_LOCAL_MAX_CORRECTIONS` fois, erreurs du schéma et du
+validateur à l'appui) ; une erreur du runtime arrête l'étape avant toute écriture. Aucun repli vers une API.
+Voir [`local_runtime.md`](local_runtime.md).
 
 ## 11. Configuration et première exécution
 
-1. Aucune clé ni variable obligatoire. Facultatif (`.env` ou environnement) :
-   `TRACE_INTERACTION_CHUNK_TOKENS` (taille d'un bloc de l'Interaction Reader, défaut 5 000) et
-   `TRACE_PRACTICE_CHUNK_TOKENS` (Practice Extractor, défaut 4 000).
-2. Dans Claude Code, ouvert dans le dépôt : « Exécute TRACE sur `entretien.docx` jusqu'à l'étape 3 »
-   (procédure : [`TRACE_WORKFLOW.md`](../TRACE_WORKFLOW.md)).
-3. Ou dans l'interface : importer un entretien, lancer l'ingestion, choisir « Test — un entretien » et
-   cliquer sur « Préparer / reprendre l'étape 3 (workflow Claude Code, 0 appel API) », puis demander à Claude
-   Code d'exécuter les tâches en attente et cliquer de nouveau.
+1. Installer Ollama et le modèle (`ollama pull qwen2.5:14b`) ; aucune clé. Réglages facultatifs : voir
+   [`local_runtime.md`](local_runtime.md).
+2. `streamlit run app.py` : importer un entretien, lancer l'ingestion, choisir « Test — un entretien » et cliquer
+   sur « Exécuter l'étape 3 (local, Ollama) ». Ou : `python scripts/trace_local.py run <run> --until 3`.
 
-La reproductibilité repose sur le versionnage des prompts et des schémas, l'empreinte de chaque paquet de
-tâche et la conservation de chaque réponse (`response.json`).
+La reproductibilité repose sur le versionnage des prompts et des schémas, la température 0, le cache TRACE et le
+journal de chaque appel (`local_runs/`).
 
 ## 12. Tests
 
-Aucun test automatique n'appelle une API ni le réseau : `tests/conftest.py` retire les variables `TRACE_*`,
-n'ouvre pas `.env`, fait échouer toute connexion réseau TCP et redirige le cache vers un dossier temporaire.
-Les agents sont simulés par `tests/fake_llm.FakeAgents` (même interface et même validation que le client du
-workflow) ou par des réponses écrites dans les paquets de tâche ; l'entretien fictif et les réponses simulées
-sont dans `tests/synthetic_interviews.py`.
+Aucun test automatique n'utilise un vrai modèle ni le réseau : `tests/conftest.py` retire les variables `TRACE_*`,
+n'ouvre pas `.env`, fait échouer toute connexion réseau TCP (y compris vers un vrai Ollama) et redirige le cache
+vers un dossier temporaire. Les agents sont simulés par un faux Ollama derrière le vrai runner local
+(`tests/fake_llm.FakeLocalAgentRunner`, `use_fake_runtime`) ou par `FakeAgents` (tests d'orchestration) ;
+l'entretien fictif et les réponses simulées sont dans `tests/synthetic_interviews.py`.
 
+- `tests/test_local_agent_runner.py` — runner local : sortie structurée, corrections locales, Ollama arrêté, modèle absent, adresse non locale, transport HTTP réel contre un serveur local simulé
+- `tests/test_local_pipeline.py` — étapes 3 à 6 locales, gardes, restaurations, mêmes sorties que le pipeline de référence
 - `tests/test_llm_client.py` — réponses invalides (JSON, schéma, vide), messages sans contenu d'entretien, paramètres, schémas stricts identiques à la référence, aucun SDK
 - `tests/test_practice_extractor.py`, `tests/test_interaction_signal_reader.py` — schémas, prompts, preuves
 - `tests/test_evidence_validator.py` — citations exactes / inventées / autre entretien / intervalle inversé
 - `tests/test_analysis_cache.py` — hit / prompt, version, modèle ou transcript changés
 - `tests/test_analysis_pipeline.py` — indépendance, parallélisme, isolement des échecs, multi-entretiens
 - `tests/test_stage3_synthetic.py` — scénario qualitatif synthétique
-- `tests/test_speaker_attribution_auditor.py` — présélection, tâche unique ou nulle, cache, transcript inchangé, avertissements
+- `tests/test_speaker_attribution_auditor.py` — présélection, appel unique ou nul, cache, transcript inchangé, avertissements
 - `tests/test_interpretation_guard.py` — « réparation » ordinaire / interprétative
 - `tests/test_stage3_5_synthetic.py` — scénario global de l'étape 3.5
 - `tests/test_interaction_chunking.py` — étape 3.6 : entretien long (349 tours synthétiques), blocs, chevauchement, fusion, longue distance, bloc en échec, cache par bloc, avertissements
-- `tests/test_claude_code_workflow.py` — étape 3 en workflow : paquets, réponses, validation, garde, restauration
 - `tests/test_app_stage3.py` — interface (Streamlit AppTest)
 - `tests/e2e/browser_check.py` — navigateur réel (Playwright), lancé à la main
 
@@ -436,7 +433,8 @@ sont dans `tests/synthetic_interviews.py`.
 - Les tests des non-usages et du type `metadiscursive_self_evaluation` utilisent
   des réponses **simulées** : ils vérifient le contrat (schéma, consignes,
   validation, non-fusion), pas la capacité d'un vrai modèle à appliquer les
-  consignes : seule la lecture des réponses produites par Claude Code sur des entretiens réels le permet.
+  consignes : seule la lecture des réponses du modèle local sur des entretiens réels le permet. Un modèle local
+  moins capable qu'un grand modèle peut produire davantage de réponses à corriger ou à revoir.
 - Une citation exacte mais trop courte (« oui ») est valide techniquement
   sans être forcément probante.
 - Un entretien long est lu par l'Interaction Signal Reader en blocs qui se
@@ -444,5 +442,5 @@ sont dans `tests/synthetic_interviews.py`.
   le Practice Extractor aussi depuis l'étape 3.7 ([`stage3_7.md`](stage3_7.md)).
 - Les tours de locuteur `unknown` sont transmis tels quels : l'agent ne sait
   pas toujours qui parle.
-- Aucune parallélisation n'est imposée par TRACE : l'orchestrateur Claude Code peut lancer les tâches d'un
-  même passage en parallèle (sous-agents), elles sont indépendantes.
+- Par défaut, un seul appel au modèle local à la fois (`TRACE_LOCAL_CONCURRENCY`) : les deux agents restent
+  indépendants (contextes séparés), mais s'exécutent l'un après l'autre sur un ordinateur ordinaire.

@@ -1,13 +1,12 @@
-"""Interface Streamlit de l'étape 4 (AppTest : sans navigateur, agents simulés joués à travers le workflow)."""
+"""Interface Streamlit de l'étape 4 (AppTest : sans navigateur, faux Ollama derrière le vrai runner local)."""
 
 import pytest
 from streamlit.testing.v1 import AppTest
 
 from core import config
-from core.claude_code_workflow import WorkflowClient
 from tests import synthetic_interviews as si
 from tests import synthetic_stage4 as S
-from tests.fake_llm import ACCOUNTABILITY, INTERACTION, FakeAgents, agent_error, answering_workflow
+from tests.fake_llm import ACCOUNTABILITY, INTERACTION, agent_error, use_fake_runtime
 
 APP = str(config.PROJECT_ROOT / "app.py")
 
@@ -16,10 +15,9 @@ def texts(elements):
     return " ".join(str(e.value) for e in elements)
 
 
-def simulate(monkeypatch, responders: dict) -> FakeAgents:
-    agents = FakeAgents(responders)
-    monkeypatch.setattr(WorkflowClient, "complete_json", answering_workflow(agents))
-    return agents
+def simulate(monkeypatch, responders: dict):
+    """Les agents sont exécutés par le vrai runner local, sur un faux Ollama (aucun modèle, aucun réseau)."""
+    return use_fake_runtime(monkeypatch, responders)
 
 
 @pytest.fixture
@@ -42,19 +40,19 @@ def test_stage4_waits_for_stage3(tmp_path, fake_agents):
     assert not at.exception
     assert "Étape 4 — Épisodes d'accountability" in texts(at.header)
     assert "Lancez d'abord l'étape 3" in texts(at.info)
-    assert not [b for b in at.button if b.key in ("wf_stage4", "acc_launch")]
+    assert not [b for b in at.button if b.key in ("run_stage4", "acc_launch")]
 
 
 def test_stage4_full_flow_then_no_replay(tmp_path, fake_agents):
     at = app_with_run(si.make_ingested_run(tmp_path, S.FILES))
-    at.button(key="wf_stage3").click().run()
+    at.button(key="run_stage3").click().run()
     assert not at.exception and agents(fake_agents).count(ACCOUNTABILITY) == 0  # l'étape 3 ne lance jamais l'étape 4
     stage3_calls = len(fake_agents.calls)
 
-    at.button(key="wf_stage4").click().run()
+    at.button(key="run_stage4").click().run()
     assert not at.exception
     assert agents(fake_agents)[stage3_calls:] == [ACCOUNTABILITY]
-    assert "Étape 4 terminée (workflow Claude Code, 0 appel API)." in texts(at.success)
+    assert "Étape 4 terminée (exécution locale, modèle qwen2.5:14b, 0 appel API)." in texts(at.success)
     table = at.table[-1].value
     assert list(table["Étape 4"]) == ["✅ SUCCESS"] and list(table["Statut étape 3"]) == ["COMPLETE"]
     assert list(table["Candidats"]) == [6] and list(table["Épisodes accountability"]) == [4]
@@ -69,7 +67,7 @@ def test_stage4_full_flow_then_no_replay(tmp_path, fake_agents):
     assert "Construction des épisodes d'accountability** (IA) — terminé (1/1 entretien(s))" in texts(at.markdown)
 
     # Relance : l'étape 4 est complète et à jour, elle n'est pas rejouée
-    at.button(key="wf_stage4").click().run()
+    at.button(key="run_stage4").click().run()
     assert not at.exception and agents(fake_agents)[stage3_calls:] == [ACCOUNTABILITY]
     assert list(at.table[-1].value["Étape 4"]) == ["✅ SUCCESS"]
 
@@ -78,10 +76,9 @@ def test_stage4_blocked_when_stage3_failed(tmp_path, monkeypatch):
     responders = {**S.stage3_responders(), INTERACTION: agent_error(), ACCOUNTABILITY: S.REFERENCE_BUILDER}
     transport = simulate(monkeypatch, responders)
     at = app_with_run(si.make_ingested_run(tmp_path, S.FILES))
-    at.button(key="wf_stage3").click().run()
-    todo = next(t.value for t in at.table if "Tâche" in t.value.columns)
-    assert list(todo["État"]) == ["réponse à corriger"]  # étape 3 incomplète : l'Interaction Reader est à corriger
-    at.button(key="wf_stage4").click().run()
+    at.button(key="run_stage3").click().run()
+    assert "Étape 3 : échec" in texts(at.warning)  # l'Interaction Reader a échoué : étape 3 incomplète
+    at.button(key="run_stage4").click().run()
     assert not at.exception and ACCOUNTABILITY not in agents(transport)
     assert list(at.table[-1].value["Étape 4"]) == ["⛔ BLOCKED"]
     assert "Étape 4 non exécutée" in texts(at.error)

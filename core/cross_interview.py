@@ -260,7 +260,7 @@ async def run_stage6_corpus(prepared: Stage6Input, client, cache: AnalysisCache,
             logger.warning("Étape 6 %s : représentation au-delà du seuil d'un appel (%d tokens estimés)",
                            prepared.corpus_id, estimated)
         record = await _call(prepared, client, cache, settings, force)
-        # appel API, ou réponse d'agent du workflow Claude Code (0 appel API, statut SUCCESS)
+        # réponse obtenue pendant cette exécution (modèle local : 0 appel API, statut SUCCESS)
         manifest.update(cache_key=record["cache_key"], cache_hit=record["cache_hit"],
                         llm_called=bool(record["api_calls"]) or record["status"] == STATUS_SUCCESS,
                         api_calls=record["api_calls"] or 0,
@@ -324,8 +324,8 @@ def run_stage6(uploads: list[tuple[str, bytes]], *, client, settings: LLMSetting
                cache: AnalysisCache | None = None, force: bool = False, base_dir: Path | None = None) -> dict:
     """Étape 6 sur les fichiers importés. Renvoie le manifest (+ corpus_dir).
 
-    `client` : client des agents (`complete_json`, `aclose`), injecté par le workflow Claude Code
-    (core/claude_code_workflow.WorkflowClient, AUCUN appel réseau) ou par les tests (agents simulés). Il n'est
+    `client` : client des agents (`complete_json`, `aclose`), injecté par le pipeline local
+    (core/local_agent_runner.LocalAgentRunner : modèle local via Ollama, aucune API) ou par les tests (agents simulés). Il n'est
     pas sollicité si le corpus est bloqué.
     """
     settings = settings or LLMSettings.from_env()

@@ -195,13 +195,13 @@ def test_other_prompt_version_is_accepted_with_a_warning(tmp_path):
 
 
 def test_restoration_never_calls_any_llm(tmp_path, monkeypatch):
-    from core.claude_code_workflow import WorkflowClient
+    from core.local_agent_runner import LocalAgentRunner
     from tests.fake_llm import FakeAgents
 
     def forbidden(*args, **kwargs):
         raise AssertionError("Agent sollicité pendant une restauration")
     stage3, stage4 = downloaded(tmp_path)
-    for client in (WorkflowClient, FakeAgents):
+    for client in (LocalAgentRunner, FakeAgents):
         monkeypatch.setattr(client, "complete_json", forbidden)
         monkeypatch.setattr(client, "__init__", forbidden)
     run = restore_stage4(after_redeploy(tmp_path, stage3), S4.INTERVIEW_ID, stage4)

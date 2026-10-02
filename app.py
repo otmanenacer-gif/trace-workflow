@@ -66,9 +66,9 @@ _purge_stale_project_modules()
 
 from core import accountability, analysis, config, stage3_restore, stage4_restore, trajectory  # noqa: E402
 from core import cross_interview, cross_interview_corpus  # noqa: E402
-from core import claude_code_workflow as workflow  # noqa: E402
+from core import local_pipeline  # noqa: E402
 from core.ingestion import ingest_run  # noqa: E402
-from core.llm_client import LLMSettings  # noqa: E402
+from core.llm_client import LLMError, LLMSettings  # noqa: E402
 from core.run_manager import TraceError, get_extension, init_run, list_runs, load_metadata  # noqa: E402
 from core.run_manager import load_problematique, save_problematique  # noqa: E402
 
@@ -135,7 +135,7 @@ def format_count(value: int | None) -> str:
 
 
 def render_pipeline(run: dict | None) -> None:
-    """Affiche les étapes : ingestion, puis les étapes IA (workflow Claude Code, aucun appel API)."""
+    """Affiche les étapes : ingestion, puis les étapes IA (exécution locale avec Ollama, aucun appel API)."""
     ai_steps = (config.PRACTICE_STEP, config.INTERACTION_STEP, config.ACCOUNTABILITY_STEP, config.TRAJECTORY_STEP)
     for index, step in enumerate(config.PIPELINE_STEPS, start=1):
         if step == config.INGESTION_STEP:
@@ -146,20 +146,18 @@ def render_pipeline(run: dict | None) -> None:
             last = st.session_state.get("stage6_last")
             if last:
                 warn = last["status"] not in cross_interview.DONE_STATUSES
-                label = ("en attente du workflow Claude Code"
-                         if (last.get("error") or {}).get("code") == workflow.AWAITING_AGENT else last["status"])
-                st.markdown(f"{'🟠' if warn else '🟢'} **{index}. {step}** (IA) — {label} "
+                st.markdown(f"{'🟠' if warn else '🟢'} **{index}. {step}** (IA) — {last['status']} "
                             f"({last['corpus_n_usable']}/{last['corpus_n_total']} entretien(s) exploitable(s))")
             else:
-                st.markdown(f"🔵 **{index}. {step}** (IA) — prête, workflow Claude Code (0 appel API), sur import "
-                            "des sorties de l'étape 5")
+                st.markdown(f"🔵 **{index}. {step}** (IA) — prête, exécution locale (Ollama), sur import des "
+                            "sorties de l'étape 5")
         elif step in ai_steps:
             state = run["pipeline"].get(step, "inactive") if run else "inactive"
             if state != "inactive":
                 warn = "échec" in state or "incomplet" in state or "bloqué" in state
                 st.markdown(f"{'🟠' if warn else '🟢'} **{index}. {step}** (IA) — {state}")
             else:
-                st.markdown(f"🔵 **{index}. {step}** (IA) — prête, workflow Claude Code (0 appel API)")
+                st.markdown(f"🔵 **{index}. {step}** (IA) — prête, exécution locale (Ollama)")
         else:
             st.markdown(f"⚪ **{index}. {step}** — _inactif_")
 
@@ -215,8 +213,6 @@ def render_selectivity(agents: dict) -> None:
 
 
 def ai_status_label(summary: dict, icons: dict = AI_STATUS_ICONS) -> str:
-    if (summary.get("error") or {}).get("code") == workflow.AWAITING_AGENT:
-        return "⏳ EN ATTENTE (workflow Claude Code)"
     return f"{icons.get(summary.get('status'), '')} {summary.get('status') or 'n/a'}"
 
 
@@ -235,8 +231,8 @@ def render_analysis_results(run: dict) -> None:
                      f"{format_count(usage['cache_creation_input_tokens'])} écrits")
         line += f" — {usage['cached_results']} résultat(s) repris du cache TRACE"
         st.markdown(line)
-        st.caption("Appels API et tokens : champs hérités des anciennes exécutions par API, toujours à 0 avec le "
-                   "workflow Claude Code (aucun appel API, aucun coût).")
+        st.caption("Appels API et tokens facturés : champs hérités, toujours à 0 avec l'exécution locale (aucun appel "
+                   "API, aucun coût). Les tokens traités par le modèle local figurent dans les manifests (usage).")
 
     rows = []
     for f in analyzed:
@@ -271,8 +267,7 @@ def render_analysis_results(run: dict) -> None:
         with st.expander(f"Analyse IA — {iid} — aperçu"):
             for name, agent in summary["agents"].items():
                 if agent.get("error"):
-                    show = st.info if agent["error"].get("code") == workflow.AWAITING_AGENT else st.error
-                    show(f"{AI_AGENTS[name].label} : {agent['error']['message']}")
+                    st.error(f"{AI_AGENTS[name].label} : {agent['error']['message']}")
             render_chunking(summary["agents"]["practice_extractor"], "Practice Extractor")
             render_chunking(summary["agents"]["interaction_signal_reader"])
             render_selectivity(summary["agents"])
@@ -352,62 +347,93 @@ def render_speaker_audit(summary: dict) -> None:
 
 
 def render_stage3_workflow(run: dict, eligible: list[dict]) -> None:
-    """Étape 3 sans API : TRACE prépare les tâches, Claude Code joue les agents, TRACE valide et enregistre."""
-    flash = st.session_state.pop("wf_flash", None)
-    if flash:
-        (st.warning if flash[0] == "warning" else st.success)(flash[1])
+    """Étape 3 : TRACE exécute l'audit des locuteurs puis les deux agents avec le modèle local, valide et enregistre."""
+    show_flash("local3_flash")
     st.info(
-        "**Workflow Claude Code** — aucune clé API, aucun appel API, aucun coût. TRACE prépare un paquet de tâche "
-        "par agent (prompt du dépôt, matériau exact, schéma JSON attendu) ; Claude Code, ouvert dans ce dépôt, joue "
-        "chaque agent et écrit sa réponse ; TRACE la valide (schéma, citations, garde-fou, sélectivité) et "
-        "enregistre les sorties habituelles de l'étape 3. Procédure : `TRACE_WORKFLOW.md`."
+        "**Exécution locale** — le modèle local (Ollama, sur cet ordinateur) joue chaque agent à partir de son prompt ; "
+        "TRACE valide chaque réponse (schéma, citations, garde-fou, sélectivité ; corrections locales si besoin) et "
+        "enregistre les sorties habituelles de l'étape 3. Aucune clé, aucune API, aucune donnée externe."
     )
     mode = st.radio("Mode", [MODE_TEST, MODE_CORPUS], key="wf_mode", horizontal=True)
     ids = [f["ingestion"]["interview_id"] for f in eligible]
     selected = [st.selectbox("Entretien à analyser", ids, key="wf_interview")] if mode == MODE_TEST else ids
-    if st.button("Préparer / reprendre l'étape 3 (workflow Claude Code, 0 appel API)", type="primary",
-                 key="wf_stage3"):
-        try:
-            result = workflow.run_stage3(run, selected)
-        except (OSError, ValueError, KeyError) as exc:
-            logging.error("Workflow de l'étape 3 interrompu : %s", type(exc).__name__)
-            st.error(f"Workflow de l'étape 3 interrompu ({type(exc).__name__}) : vérifiez les fichiers du run.")
-            return
-        st.session_state.last_run = result["metadata"]
-        status = result["status"]
-        st.session_state.wf_flash = (
-            ("success", "Étape 3 terminée (workflow Claude Code, 0 appel API).")
-            if status["status"] == workflow.STAGE3_COMPLETE else
-            ("warning", f"Étape 3 : {workflow.STAGE3_STATUS_LABELS[status['status']]} — voir ci-dessous."))
+    run_local_stage("3", run, selected)
+    render_local_state(run, "3")
+
+STAGE_RUN_LABEL = "Exécuter l'étape {} (local, Ollama)"
+
+
+def render_runtime_panel() -> None:
+    """Exécution locale : runtime, modèle et état d'Ollama (vérifié à l'ouverture, puis sur demande)."""
+    if st.session_state.pop("runtime_refresh", False) or "runtime_status" not in st.session_state:
+        st.session_state.runtime_status = local_pipeline.runtime_status()
+    status = st.session_state.runtime_status
+    st.markdown(f"**Exécution :** {status['execution']} · **Runtime :** {status['runtime']} · "
+                f"**Modèle :** `{status['model']}` · **Données externes :** {status['external_data']}")
+    if status["ready"]:
+        st.success(f"Ollama {status['version']} actif sur {status['url']} — modèle `{status['model']}` installé. "
+                   "Aucune clé, aucune API, aucune donnée envoyée hors de cet ordinateur.")
+    elif status["available"]:
+        st.error(f"Ollama est actif, mais le modèle `{status['model']}` n'est pas installé. Installez-le : "
+                 f"`{status['install_command']}` (modèles installés : {', '.join(status['models']) or 'aucun'}).")
+    else:
+        st.error(f"Ollama ne répond pas sur {status['url']} : démarrez-le (`{status['start_command']}` ou "
+                 "l'application Ollama). L'ingestion fonctionne sans ; les étapes 3 à 6 en ont besoin. "
+                 "Aucun autre fournisseur n'est utilisé.")
+    if st.button("Vérifier de nouveau Ollama", key="runtime_check"):
+        st.session_state.runtime_refresh = True
         st.rerun()
 
-    render_workflow_state(run, "3", f"Exécute les tâches TRACE en attente du run {run['run_id']}")
+
+def show_flash(key: str) -> None:
+    flash = st.session_state.pop(key, None)
+    if flash:
+        (st.warning if flash[0] == "warning" else st.success)(flash[1])
 
 
-def render_workflow_state(run: dict, stage: str, instruction: str) -> None:
-    """État du workflow Claude Code d'une étape : tâches en attente ou à corriger, instruction pour Claude Code."""
-    state = (st.session_state.get("last_run") or run).get(f"stage{stage}_workflow")
+def run_local_stage(stage: str, run: dict, selected: list[str]) -> None:
+    """Bouton d'une étape : TRACE exécute lui-même les agents avec le modèle local, valide et enregistre."""
+    if not st.button(STAGE_RUN_LABEL.format(stage), type="primary", key=f"run_stage{stage}"):
+        return
+    model = local_pipeline.runtime_settings().model
+    with st.spinner(f"Étape {stage} en cours avec le modèle local {model} (Ollama) : cela peut prendre plusieurs "
+                    "minutes…"):
+        try:
+            result = local_pipeline.run_stage(stage, run, selected)
+        except LLMError as exc:  # Ollama arrêté, modèle absent… : erreur claire, rien n'est écrit, aucun repli
+            st.session_state.runtime_refresh = True
+            st.error(exc.user_message)
+            return
+        except (OSError, ValueError, KeyError) as exc:
+            logging.error("Étape %s interrompue : %s", stage, type(exc).__name__)
+            st.error(f"Étape {stage} interrompue ({type(exc).__name__}) : vérifiez les fichiers du run.")
+            return
+    st.session_state.last_run = result["metadata"]
+    status = result["status"]
+    st.session_state[f"local{stage}_flash"] = (
+        ("success", f"Étape {stage} terminée (exécution locale, modèle {status['model']}, 0 appel API).")
+        if status["status"] == local_pipeline.STAGE_COMPLETE else
+        ("warning", f"Étape {stage} : {local_pipeline.STATUS_LABELS[status['status']]} — voir ci-dessous."))
+    st.rerun()
+
+
+def render_local_state(run: dict, stage: str) -> None:
+    """Bilan de la dernière exécution locale d'une étape : appels au modèle, corrections, erreurs, garde."""
+    state = (st.session_state.get("last_run") or run).get(f"stage{stage}_local")
     if not state:
         return
-    st.markdown(f"**Workflow Claude Code (étape {stage}) :** {workflow.STATUS_LABELS[state['status']]} — "
-                f"{state['answered_count']}/{state['task_count']} tâche(s) avec une réponse conforme — "
+    st.markdown(f"**Dernière exécution locale (étape {stage}) :** {local_pipeline.STATUS_LABELS[state['status']]} — "
+                f"{state['call_count']} appel(s) au modèle local `{state['model']}` "
+                f"({state['corrected_calls']} corrigé(s) localement) — {state['duration_seconds']} s — "
                 f"{state['api_calls']} appel API")
     for interview in state["interviews"]:
-        if interview.get("reason"):
-            st.warning(f"{interview['interview_id']} : {interview['reason']}")
+        for line in interview.get("errors") or []:
+            st.error(f"{interview['interview_id']} — {line}")
         for warning in interview.get("warnings") or []:
             st.warning(f"{interview['interview_id']} : {warning}")
     if state.get("skipped"):
         st.caption("Déjà terminée(s) et à jour, non rejouée(s) : " + ", ".join(state["skipped"]) + ".")
-    todo = [(t, "réponse à corriger") for t in state["invalid"]] + [(t, "en attente") for t in state["pending"]]
-    if todo:
-        st.table([{"Tâche": t["task_id"], "Entretien": t["interview_id"], "Agent": t["agent_label"], "État": label,
-                   "Erreur": t.get("error") or ""} for t, label in todo])
-        st.markdown("Dans **Claude Code**, ouvert dans ce dépôt, demandez :")
-        st.code(instruction, language=None)
-        st.caption("Claude Code joue chaque agent (un sous-agent par tâche), valide sa réponse "
-                   f"(`{workflow.CLI} check …`), puis rejoue l'étape. Revenez ensuite ici et cliquez de nouveau "
-                   "sur « Préparer / reprendre » pour afficher les résultats.")
+
 
 
 def render_analysis_section(run: dict) -> None:
@@ -436,35 +462,18 @@ def render_analysis_section(run: dict) -> None:
 # --- Étape 4 — épisodes d'accountability ----------------------------------------------------------
 
 def render_stage4_workflow(run: dict, analyzed: list[dict]) -> None:
-    """Étape 4 sans API : TRACE prépare les tâches, Claude Code joue l'Accountability Episode Builder."""
-    flash = st.session_state.pop("wf4_flash", None)
-    if flash:
-        (st.warning if flash[0] == "warning" else st.success)(flash[1])
+    """Étape 4 : candidats déterministes, Accountability Episode Builder exécuté par le modèle local, validation."""
+    show_flash("local4_flash")
     st.info(
-        "**Workflow Claude Code** — aucune clé API, aucun appel API, aucun coût. TRACE prépare les candidats "
-        "(déterministes) et un paquet de tâche par bloc de composantes (un seul dans le cas normal) ; Claude Code joue "
-        "l'Accountability Episode Builder (prompt du dépôt) ; TRACE valide chaque réponse (schéma, validateur des "
-        "épisodes), fusionne les blocs et enregistre les sorties habituelles. Procédure : `TRACE_WORKFLOW.md`."
+        "**Exécution locale** — TRACE prépare les candidats (déterministes), le modèle local joue l'Accountability "
+        "Episode Builder (un appel par bloc de composantes, un seul dans le cas normal), puis TRACE valide les "
+        "épisodes, fusionne les blocs et enregistre les sorties habituelles."
     )
     ids = [f["ingestion"]["interview_id"] for f in analyzed]
     choice = st.selectbox("Entretien(s) pour l'étape 4", ids + ([ACC_ALL] if len(ids) > 1 else []), key="wf4_interview")
     selected = ids if choice == ACC_ALL else [choice]
-    if st.button("Préparer / reprendre l'étape 4 (workflow Claude Code, 0 appel API)", type="primary",
-                 key="wf_stage4"):
-        try:
-            result = workflow.run_stage4(run, selected)
-        except (OSError, ValueError, KeyError) as exc:
-            logging.error("Workflow de l'étape 4 interrompu : %s", type(exc).__name__)
-            st.error(f"Workflow de l'étape 4 interrompu ({type(exc).__name__}) : vérifiez les fichiers du run.")
-            return
-        st.session_state.last_run = result["metadata"]
-        status = result["status"]["status"]
-        st.session_state.wf4_flash = (
-            ("success", "Étape 4 terminée (workflow Claude Code, 0 appel API).") if status == workflow.STAGE_COMPLETE
-            else ("warning", f"Étape 4 : {workflow.STATUS_LABELS[status]} — voir ci-dessous."))
-        st.rerun()
-    render_workflow_state(run, "4", f"Exécute TRACE sur le run {run['run_id']} jusqu'à l'étape 4")
-
+    run_local_stage("4", run, selected)
+    render_local_state(run, "4")
 
 def render_stage4_results(run: dict) -> None:
     done = [f for f in run["files"] if "accountability" in f]
@@ -495,8 +504,7 @@ def render_stage4_results(run: dict) -> None:
             if summary["status"] == accountability.STATUS_BLOCKED:
                 st.error((summary.get("error") or {}).get("message") or "Étape 4 bloquée.")
             elif summary.get("error"):
-                show = st.info if summary["error"].get("code") == workflow.AWAITING_AGENT else st.error
-                show(f"Accountability Episode Builder : {summary['error']['message']}")
+                st.error(f"Accountability Episode Builder : {summary['error']['message']}")
             if summary["status"] == analysis.STATUS_PARTIAL:
                 st.warning("Analyse INCOMPLÈTE : les sorties de l'étape 3 sont partielles (analysis_complete = false). "
                            "Relancez l'étape 3 pour compléter les blocs manquants, puis l'étape 4.")
@@ -512,9 +520,8 @@ def render_stage4_results(run: dict) -> None:
                     f"sans marqueur · incertains : **{document['uncertain_count']}** · rejetés : "
                     f"**{document['rejected_episode_count']}** · "
                     + ("repris du cache TRACE" if document["cache_hit"] else
-                       "réponse(s) d'agent du workflow Claude Code (0 appel API)"
-                       if document.get("model") == workflow.WORKFLOW_MODEL else
-                       "1 appel" if document["llm_called"] else "aucun appel (aucun candidat)"))
+                       f"modèle local {document.get('model')} (0 appel API)" if document["llm_called"] else
+                       "aucun appel (aucun candidat)"))
                 if episodes:
                     st.markdown(f"**Épisodes** ({len(episodes)}) — {min(PREVIEW_EPISODES, len(episodes))} premiers")
                     st.dataframe([
@@ -673,36 +680,19 @@ def _claim_row(claim: dict) -> dict:
 
 
 def render_stage5_workflow(run: dict, available: list[dict]) -> None:
-    """Étape 5 sans API : TRACE prépare un paquet par entretien, Claude Code joue le Trajectory Mapper."""
-    flash = st.session_state.pop("wf5_flash", None)
-    if flash:
-        (st.warning if flash[0] == "warning" else st.success)(flash[1])
+    """Étape 5 : préparation déterministe, Trajectory Mapper exécuté par le modèle local (un appel par entretien)."""
+    show_flash("local5_flash")
     st.info(
-        "**Workflow Claude Code** — aucune clé API, aucun appel API, aucun coût. TRACE prépare sans IA la "
-        "représentation de l'entretien (épisodes de l'étape 4, ancrages temporels, régularités) et UN paquet de tâche "
-        "par entretien ; Claude Code joue le Trajectory Mapper (prompt du dépôt) ; TRACE valide la réponse (schéma, "
-        "validateur de l'étape 5 avec ses requalifications) et enregistre les sorties habituelles. Une étape déjà "
-        "terminée et à jour n'est pas rejouée. Procédure : `TRACE_WORKFLOW.md`."
+        "**Exécution locale** — TRACE prépare sans IA la représentation de l'entretien (épisodes de l'étape 4, "
+        "ancrages temporels, régularités), le modèle local joue le Trajectory Mapper (un appel par entretien, jamais "
+        "découpé), puis TRACE valide la réponse (requalifications comprises) et enregistre les sorties habituelles. "
+        "Une étape déjà terminée et à jour n'est pas rejouée."
     )
     ids = [f["ingestion"]["interview_id"] for f in available]
     choice = st.selectbox("Entretien(s) pour l'étape 5", ids + ([ACC_ALL] if len(ids) > 1 else []), key="wf5_interview")
     selected = ids if choice == ACC_ALL else [choice]
-    if st.button("Préparer / reprendre l'étape 5 (workflow Claude Code, 0 appel API)", type="primary",
-                 key="wf_stage5"):
-        try:
-            result = workflow.run_stage5(run, selected)
-        except (OSError, ValueError, KeyError) as exc:
-            logging.error("Workflow de l'étape 5 interrompu : %s", type(exc).__name__)
-            st.error(f"Workflow de l'étape 5 interrompu ({type(exc).__name__}) : vérifiez les fichiers du run.")
-            return
-        st.session_state.last_run = result["metadata"]
-        status = result["status"]["status"]
-        st.session_state.wf5_flash = (
-            ("success", "Étape 5 terminée (workflow Claude Code, 0 appel API).") if status == workflow.STAGE_COMPLETE
-            else ("warning", f"Étape 5 : {workflow.STATUS_LABELS[status]} — voir ci-dessous."))
-        st.rerun()
-    render_workflow_state(run, "5", f"Exécute TRACE sur le run {run['run_id']} jusqu'à l'étape 5")
-
+    run_local_stage("5", run, selected)
+    render_local_state(run, "5")
 
 def render_stage5_results(run: dict) -> None:
     done = [f for f in run["files"] if "trajectory" in f]
@@ -736,8 +726,7 @@ def render_stage5_results(run: dict) -> None:
             if summary["status"] == trajectory.STATUS_BLOCKED:
                 st.error((summary.get("error") or {}).get("message") or "Étape 5 bloquée.")
             elif summary.get("error"):
-                show = st.info if summary["error"].get("code") == workflow.AWAITING_AGENT else st.error
-                show(f"Trajectory Mapper : {summary['error']['message']}")
+                st.error(f"Trajectory Mapper : {summary['error']['message']}")
             if summary["status"] == analysis.STATUS_PARTIAL:
                 st.warning("Analyse INCOMPLÈTE : l'étape 4 est partielle (analysis_complete = false).")
             if not trajectory.trajectory_current(summary):
@@ -754,9 +743,8 @@ def render_stage5_results(run: dict) -> None:
                         f"sans marqueur : **{document['material']['unmarked_practice_count']}** · ancrages temporels : "
                         f"**{document['material']['temporal_anchor_count']}** · "
                         + ("repris du cache TRACE" if document["cache_hit"] else
-                           "réponse d'agent du workflow Claude Code (0 appel API)"
-                           if document.get("model") == workflow.WORKFLOW_MODEL else
-                           "1 appel" if document["llm_called"] else "aucun appel (matériau insuffisant)"))
+                           f"modèle local {document.get('model')} (0 appel API)" if document["llm_called"] else
+                           "aucun appel (matériau insuffisant)"))
                 st.markdown(line)
                 if document.get("model_configuration_type"):
                     st.warning(f"Configuration proposée par le modèle : "
@@ -879,52 +867,48 @@ def render_stage6_corpus(prepared) -> None:
 
 
 def render_stage6_workflow(files: list[tuple[str, bytes]], prepared) -> None:
-    """Étape 6 sans API : TRACE prépare UN paquet pour le corpus, Claude Code joue le Cross-Interview Comparator."""
-    flash = st.session_state.pop("wf6_flash", None)
-    if flash:
-        (st.warning if flash[0] == "warning" else st.success)(flash[1])
+    """Étape 6 : contrôle du corpus, préparation déterministe, Cross-Interview Comparator exécuté par le modèle local."""
+    show_flash("local6_flash")
     st.info(
-        "**Workflow Claude Code** — aucune clé API, aucun appel API, aucun coût. TRACE prépare sans IA la "
-        f"représentation du corpus (≈ {format_count(prepared.estimated_input_tokens)} tokens estimés) et UN paquet "
-        "de tâche ; Claude Code joue le Cross-Interview Comparator (prompt du dépôt) ; TRACE valide la réponse (schéma, "
-        "validateur de l'étape 6 : appuis, comptes en entretiens, non-observation, cas négatifs, requalifications) et "
-        "enregistre les sorties habituelles. Un corpus déjà analysé à l'identique n'est pas rejoué. Procédure : "
-        "`TRACE_WORKFLOW.md`.")
+        "**Exécution locale** — TRACE prépare sans IA la représentation du corpus "
+        f"(≈ {format_count(prepared.estimated_input_tokens)} tokens estimés), le modèle local joue le Cross-Interview "
+        "Comparator (un appel pour le corpus), puis TRACE valide la réponse (appuis, comptes en entretiens, "
+        "non-observation, cas négatifs, requalifications) et enregistre les sorties habituelles. Un corpus déjà "
+        "analysé à l'identique n'est pas rejoué.")
     if prepared.estimated_input_tokens > cross_interview.SINGLE_CALL_MAX_INPUT_TOKENS:
         st.warning(f"Représentation au-delà du seuil d'un appel unique ({cross_interview.SINGLE_CALL_MAX_INPUT_TOKENS} "
-                   "tokens) : paquet unique conservé, signalé (PAYLOAD_OVER_THRESHOLD).")
-    if st.button("Préparer / reprendre l'étape 6 (workflow Claude Code, 0 appel API)", type="primary",
-                 key="wf_stage6"):
-        try:
-            result = workflow.run_stage6(files)
-        except (OSError, ValueError, KeyError) as exc:
-            logging.error("Workflow de l'étape 6 interrompu : %s", type(exc).__name__)
-            st.error(f"Workflow de l'étape 6 interrompu ({type(exc).__name__}).")
-            return
+                   "tokens) : requête unique conservée, signalée (PAYLOAD_OVER_THRESHOLD) ; vérifiez la fenêtre de "
+                   "contexte du modèle local (TRACE_OLLAMA_NUM_CTX).")
+    if st.button(STAGE_RUN_LABEL.format(6), type="primary", key="run_stage6"):
+        model = local_pipeline.runtime_settings().model
+        with st.spinner(f"Étape 6 en cours avec le modèle local {model} (Ollama)…"):
+            try:
+                result = local_pipeline.run_stage6(files)
+            except LLMError as exc:
+                st.session_state.runtime_refresh = True
+                st.error(exc.user_message)
+                return
+            except (OSError, ValueError, KeyError) as exc:
+                logging.error("Étape 6 interrompue : %s", type(exc).__name__)
+                st.error(f"Étape 6 interrompue ({type(exc).__name__}).")
+                return
         st.session_state.stage6_last = result["manifest"]
-        status = result["status"]["status"]
-        st.session_state.wf6_flash = (
-            ("success", "Étape 6 terminée (workflow Claude Code, 0 appel API).") if status == workflow.STAGE_COMPLETE
-            else ("warning", f"Étape 6 : {workflow.STATUS_LABELS[status]} — voir ci-dessous."))
+        status = result["status"]
+        st.session_state.local6_flash = (
+            ("success", f"Étape 6 terminée (exécution locale, modèle {status['model']}, 0 appel API).")
+            if status["status"] == local_pipeline.STAGE_COMPLETE
+            else ("warning", f"Étape 6 : {local_pipeline.STATUS_LABELS[status['status']]} — voir ci-dessous."))
         st.rerun()
-    state = workflow.read_corpus_status(cross_interview.corpus_dir_for(prepared))
+    state = local_pipeline.read_corpus_status(cross_interview.corpus_dir_for(prepared))
     if not state:
         return
-    st.markdown(f"**Workflow Claude Code (étape 6) :** {workflow.STATUS_LABELS[state['status']]} — "
-                f"{state['answered_count']}/{state['task_count']} tâche(s) avec une réponse conforme — "
-                f"{state['api_calls']} appel API")
+    st.markdown(f"**Dernière exécution locale (étape 6) :** {local_pipeline.STATUS_LABELS[state['status']]} — "
+                f"{state['call_count']} appel(s) au modèle local `{state['model']}` ({state['corrected_calls']} "
+                f"corrigé(s) localement) — {state['duration_seconds']} s — {state['api_calls']} appel API")
     for warning in state["warnings"]:
         st.warning(warning)
-    todo = [(t, "réponse à corriger") for t in state["invalid"]] + [(t, "en attente") for t in state["pending"]]
-    if todo:
-        st.table([{"Tâche": t["task_id"], "Corpus": state["corpus_id"], "Agent": t["agent_label"], "État": label,
-                   "Erreur": t.get("error") or ""} for t, label in todo])
-        st.markdown("Dans **Claude Code**, ouvert dans ce dépôt, demandez :")
-        st.code(f"Exécute TRACE Stage 6 sur le corpus {state['corpus_id']}", language=None)
-        st.caption("Claude Code joue le Comparator (un sous-agent), valide sa réponse "
-                   f"(`{workflow.CLI} check …`), puis rejoue l'étape 6 (`{workflow.CLI} stage6 --corpus "
-                   f"{state['corpus_id']}`). Revenez ensuite ici et cliquez de nouveau sur « Préparer / reprendre ».")
-
+    if state.get("reason"):
+        st.error(state["reason"])
 
 def _cross_row(claim: dict) -> dict:
     label = CROSS_TYPE_LABELS.get(claim["claim_type"], claim["claim_type"])
@@ -950,15 +934,13 @@ def render_stage6_results(last: dict | None, current_corpus_id: str | None = Non
     outputs = cross_interview.read_outputs(Path(last["corpus_dir"]))
     manifest = json.loads(outputs["manifest"]) if outputs["manifest"] else last
     origin = ("repris du cache TRACE" if manifest.get("cache_hit") else
-              "réponse d'agent du workflow Claude Code" if manifest.get("model") == workflow.WORKFLOW_MODEL else
-              "nouvel appel" if manifest.get("llm_called") else "aucun appel")
+              f"modèle local {manifest.get('model')}" if manifest.get("llm_called") else "aucun appel")
     st.markdown(f"**Dernière exécution (étape 6) :** {manifest.get('api_calls') or 0} appel(s) API — {origin}"
                 f" — statut **{ai_status_label(manifest, ACC_STATUS_ICONS)}** — "
                 f"N importés : **{manifest['corpus_n_total']}** · N exploitables : **{manifest['corpus_n_usable']}**"
                 f" · aucun appel aux étapes 3, 4 ou 5")
     if manifest.get("error"):
-        show = st.info if manifest["error"].get("code") == workflow.AWAITING_AGENT else st.error
-        show(manifest["error"].get("message") or manifest["error"].get("code"))
+        st.error(manifest["error"].get("message") or manifest["error"].get("code"))
     if not outputs["comparison"]:
         return
     document = json.loads(outputs["comparison"])
@@ -1059,10 +1041,11 @@ st.markdown(
     "Outil **expérimental** d'analyse qualitative assistée par IA. "
     "L'ingestion des entretiens est **déterministe** et sans IA : "
     "extraction du texte, découpage en tours de parole et contrôle qualité. "
-    "Les étapes 3 à 6 (agents IA descriptifs) forment un **workflow multi-agents exécuté dans Claude Code** "
-    "(voir TRACE_WORKFLOW.md) : TRACE prépare les tâches et valide les réponses des agents ; aucune clé ni aucun "
-    "appel API, rien n'est lancé au chargement des fichiers."
+    "Les étapes 3 à 6 (agents IA descriptifs) sont exécutées **localement** par TRACE avec un modèle servi par "
+    "**Ollama** sur cet ordinateur : aucune clé, aucune API, aucune donnée envoyée à l'extérieur ; rien n'est lancé "
+    "au chargement des fichiers."
 )
+render_runtime_panel()
 
 # 3. Problématique de recherche
 st.header("Problématique de recherche")
@@ -1102,7 +1085,7 @@ if uploaded_files:
 else:
     st.info("Aucun fichier chargé.")
 
-with st.expander("Ouvrir un run existant (par exemple préparé dans Claude Code)"):
+with st.expander("Ouvrir un run existant (par exemple exécuté avec la CLI locale)"):
     runs = list_runs(config.OUTPUTS_DIR)
     if not runs:
         st.caption("Aucun run enregistré sur ce disque.")

@@ -3,7 +3,7 @@
 Les agents sont simulés : ce test vérifie la chaîne complète (ingestion → deux agents
 → validation) et les garde-fous déterministes sur un entretien fictif. Il ne
 mesure PAS la qualité des réponses d'un vrai agent : seule la lecture des sorties produites
-par Claude Code (workflow, TRACE_WORKFLOW.md) sur des entretiens réels le permet.
+par le modèle local (docs/local_runtime.md) sur des entretiens réels le permet.
 """
 
 import json

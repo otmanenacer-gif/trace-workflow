@@ -1,21 +1,22 @@
-"""Échange avec les agents de TRACE : réponse JSON, validation par schéma, erreurs, paramètres.
+"""Échange avec les agents de TRACE : paramètres du modèle local, erreurs, résultat, validation par schéma.
 
-Les agents sémantiques sont joués par Claude Code (workflow, voir TRACE_WORKFLOW.md et
-core/claude_code_workflow.py) : TRACE ne fait AUCUN appel réseau et n'utilise aucun SDK de modèle ni aucune
-clé. Ce module contient seulement ce qui est commun à toutes les étapes :
+Les agents sémantiques des étapes 3 à 6 sont exécutés par un modèle LOCAL servi par Ollama
+(core/local_agent_runner.py) : aucune API externe, aucune clé, aucun SDK de modèle. Ce module contient ce qui est
+commun à toutes les étapes :
 
-- `parse_json_output` : la réponse d'un agent (texte JSON) validée par le modèle Pydantic de l'agent ;
-  une réponse invalide est une erreur (`INVALID_JSON`, `SCHEMA_VALIDATION`, `EMPTY_RESPONSE`), jamais
-  corrigée en silence ;
-- `LLMError` : erreur d'un agent avec un message sûr (jamais de contenu d'entretien), dont
-  `AWAITING_AGENT` (réponse pas encore écrite par l'agent) ;
-- `LLMResult` : réponse validée rendue aux orchestrateurs des étapes 3 à 6 ;
-- `LLMSettings` : paramètres lus dans l'environnement — tailles des blocs de lecture des entretiens longs
-  (étape 3) et étiquette du moteur écrite dans les manifests.
+- `LLMSettings` : paramètres lus dans l'environnement — modèle Ollama (`TRACE_LOCAL_MODEL`), adresse locale
+  d'Ollama (`TRACE_OLLAMA_URL`, boucle locale seulement), fenêtre de contexte, délai, nombre de corrections
+  locales, tailles des blocs de lecture des entretiens longs (étape 3) ;
+- `parse_json_output` : la réponse d'un agent (texte JSON) validée par le modèle Pydantic de l'agent ; une
+  réponse invalide est une erreur (`INVALID_JSON`, `SCHEMA_VALIDATION`, `EMPTY_RESPONSE`), jamais corrigée en
+  silence ;
+- `LLMError` : erreur d'un agent ou du runtime local, avec un message sûr et une action claire (jamais de contenu
+  d'entretien) ;
+- `LLMResult` : réponse validée rendue aux orchestrateurs des étapes 3 à 6.
 
-Champs « legacy » des manifests (`api_calls`, `billed_this_run`, `usage`, `request_id`, `stop_reason`) :
-conservés pour la compatibilité des sorties et des imports ; le workflow les renseigne toujours avec des
-valeurs neutres (0, false, null ; `request_id` = identifiant de la tâche du workflow).
+Champs « legacy » des manifests (`api_calls`, `billed_this_run`) : conservés pour la compatibilité des sorties et
+des imports ; ils valent toujours 0 / false (aucun appel API, aucun coût). `usage` reçoit les comptes de tokens
+rapportés par Ollama (information locale), `request_id` l'identifiant de l'appel local (journal de l'appel).
 """
 
 from __future__ import annotations
@@ -27,11 +28,34 @@ from typing import Any
 
 from pydantic import BaseModel, ValidationError
 
-# Étiquette du moteur, écrite dans les manifests et documents (champ « model ») : pas un identifiant de modèle.
-AGENT_RUNNER_MODEL = "workflow_claude_code"
+# --- Paramètres du runtime local -----------------------------------------------------------------
 
+ENV_LOCAL_MODEL = "TRACE_LOCAL_MODEL"
+ENV_OLLAMA_URL = "TRACE_OLLAMA_URL"
+ENV_NUM_CTX = "TRACE_OLLAMA_NUM_CTX"
+ENV_TIMEOUT = "TRACE_OLLAMA_TIMEOUT"
+ENV_MAX_CORRECTIONS = "TRACE_LOCAL_MAX_CORRECTIONS"
+ENV_TEMPERATURE = "TRACE_LOCAL_TEMPERATURE"
+ENV_CONCURRENCY = "TRACE_LOCAL_CONCURRENCY"
 ENV_INTERACTION_CHUNK_TOKENS = "TRACE_INTERACTION_CHUNK_TOKENS"
 ENV_PRACTICE_CHUNK_TOKENS = "TRACE_PRACTICE_CHUNK_TOKENS"
+ENV_VARS = (ENV_LOCAL_MODEL, ENV_OLLAMA_URL, ENV_NUM_CTX, ENV_TIMEOUT, ENV_MAX_CORRECTIONS, ENV_TEMPERATURE,
+            ENV_CONCURRENCY, ENV_INTERACTION_CHUNK_TOKENS, ENV_PRACTICE_CHUNK_TOKENS)
+
+# Modèle recommandé : bon en français, sorties JSON structurées fiables, fenêtre de contexte longue (le paquet de
+# l'étape 5 ou 6 peut atteindre ~24 000 tokens estimés). Remplaçable par TRACE_LOCAL_MODEL.
+DEFAULT_LOCAL_MODEL = "qwen2.5:14b"
+DEFAULT_OLLAMA_URL = "http://localhost:11434"
+DEFAULT_NUM_CTX = 32768                 # fenêtre de contexte demandée à Ollama (le défaut d'Ollama est trop court)
+NUM_CTX_MIN, NUM_CTX_MAX = 4096, 131072
+DEFAULT_TIMEOUT_SECONDS = 1800          # une génération locale peut être longue sur un ordinateur portable
+TIMEOUT_MIN, TIMEOUT_MAX = 30, 7200
+DEFAULT_MAX_CORRECTIONS = 2             # nouvelles tentatives LOCALES, avec les erreurs du schéma / validateur
+MAX_CORRECTIONS_LIMIT = 5
+DEFAULT_TEMPERATURE = 0.0               # reproductibilité : génération déterministe autant que possible
+DEFAULT_CONCURRENCY = 1                 # un seul appel à la fois : un modèle local occupe toute la machine
+CONCURRENCY_MAX = 4
+
 # Interaction Signal Reader : taille cible (tokens estimés) d'un bloc d'entretien long (voir core/interaction_chunking.py)
 DEFAULT_INTERACTION_CHUNK_TOKENS = 5000
 INTERACTION_CHUNK_TOKENS_MIN, INTERACTION_CHUNK_TOKENS_MAX = 500, 30000
@@ -39,8 +63,6 @@ INTERACTION_CHUNK_TOKENS_MIN, INTERACTION_CHUNK_TOKENS_MAX = 500, 30000
 # l'Interaction Reader : une pratique décrite est plus longue qu'un signal.
 DEFAULT_PRACTICE_CHUNK_TOKENS = 4000
 
-
-# --- Paramètres ---------------------------------------------------------------------------------
 
 def _int_env(env, name, default, low, high, problems):
     raw = (env.get(name) or "").strip()
@@ -57,11 +79,32 @@ def _int_env(env, name, default, low, high, problems):
     return clamped
 
 
+def _float_env(env, name, default, low, high, problems):
+    raw = (env.get(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw.replace(",", "."))
+    except ValueError:
+        problems.append(f"{name} invalide (« {raw} ») : valeur par défaut {default} utilisée.")
+        return default
+    clamped = min(max(value, low), high)
+    if clamped != value:
+        problems.append(f"{name}={value} hors limites : {clamped} utilisé.")
+    return clamped
+
+
 @dataclass(frozen=True)
 class LLMSettings:
-    """Paramètres des agents, lus dans l'environnement (aucune clé, aucun modèle d'API)."""
+    """Paramètres des agents, lus dans l'environnement. Aucune clé, aucun fournisseur externe."""
 
-    model: str = AGENT_RUNNER_MODEL
+    model: str = DEFAULT_LOCAL_MODEL
+    ollama_url: str = DEFAULT_OLLAMA_URL
+    num_ctx: int = DEFAULT_NUM_CTX
+    timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS
+    max_corrections: int = DEFAULT_MAX_CORRECTIONS
+    temperature: float = DEFAULT_TEMPERATURE
+    concurrency: int = DEFAULT_CONCURRENCY
     interaction_chunk_tokens: int = DEFAULT_INTERACTION_CHUNK_TOKENS
     practice_chunk_tokens: int = DEFAULT_PRACTICE_CHUNK_TOKENS
     problems: tuple[str, ...] = ()
@@ -71,6 +114,14 @@ class LLMSettings:
         env = os.environ if env is None else env
         problems: list[str] = []
         return cls(
+            model=(env.get(ENV_LOCAL_MODEL) or "").strip() or DEFAULT_LOCAL_MODEL,
+            ollama_url=((env.get(ENV_OLLAMA_URL) or "").strip() or DEFAULT_OLLAMA_URL).rstrip("/"),
+            num_ctx=_int_env(env, ENV_NUM_CTX, DEFAULT_NUM_CTX, NUM_CTX_MIN, NUM_CTX_MAX, problems),
+            timeout_seconds=_int_env(env, ENV_TIMEOUT, DEFAULT_TIMEOUT_SECONDS, TIMEOUT_MIN, TIMEOUT_MAX, problems),
+            max_corrections=_int_env(env, ENV_MAX_CORRECTIONS, DEFAULT_MAX_CORRECTIONS, 0, MAX_CORRECTIONS_LIMIT,
+                                     problems),
+            temperature=_float_env(env, ENV_TEMPERATURE, DEFAULT_TEMPERATURE, 0.0, 1.0, problems),
+            concurrency=_int_env(env, ENV_CONCURRENCY, DEFAULT_CONCURRENCY, 1, CONCURRENCY_MAX, problems),
             interaction_chunk_tokens=_int_env(env, ENV_INTERACTION_CHUNK_TOKENS, DEFAULT_INTERACTION_CHUNK_TOKENS,
                                               INTERACTION_CHUNK_TOKENS_MIN, INTERACTION_CHUNK_TOKENS_MAX, problems),
             practice_chunk_tokens=_int_env(env, ENV_PRACTICE_CHUNK_TOKENS, DEFAULT_PRACTICE_CHUNK_TOKENS,
@@ -79,29 +130,41 @@ class LLMSettings:
         )
 
     def request_params(self) -> dict:
-        """Champ « legacy » des manifests et des clés de cache (paramètres de génération) : toujours neutre."""
-        return {"effort": None, "temperature": None}
+        """Paramètres de génération qui influencent la réponse : écrits dans les manifests et dans les clés de
+        cache (`effort` : champ legacy, toujours null)."""
+        return {"effort": None, "temperature": self.temperature}
 
 
 # --- Erreurs ------------------------------------------------------------------------------------
 
 USER_MESSAGES = {
-    "AWAITING_AGENT": "En attente de la réponse de l'agent (workflow Claude Code, aucun appel API).",
     "EMPTY_RESPONSE": "Réponse vide de l'agent.",
     "INVALID_JSON": "Réponse de l'agent non conforme : JSON invalide.",
     "SCHEMA_VALIDATION": "Réponse de l'agent non conforme au schéma attendu.",
+    "TRUNCATED": "Réponse du modèle local tronquée (fenêtre de contexte atteinte) : augmentez TRACE_OLLAMA_NUM_CTX "
+                 "ou choisissez un modèle à contexte plus long.",
+    "OLLAMA_UNAVAILABLE": "Ollama ne répond pas : démarrez-le sur cet ordinateur (commande « ollama serve » ou "
+                          "application Ollama), puis relancez. Aucun autre fournisseur n'est utilisé.",
+    "MODEL_NOT_FOUND": "Le modèle local demandé n'est pas installé dans Ollama.",
+    "NON_LOCAL_URL": "Adresse d'Ollama refusée : TRACE n'appelle qu'un Ollama local (localhost, 127.0.0.1 ou ::1), "
+                     "aucune donnée ne quitte cet ordinateur.",
+    "OLLAMA_TIMEOUT": "Le modèle local n'a pas répondu dans le délai imparti (TRACE_OLLAMA_TIMEOUT).",
+    "OLLAMA_ERROR": "Erreur renvoyée par Ollama.",
     "UNEXPECTED_ERROR": "Erreur inattendue pendant le traitement de la réponse de l'agent.",
 }
+# Erreurs du runtime (et non de la réponse) : jamais de nouvelle tentative, jamais de repli.
+RUNTIME_ERROR_CODES = ("OLLAMA_UNAVAILABLE", "MODEL_NOT_FOUND", "NON_LOCAL_URL", "OLLAMA_TIMEOUT", "OLLAMA_ERROR")
 
 
 class LLMError(Exception):
-    """Erreur d'un agent, avec un message sûr pour l'utilisateur (jamais de contenu d'entretien)."""
+    """Erreur d'un agent ou du runtime local, avec un message sûr pour l'utilisateur (jamais de contenu
+    d'entretien)."""
 
     def __init__(self, code: str, detail: str | None = None, *, request_id: str | None = None):
         self.code = code
         self.detail = detail
         self.request_id = request_id
-        # Champs « legacy » lus par les orchestrateurs (manifests) : toujours neutres.
+        # Champs lus par les orchestrateurs (manifests) : `attempts` = appels API (legacy), toujours 0.
         self.status_code: int | None = None
         self.usage: dict | None = None
         self.attempts = 0
@@ -111,7 +174,7 @@ class LLMError(Exception):
     @property
     def user_message(self) -> str:
         message = USER_MESSAGES.get(self.code, USER_MESSAGES["UNEXPECTED_ERROR"])
-        extras = [x for x in (self.detail, f"tâche {self.request_id}" if self.request_id else None) if x]
+        extras = [x for x in (self.detail, f"appel {self.request_id}" if self.request_id else None) if x]
         return message + (f" ({' ; '.join(extras)})" if extras else "")
 
     def to_dict(self) -> dict:
@@ -122,9 +185,9 @@ class LLMError(Exception):
 # --- Résultat -----------------------------------------------------------------------------------
 
 def usage_to_dict(usage: Any = None) -> dict:
-    """Champ « legacy » `usage` des manifests (tokens) : le workflow n'en consomme pas, toujours neutre."""
+    """Champ `usage` des manifests : tokens rapportés par le modèle local (objet ou dict), sinon null."""
     def get(name):
-        value = getattr(usage, name, None) if usage is not None else None
+        value = usage.get(name) if isinstance(usage, dict) else getattr(usage, name, None)
         return value if isinstance(value, int) else None
 
     return {"input_tokens": get("input_tokens"), "output_tokens": get("output_tokens"),
@@ -134,7 +197,7 @@ def usage_to_dict(usage: Any = None) -> dict:
 
 @dataclass
 class LLMResult:
-    """Réponse validée d'un agent. `attempts` (nombre d'appels API) vaut toujours 0 dans le workflow."""
+    """Réponse validée d'un agent. `attempts` alimente le champ legacy `api_calls` : toujours 0 (aucune API)."""
 
     data: BaseModel
     usage: dict

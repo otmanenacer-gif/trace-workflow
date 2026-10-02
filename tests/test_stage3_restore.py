@@ -191,10 +191,8 @@ def test_older_agent_version_is_accepted_with_a_warning(tmp_path):
 # --- Interface ----------------------------------------------------------------------------------------
 
 def test_app_offers_restore_then_shows_restored_stage3_and_stage4(tmp_path, monkeypatch):
-    from core.claude_code_workflow import WorkflowClient
-    from tests.fake_llm import answering_workflow
-    transport = stage4_only_transport()  # agents simulés, joués à travers le workflow (response.json)
-    monkeypatch.setattr(WorkflowClient, "complete_json", answering_workflow(transport))
+    from tests.fake_llm import use_fake_runtime
+    transport = use_fake_runtime(monkeypatch, {ACCOUNTABILITY: S.REFERENCE_BUILDER})  # seul l'agent de l'étape 4
     uploads = downloaded_stage3(tmp_path)
     run = fresh_run(tmp_path)
     at = AppTest.from_file(str(config.PROJECT_ROOT / "app.py"), default_timeout=30)
@@ -203,12 +201,12 @@ def test_app_offers_restore_then_shows_restored_stage3_and_stage4(tmp_path, monk
     assert not at.exception
     assert "Restaurer des résultats Stage 3 existants" in [e.label for e in at.expander]
     assert at.button(key="restore_launch").disabled  # aucun fichier choisi
-    assert not [b for b in at.button if b.key == "wf_stage4"]  # l'étape 4 attend l'étape 3
+    assert not [b for b in at.button if b.key == "run_stage4"]  # l'étape 4 attend l'étape 3
 
     at.session_state["last_run"] = restore_stage3(run, S.INTERVIEW_ID, uploads)
     at.run()
     assert "Stage 3 restauré depuis fichiers — 0 appel API" in " ".join(str(s.value) for s in at.success)
     assert "Restaurer des résultats Stage 3 existants" not in [e.label for e in at.expander]
-    at.button(key="wf_stage4").click().run()
+    at.button(key="run_stage4").click().run()
     assert not at.exception and [c["agent"] for c in transport.calls] == [ACCOUNTABILITY]  # aucune étape 3
     assert list(at.table[-1].value["Épisodes accountability"]) == [4]

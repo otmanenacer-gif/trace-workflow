@@ -35,14 +35,14 @@ def complete(client, **overrides):
 
 # --- Paramètres ---------------------------------------------------------------------------------
 
-def test_settings_need_no_key_and_carry_the_workflow_label():
+def test_settings_need_no_key_and_name_the_local_model():
     settings = LLMSettings.from_env({})
-    assert settings.model == llm_client.AGENT_RUNNER_MODEL == "workflow_claude_code"
+    assert settings.model == llm_client.DEFAULT_LOCAL_MODEL
     assert settings.interaction_chunk_tokens == llm_client.DEFAULT_INTERACTION_CHUNK_TOKENS
     assert settings.practice_chunk_tokens == llm_client.DEFAULT_PRACTICE_CHUNK_TOKENS
     assert settings.problems == ()
-    assert settings.request_params() == {"effort": None, "temperature": None}  # champ legacy, neutre
-    for name in ("api_key", "enabled", "missing", "max_concurrency", "max_retries", "timeout_seconds"):
+    assert settings.request_params() == {"effort": None, "temperature": 0.0}  # paramètre de génération local
+    for name in ("api_key", "enabled", "missing", "max_concurrency", "max_retries"):
         assert not hasattr(settings, name), name
 
 
@@ -100,7 +100,9 @@ def test_requirements_do_not_list_a_model_sdk():
 def test_legacy_api_code_is_gone():
     for name in ("AnthropicTransport", "LLMClient", "Transport", "classify_exception", "backoff_delay", "redact"):
         assert not hasattr(llm_client, name), name
-    assert not (ROOT / "scripts" / "smoke_test_stage3.py").exists()
+    for path in ("scripts/smoke_test_stage3.py", "scripts/trace_workflow.py", "core/claude_code_workflow.py",
+                 ".claude/agents/trace-agent.md"):
+        assert not (ROOT / path).exists(), path  # ni API, ni exécution d'agents par Claude Code
 
 
 def test_tests_cannot_reach_the_network():
@@ -182,13 +184,27 @@ def test_schema_error_detail_is_bounded():
 
 
 def test_errors_have_safe_messages_and_stable_dict():
-    error = LLMError("AWAITING_AGENT", request_id="practice_extractor-0123456789")
-    assert error.to_dict() == {"code": "AWAITING_AGENT", "message": error.user_message, "status_code": None,
+    error = LLMError("OLLAMA_UNAVAILABLE", "http://localhost:11434", request_id="practice_extractor-0123456789")
+    assert error.to_dict() == {"code": "OLLAMA_UNAVAILABLE", "message": error.user_message, "status_code": None,
                                "request_id": "practice_extractor-0123456789"}
-    assert "aucun appel API" in error.user_message and "practice_extractor-0123456789" in error.user_message
+    assert "ollama serve" in error.user_message and "practice_extractor-0123456789" in error.user_message
+    assert "Aucun autre fournisseur" in error.user_message
     assert LLMError("NOPE").user_message == llm_client.USER_MESSAGES["UNEXPECTED_ERROR"]
     assert agent_error().code == "SCHEMA_VALIDATION"
 
 
 def test_fake_settings_carry_a_test_label():
     assert fake_settings().model == "fake-model"
+
+
+def test_no_external_service_is_referenced_by_the_code():
+    """Aucune adresse de fournisseur de modèle dans le code : seul Ollama local (boucle locale) est joignable."""
+    forbidden = ("anthropic.com", "openai.com", "googleapis.com", "generativelanguage", "api.mistral.ai",
+                 "api.cohere", "huggingface.co/api", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY")
+    paths = [ROOT / "app.py", *(ROOT / "core").glob("*.py"), *(ROOT / "agents").glob("*.py"),
+             *(ROOT / "scripts").glob("*.py")]
+    for path in paths:
+        text = path.read_text(encoding="utf-8")
+        for needle in forbidden:
+            assert needle not in text, (path, needle)
+    assert llm_client.DEFAULT_OLLAMA_URL == "http://localhost:11434"
