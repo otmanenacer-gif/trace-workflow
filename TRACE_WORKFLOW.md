@@ -4,9 +4,9 @@ TRACE s'exécute comme un workflow multi-agents classique **dans Claude Code**, 
 modèle (ni Anthropic, ni autre fournisseur), sans clé et sans coût d'API. Le Python de TRACE fait tout le travail
 déterministe ; les agents sémantiques sont joués par Claude Code, à partir des prompts du dépôt.
 
-**État de la migration : les étapes 3, 4 et 5 passent par ce workflow.** L'étape 6 n'est pas encore migrée :
-ne pas l'exécuter ici. Si l'on demande « jusqu'à l'étape 6 », exécuter les étapes 3 à 5, puis s'arrêter et le
-dire.
+**État de la migration : les étapes 3, 4, 5 et 6 passent par ce workflow.** Les étapes 3 à 5 portent sur les
+entretiens d'un run ; l'étape 6 porte sur un **corpus** de sorties de l'étape 5 (plusieurs runs ou fichiers
+téléchargés). Il n'y a pas d'étape 7 : s'arrêter après l'étape 6.
 
 ```
 Entretien (PDF / DOCX / TXT)
@@ -33,6 +33,13 @@ Entretien (PDF / DOCX / TXT)
 → TRACE  validation (schéma, validateur de l'étape 5 avec ses      check
          requalifications)
 → TRACE  sorties habituelles de l'étape 5                          stage5
+
+plusieurs triplets de l'étape 5 (runs, dossiers, fichiers)
+→ TRACE  contrôle du corpus, préparation déterministe,             python scripts/trace_workflow.py stage6
+         UN paquet par corpus
+→ Agent  Cross-Interview Comparator                                sous-agent trace-agent
+→ TRACE  validation (schéma, validateur de l'étape 6)              check
+→ TRACE  sorties habituelles de l'étape 6                          stage6 --corpus <corpus_id>
 ```
 
 `python scripts/trace_workflow.py run <run> --until 5` enchaîne le tout : un passage traite chaque étape dans
@@ -43,14 +50,14 @@ terminée.
 
 | Acteur | Rôle |
 |---|---|
-| **TRACE (Python)** | ingestion, présélection des locuteurs, découpage en blocs, paquets de tâche, validation du schéma, fusion des blocs, sélectivité des signaux, validation des citations, garde-fou interprétatif, candidats d'épisodes, validation des épisodes, ancrages temporels, régularités, validation de l'étape 5 et requalifications, écriture des sorties. Inchangé : ce sont les pipelines des étapes 3 (`core/analysis.py`), 4 (`core/accountability.py`) et 5 (`core/trajectory.py`), avec un client sans réseau (`core/claude_code_workflow.py`). |
+| **TRACE (Python)** | ingestion, présélection des locuteurs, découpage en blocs, paquets de tâche, validation du schéma, fusion des blocs, sélectivité des signaux, validation des citations, garde-fou interprétatif, candidats d'épisodes, validation des épisodes, ancrages temporels, régularités, validation de l'étape 5 et requalifications, contrôle du corpus, index inter-entretiens, validation de l'étape 6 (comptes, positions, cas négatifs), écriture des sorties. Inchangé : ce sont les pipelines des étapes 3 (`core/analysis.py`), 4 (`core/accountability.py`), 5 (`core/trajectory.py`) et 6 (`core/cross_interview.py`), avec un client sans réseau (`core/claude_code_workflow.py`). |
 | **Orchestrateur** (la session Claude Code principale) | lance les commandes, distribue les tâches, rejoue les étapes, rend compte. Ne joue **aucun** agent et ne lit ni les paquets ni les réponses. |
 | **Agent** (un sous-agent `trace-agent` par tâche, `.claude/agents/trace-agent.md`) | exécute UN paquet : lit le prompt de l'agent, le matériau, le schéma ; écrit `response.json` ; le fait valider ; corrige. |
 
 Les prompts `prompts/*.md` sont la **source de vérité** de chaque agent. Le paquet donne leur chemin et leur
 empreinte ; il ne les recopie pas et ne les résume pas.
 
-## Les agents des étapes 3 à 5
+## Les agents des étapes 3 à 6
 
 | Agent | Prompt (source de vérité) | Quand | Reçoit | Produit (schéma) |
 |---|---|---|---|---|
@@ -59,6 +66,7 @@ empreinte ; il ne les recopie pas et ne les résume pas.
 | Interaction Signal Reader | `prompts/interaction_signal_reader.md` | après l'audit ; 1 tâche, ou 1 par bloc | idem | `signals` (`InteractionSignalOutput`) |
 | Lecture à longue distance | `prompts/interaction_long_distance_reader.md` | entretien long, quand tous les blocs de l'Interaction Reader ont une réponse | sélection de tours de blocs différents | `signals` (`LongDistanceSignalOutput`) |
 | Accountability Episode Builder (étape 4) | `prompts/accountability_episode_builder.md` | étape 3 complète ; 0 tâche sans candidat, sinon 1 par entretien, ou 1 par bloc de composantes au-delà des seuils d'un appel | candidats normalisés (pratiques, signaux, citations, tours nécessaires), jamais l'entretien entier | `episodes` (`AccountabilityEpisodeOutput`) |
+| Cross-Interview Comparator (étape 6) | `prompts/cross_interview_comparator.md` | au moins deux entretiens exploitables dans le corpus ; **1 seule** tâche par corpus | représentation compacte des sorties VALIDÉES de l'étape 5 de tous les entretiens exploitables (affirmations, critères, éléments à revoir, index déterministes), jamais les transcriptions | `cross_case_claims` (`CrossInterviewComparatorOutput`) |
 | Trajectory Mapper (étape 5) | `prompts/trajectory_mapper.md` | étape 4 complète (ou PARTIAL) et à jour ; 0 tâche si moins de deux éléments utilisables (configuration `no_clear_pattern` déterministe), sinon **1 seule** par entretien | représentation compacte d'UN entretien : épisodes utilisables, pratiques sans marqueur, citations, ancrages temporels, régularités déterministes | `configuration_type`, `claims`, `student_role_criteria` (`TrajectoryMapperOutput`) |
 
 Un bloc d'entretien long garde **les mêmes consignes** que son agent : seul le message annonce un extrait. De même,
@@ -79,6 +87,17 @@ est conservé, le statut du workflow et `check` affichent un **avertissement**, 
 découpage improvisé, jamais d'API. Mesures sur les entretiens synthétiques du dépôt : 25 tours ≈ 1 900 tokens,
 388 tours ≈ 5 900 tokens (environ un quart du seuil).
 
+**Étape 6, un corpus.** Le paquet est rattaché au **corpus** (`corpus_id`), pas à un run :
+`data/outputs/cross_interview/<corpus_id>/workflow/stage6/` contient `tasks/<tâche>/` (le paquet et `response.json`),
+`inputs/` (copie octet pour octet des fichiers importés : `check` et `stage6 --corpus` reconstruisent exactement le
+même corpus, y compris pour des fichiers importés dans Streamlit) et `status.json`. Les sorties habituelles vont dans
+`<corpus_id>/analysis/`. Le `corpus_id` est une empreinte des fichiers de l'étape 5 de chaque entretien (et des
+exclusions) : ajouter, retirer ou modifier un entretien donne un **autre corpus**, donc une nouvelle analyse ; l'ordre
+d'import ne compte pas. Un triplet invalide est exclu avec sa raison (règles de `cross_interview_corpus`) ; moins
+de deux entretiens exploitables : étape 6 bloquée, aucune tâche. Comptes en entretiens recalculés, positions
+`explicit_presence` / `explicit_refusal` / `contrary_case` / `divergent_variant` / `not_observed`, cas négatifs,
+éléments à revoir et requalifications : règles inchangées du validateur de l'étape 6.
+
 ## Garde contre les réexécutions
 
 Une étape **complète et à jour** n'est jamais rejouée par `run`, `stage3`, `stage4` ou `stage5` : l'entretien est
@@ -89,18 +108,20 @@ signalé « déjà terminée — non rejouée » et aucun fichier n'est réécri
 | 3 | les deux agents ont une sortie complète (`stage3_state` = COMPLETE) |
 | 4 | sortie exploitable et calculée sur les sorties ACTUELLES de l'étape 3 (`stage4_state` = COMPLETE, ni PARTIAL ni périmée) |
 | 5 | `student_trajectory.json` exploitable, `analysis_complete: true`, calculé sur les sorties ACTUELLES des étapes 3 et 4 |
+| 6 | comparaison exploitable du MÊME corpus (`corpus_id`, empreintes des fichiers de l'étape 5) avec la même identité d'analyse : paquet exact, agent, prompt, schéma, versions du préparateur, du validateur et du contrôle du corpus — jamais un horodatage |
 
 Une étape périmée (l'étape précédente a changé) n'est pas complète : elle est rejouée, sans nouvelle tâche si son
 paquet n'a pas changé (les réponses sont relues). Pour rejouer volontairement une étape complète : `stage3 <run>
---force` (idem `stage4`, `stage5`) — l'étape suivante devient alors périmée et sera rejouée par `run`.
+--force` (idem `stage4`, `stage5`, `stage6`) — l'étape suivante devient alors périmée et sera rejouée par `run`.
 
 ## Paquet de tâche
 
-`data/outputs/<run>/workflow/stage<N>/tasks/<tâche>/` (N = 3, 4 ou 5)
+`data/outputs/<run>/workflow/stage<N>/tasks/<tâche>/` (N = 3, 4 ou 5) et
+`data/outputs/cross_interview/<corpus_id>/workflow/stage6/tasks/<tâche>/` (étape 6)
 
 | Fichier | Contenu |
 |---|---|
-| `task.json` | étape, agent, version, entretien, `system_prompt.path` + empreinte, `payload.path`, `schema.path`, `response.path`, `check_command`, rappel des consignes |
+| `task.json` | étape, agent, version, entretien (ou `corpus_id` et `corpus_dir` à l'étape 6), `system_prompt.path` + empreinte, `payload.path`, `schema.path`, `response.path`, `check_command`, rappel des consignes |
 | `payload.txt` | le message EXACT que l'agent reçoit (matériau préparé par TRACE, encadré comme une donnée) |
 | `schema.json` | le schéma JSON attendu |
 | `response.json` | **écrit par l'agent** : un objet JSON conforme au schéma, rien d'autre |
@@ -136,6 +157,19 @@ ou « Exécute TRACE sur le run `<run>` jusqu'à l'étape 5 », ou « Exécute l
    revoir), avertissements (dont la taille du paquet de l'étape 5), emplacement des sorties, 0 appel API. Puis
    **s'arrêter** (l'étape 6 n'est pas migrée).
 
+**Étape 6** (« Exécute TRACE Stage 6 sur ces sorties Stage 5 », « … sur les runs A et B », « … sur le corpus
+`<corpus_id>` ») :
+
+1. `python scripts/trace_workflow.py stage6 SOURCE [SOURCE ...]` — SOURCE : run (identifiant, `latest` ou dossier
+   du run : ses triplets de l'étape 5), dossier de JSON téléchargés, ou fichier JSON ; ou `stage6 --corpus
+   <corpus_id>` pour reprendre un corpus déjà préparé. La sortie affiche le corpus, les entretiens exploitables
+   et exclus (avec leurs raisons), puis la tâche. Mêmes codes de sortie (6 : moins de deux entretiens
+   exploitables).
+2. Code 3 : lancer UN sous-agent `trace-agent` avec le `task.json` affiché ; code 4 : le relancer pour corriger.
+3. Rejouer `python scripts/trace_workflow.py stage6 --corpus <corpus_id>` jusqu'au code 0, puis rendre compte
+   (entretiens comparés et exclus, affirmations retenues, requalifiées, à revoir, cas négatifs, avertissements,
+   emplacement des sorties, 0 appel API) et **s'arrêter**. Un corpus déjà analysé à l'identique n'est pas rejoué.
+
 Commandes d'une seule étape, si besoin : `stage3 <run>`, `stage4 <run>`, `stage5 <run>` (mêmes codes de sortie,
 même garde, `--force` pour rejouer explicitement), `tasks <run> --stage 5`.
 
@@ -158,10 +192,14 @@ le préciser dans le compte rendu.
      intervalle inversé, objet sans citation valide ; étape 4 : identifiant inconnu, épisode d'accountability
      sans voix de l'enquêté·e ou sans opération, fusion de candidats sans relation explicite ; étape 5 :
      épisode ou pratique inconnu ou inutilisable, affirmation sans appui ou sans tour de l'enquêté·e, ancrage
-     temporel introuvable dans le tour cité, critère interprétatif, mot de l'enquêteur attribué… : corriger
+     temporel introuvable dans le tour cité, critère interprétatif, mot de l'enquêteur attribué ; étape 6 :
+     entretien inconnu ou exclu, identifiant inconnu ou d'un autre entretien, appui vide, contre-exemple inconnu,
+     typologie de personnes ou attribution sociale… : corriger
      `response.json` en revenant au matériau, puis relancer `check` ;
    - **avertissements** (vocabulaire interprétatif, appui sur la seule parole de l'enquêteur, requalification
-     par TRACE d'un changement temporel non ancré ou d'une exception sans règle, paquet au-delà du seuil…) :
+     par TRACE d'un changement temporel non ancré ou d'une exception sans règle ; étape 6 : compte d'entretiens
+     corrigé, régularité sur un seul entretien requalifiée, non-observation présentée comme absence,
+     généralisation au-delà du N observé, causalité… ; paquet au-delà du seuil…) :
      corriger si les consignes de l'agent le demandent ; sinon les laisser, TRACE les signalera (`needs_review`) ;
    - **informations** (requalifications appliquées, éléments à revoir propagés…) : à lire, sans rien inventer
      pour les « couvrir ».
@@ -172,14 +210,14 @@ le préciser dans le compte rendu.
 ## Règles
 
 - Aucun appel à une API de modèle : ni Anthropic, ni OpenAI, ni Gemini, ni Ollama, ni autre. Ne jamais
-  renseigner `TRACE_STAGE3_BACKEND`, `TRACE_STAGE4_BACKEND` ni `TRACE_STAGE5_BACKEND` à `anthropic` (anciens
-  modes par API, conservés seulement pour les anciens tests).
+  renseigner `TRACE_STAGE3_BACKEND`, `TRACE_STAGE4_BACKEND`, `TRACE_STAGE5_BACKEND` ni `TRACE_STAGE6_BACKEND` à
+  `anthropic` (anciens modes par API, conservés seulement pour les anciens tests).
 - Ne jamais modifier : `prompts/`, `agents/`, les validateurs et préparateurs de `core/`, la transcription
   (`structured_transcript.json`), un `payload.txt`, un `schema.json`, un `task.json`.
 - Aucun repli : une tâche sans réponse reste en attente, une réponse invalide reste à corriger ; rien n'est
   demandé à une API.
-- Ne jamais écrire directement dans `interviews/<id>/analysis/` : seuls `run`, `stage3`, `stage4` et `stage5`
-  y écrivent.
+- Ne jamais écrire directement dans `interviews/<id>/analysis/` ni dans `cross_interview/<corpus_id>/` : seuls
+  `run`, `stage3`, `stage4`, `stage5` et `stage6` y écrivent.
 - Ne jamais contourner un validateur (ni le modifier, ni « arranger » une citation ou un ancrage pour qu'il
   passe : il se recopie depuis le tour cité, ou l'objet est retiré s'il n'est pas appuyé par le matériau).
 - Une tâche = un agent = un contexte. Un agent ne lit ni les autres tâches ni les sorties des autres agents.
@@ -201,6 +239,14 @@ data/outputs/<run>/
         accountability_episode_manifest.json
         student_trajectory.json         student_trajectory_validation.json       (étape 5)
         student_trajectory_manifest.json
+
+data/outputs/cross_interview/<corpus_id>/
+    cross_interview_corpus.json                   bilan de l'import (exploitables, exclus et raisons)
+    stage5/<interview_id>/                        triplets exploitables, recopiés octet pour octet
+    workflow/stage6/status.json, tasks/<tâche>/, inputs/   workflow de l'étape 6
+    analysis/cross_interview_comparison.json      sorties HABITUELLES de l'étape 6
+    analysis/cross_interview_validation.json
+    analysis/cross_interview_manifest.json
 ```
 
 Les documents portent `"model": "workflow_claude_code"`, `api_calls: 0`, `billed_this_run: false` et, comme
@@ -221,6 +267,10 @@ bloc dans `chunks[]` du manifest).
   résultats Stage 4 existants » avec `accountability_episodes.json` et `accountability_episode_validation.json`.
   Les sorties de l'étape 5 (les 3 fichiers `student_trajectory*.json`) s'importent dans la section « Étape 6 »
   → « Constituer le corpus Stage 6 » : elles y sont reconnues et contrôlées comme celles de l'ancien pipeline.
+- **Étape 6** : section « Étape 6 », importer les triplets (ou inclure ceux du run courant) : corpus importé,
+  entretiens exploitables et exclus ; « Préparer / reprendre l'étape 6 (workflow Claude Code, 0 appel API) » :
+  tâche en attente (et l'instruction à donner à Claude Code : « Exécute TRACE Stage 6 sur le corpus
+  `<corpus_id>` »), réponse à corriger, résultat et téléchargements.
 
 ## Dépannage
 
@@ -234,4 +284,6 @@ bloc dans `chunks[]` du manifest).
 | Étape 5 : avertissement « paquet au-delà du seuil » | paquet unique conservé ; résultat `SUCCESS_WITH_WARNINGS` ; le signaler dans le compte rendu. |
 | Entretien long | plusieurs tâches par agent (`…__blocN__…`) ; la lecture à longue distance n'apparaît qu'au passage suivant. |
 | Une réponse corrigée après un passage | relue au passage suivant tant que l'étape n'est pas complète ; une fois l'étape complète, `stage<N> <run> --force` (sur demande explicite). |
-| L'utilisateur demande l'étape 6 | pas encore migrée : s'arrêter après l'étape 5 et le dire. |
+| `stage6` code 6 | moins de deux entretiens exploitables : importer d'autres triplets valides ; rendre compte des exclusions. |
+| `check` (étape 6) : « Le corpus ne correspond plus au paquet » | relancer `stage6` sur les sources voulues : un nouveau corpus et un nouveau paquet sont préparés. |
+| Un entretien ajouté, retiré ou modifié | autre `corpus_id` : nouvelle analyse (l'ancienne reste dans son dossier). |

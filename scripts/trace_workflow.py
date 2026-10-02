@@ -1,7 +1,7 @@
 """Workflow Claude Code de TRACE — commandes déterministes (aucun appel API, aucune clé).
 
 Claude Code exécute ces commandes ; les agents sémantiques sont joués par Claude Code lui-même, à partir
-des prompts du dépôt (voir TRACE_WORKFLOW.md). Étapes 3, 4 et 5 pour l'instant.
+des prompts du dépôt (voir TRACE_WORKFLOW.md). Étapes 3 à 6.
 
     python scripts/trace_workflow.py ingest FICHIER [FICHIER ...]   # crée un run et l'ingère (étapes 1-2)
     python scripts/trace_workflow.py run RUN --until 5              # un passage jusqu'à l'étape 5 : chaque étape
@@ -10,6 +10,9 @@ des prompts du dépôt (voir TRACE_WORKFLOW.md). Étapes 3, 4 et 5 pour l'instan
                                                                     # réponses, écrit les tâches suivantes
     python scripts/trace_workflow.py stage4 RUN [--interview ID]    # un passage de l'étape 4
     python scripts/trace_workflow.py stage5 RUN [--interview ID]    # un passage de l'étape 5
+    python scripts/trace_workflow.py stage6 SOURCE [SOURCE ...]     # étape 6 sur les sorties de l'étape 5 (corpus) :
+                                                                    # SOURCE = run, dossier ou fichier JSON
+    python scripts/trace_workflow.py stage6 --corpus CORPUS_ID      # reprendre un corpus (fichiers déjà copiés)
     python scripts/trace_workflow.py tasks RUN [--stage 5]          # tâches en attente / à corriger
     python scripts/trace_workflow.py check DOSSIER_DE_TACHE         # valide response.json (validateurs existants)
     python scripts/trace_workflow.py status RUN                     # état du run
@@ -37,6 +40,7 @@ if str(ROOT) not in sys.path:
 from core import claude_code_workflow as wf  # noqa: E402
 from core import config  # noqa: E402
 from core.ingestion import ingest_run  # noqa: E402
+from core import cross_interview_corpus as corpus  # noqa: E402
 from core.run_manager import TraceError, init_run, list_runs, load_metadata  # noqa: E402
 
 EXIT_CODES = {wf.STAGE_COMPLETE: 0, wf.STAGE_AWAITING: 3, wf.STAGE_INVALID: 4, wf.STAGE_FAILED: 5,
@@ -161,6 +165,63 @@ def cmd_check(args) -> int:
     return 0 if report["ok"] else 1
 
 
+def stage6_uploads(sources: list[str], corpus_id: str | None) -> list[tuple[str, bytes]]:
+    """Fichiers de l'étape 5 à comparer : runs (identifiant, « latest » ou dossier), dossiers de JSON téléchargés,
+    fichiers JSON ; ou la copie des fichiers d'un corpus déjà préparé (`--corpus`)."""
+    uploads: list[tuple[str, bytes]] = []
+    if corpus_id:
+        uploads += wf.read_inputs(config.CROSS_INTERVIEW_DIR / corpus_id)
+        if not uploads:
+            raise TraceError(f"Corpus inconnu ou sans fichiers copiés : {corpus_id}.")
+    for source in sources:
+        path = Path(source)
+        if path.is_file():
+            uploads.append((path.name, path.read_bytes()))
+            continue
+        try:
+            run_dir = resolve_run(source)
+        except TraceError:
+            run_dir = None
+        if run_dir is not None:
+            uploads += corpus.run_stage5_uploads(load_metadata(run_dir))
+        elif path.is_dir():
+            uploads += [(f.name, f.read_bytes()) for f in sorted(path.rglob("*.json")) if f.is_file()]
+        else:
+            raise TraceError(f"Source introuvable : {source} (run, dossier ou fichier JSON).")
+    if not uploads:
+        raise TraceError("Aucun fichier de l'étape 5 à comparer.")
+    return uploads
+
+
+def print_corpus_status(status: dict) -> None:
+    print(f"Corpus {status['corpus_id']} — étape 6 (workflow Claude Code, {status['api_calls']} appel API) : "
+          f"{status['status']} ({wf.STATUS_LABELS[status['status']]}) — phase {status['phase']}")
+    print(f"Dossier : {status['corpus_dir']} · mode {status['mode']} · {status['n_usable']} entretien(s) "
+          f"exploitable(s) sur {status['n_total']} importé(s)")
+    for row in status["rows"]:
+        reasons = f" — {' '.join(row['reasons'])}" if row["reasons"] else ""
+        print(f"  {row['interview_id']} : {row['status']}{reasons}")
+    for item in status["unrecognized"]:
+        print(f"  fichier ignoré — {item['file']} : {item['reason']}")
+    if status.get("reason"):
+        print(f"  {status['reason']}")
+    for warning in status["warnings"]:
+        print(f"  AVERTISSEMENT : {warning}")
+    _print_tasks(status, status["corpus_id"], f"{wf.CLI} stage6 --corpus {status['corpus_id']}")
+
+
+def cmd_stage6(args) -> int:
+    result = wf.run_stage6(stage6_uploads(args.sources, args.corpus), force=args.force)
+    status = result["status"]
+    if args.json:
+        print(json.dumps(status, ensure_ascii=False, indent=2))
+    else:
+        print_corpus_status(status)
+        if status["status"] == wf.STAGE_COMPLETE:
+            print(f"\nSorties de l'étape 6 : {status['corpus_dir']}/{config.ANALYSIS_SUBDIR}/")
+    return EXIT_CODES[status["status"]]
+
+
 def cmd_status(args) -> int:
     run_dir = resolve_run(args.run)
     metadata = load_metadata(run_dir)
@@ -176,7 +237,7 @@ def cmd_status(args) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Workflow Claude Code de TRACE (étapes 3 à 5, sans appel API).")
+    parser = argparse.ArgumentParser(description="Workflow Claude Code de TRACE (étapes 3 à 6, sans appel API).")
     sub = parser.add_subparsers(dest="command", required=True)
     p = sub.add_parser("ingest", help="crée un run et ingère les entretiens (déterministe)")
     p.add_argument("files", nargs="+")
@@ -191,6 +252,14 @@ def main(argv: list[str] | None = None) -> int:
                        help="rejouer même si l'étape est déjà complète (rend l'étape suivante périmée)")
         p.add_argument("--json", action="store_true")
         p.set_defaults(func=cmd_stage, stage=stage)
+    p = sub.add_parser("stage6", help="un passage de l'étape 6 sur un corpus de sorties de l'étape 5 (corpus déjà "
+                                      "analysé à l'identique : non rejoué)")
+    p.add_argument("sources", nargs="*",
+                   help="runs (identifiant, « latest », dossier), dossiers ou fichiers JSON")
+    p.add_argument("--corpus", help="reprendre un corpus déjà préparé (copie de ses fichiers)")
+    p.add_argument("--force", action="store_true", help="rejouer même si ce corpus est déjà analysé à l'identique")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_stage6)
     p = sub.add_parser("run", help="un passage jusqu'à l'étape --until (chaque étape seulement si elle n'est pas "
                                    "déjà complète)")
     p.add_argument("run")

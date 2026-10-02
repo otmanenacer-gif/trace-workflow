@@ -20,6 +20,7 @@ def texts(elements):
 def fake_api(monkeypatch, tmp_path):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-FAKE-KEY-000")
     monkeypatch.setenv("ANTHROPIC_MODEL", "fake-model")
+    monkeypatch.setenv("TRACE_STAGE6_BACKEND", "anthropic")  # ancien mode de l'étape 6 par API (LLM simulé)
     monkeypatch.setattr(config, "CROSS_INTERVIEW_DIR", tmp_path / "cross_interview")
     transport = FakeTransport({COMPARATOR: S6.scripted_comparator(S6.GOOD_PLAN)})
     monkeypatch.setattr(llm_client, "AnthropicTransport", lambda settings: transport)

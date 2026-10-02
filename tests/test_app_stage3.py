@@ -34,9 +34,11 @@ def fake_api(monkeypatch):
 
 
 def test_app_starts_without_api_key():
+    # Étapes 3 à 6 migrées vers le workflow Claude Code : sans clé, aucune étape IA n'est désactivée.
     at = AppTest.from_file(APP, default_timeout=30).run()
     assert not at.exception
-    assert "désactivée (clé API ou modèle absent)" in texts(at.markdown)
+    assert "désactivée (clé API ou modèle absent)" not in texts(at.markdown)
+    assert texts(at.markdown).count("prête, workflow Claude Code (0 appel API)") == 5  # étapes 2 à 6 du pipeline
 
 
 def test_ai_section_is_disabled_without_key(tmp_path, monkeypatch):

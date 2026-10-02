@@ -174,7 +174,7 @@ async def _call(prepared: Stage6Input, client: LLMClient | None, cache: Analysis
             "model_requested": result.model_requested, "response_model": result.response_model,
             "request_id": result.request_id, "stop_reason": result.stop_reason})
         record.update(status=STATUS_SUCCESS, output=output, created_at=_now(), api_calls=result.attempts,
-                      billed_this_run=True, usage=result.usage, duration_seconds=result.duration_seconds,
+                      billed_this_run=result.attempts > 0, usage=result.usage, duration_seconds=result.duration_seconds,
                       response_model=result.response_model, request_id=result.request_id,
                       stop_reason=result.stop_reason)
     except LLMError as error:
@@ -262,8 +262,10 @@ async def run_stage6_corpus(prepared: Stage6Input, client: LLMClient | None, cac
             logger.warning("Étape 6 %s : représentation au-delà du seuil d'un appel (%d tokens estimés)",
                            prepared.corpus_id, estimated)
         record = await _call(prepared, client, cache, settings, force)
+        # appel API, ou réponse d'agent du workflow Claude Code (0 appel API, statut SUCCESS)
         manifest.update(cache_key=record["cache_key"], cache_hit=record["cache_hit"],
-                        llm_called=bool(record["api_calls"]), api_calls=record["api_calls"] or 0,
+                        llm_called=bool(record["api_calls"]) or record["status"] == STATUS_SUCCESS,
+                        api_calls=record["api_calls"] or 0,
                         billed_this_run=record["billed_this_run"], usage=record["usage"],
                         duration_seconds=record["duration_seconds"], response_model=record["response_model"],
                         request_id=record["request_id"], stop_reason=record["stop_reason"],
@@ -322,19 +324,22 @@ async def run_stage6_corpus(prepared: Stage6Input, client: LLMClient | None, cac
 
 def run_stage6(uploads: list[tuple[str, bytes]], *, settings: LLMSettings | None = None,
                transport: Transport | None = None, cache: AnalysisCache | None = None, force: bool = False,
-               base_dir: Path | None = None) -> dict:
+               base_dir: Path | None = None, client=None) -> dict:
     """Étape 6 sur les fichiers importés. Renvoie le manifest (+ corpus_dir).
 
-    Lève LLMError (NOT_CONFIGURED) si la clé ou le modèle manque alors qu'une comparaison est possible.
+    Sans `client`, lève LLMError (NOT_CONFIGURED) si la clé ou le modèle manque alors qu'une comparaison est
+    possible. `client` : client déjà construit, de même interface que LLMClient ; le workflow Claude Code
+    (core/claude_code_workflow.py) y passe un client SANS appel réseau, et aucune clé n'est demandée.
     """
     settings = settings or LLMSettings.from_env()
     prepared = prepare_stage6(uploads)
-    if not prepared.blocked and not settings.enabled:
+    if client is None and not prepared.blocked and not settings.enabled:
         raise LLMError("NOT_CONFIGURED", ", ".join(settings.missing))
     cache = cache or AnalysisCache()
 
-    async def run():
-        client = LLMClient(settings, transport=transport) if not prepared.blocked else None
+    async def run(client=client):
+        if client is None and not prepared.blocked:
+            client = LLMClient(settings, transport=transport)
         try:
             return await run_stage6_corpus(prepared, client, cache, settings, base_dir, force)
         finally:

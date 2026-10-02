@@ -1,4 +1,4 @@
-"""Étapes 3, 4 et 5 sans API : workflow multi-agents exécuté dans Claude Code.
+"""Étapes 3 à 6 sans API : workflow multi-agents exécuté dans Claude Code.
 
     entretien ingéré → préparation déterministe (TRACE, inchangée)
                      → un PAQUET DE TÂCHE par appel d'agent     <run>/workflow/stage3/tasks/<tâche>/
@@ -46,6 +46,16 @@ complète et calculée sur les étapes 3 et 4 actuelles). Rejouer une étape com
 rendrait l'étape suivante « périmée » : seule une demande explicite (`force=True`) le fait. `run_until` enchaîne
 les étapes 3 → 4 → 5 avec cette garde et s'arrête à la première étape non terminée.
 
+Étape 6 (`run_stage6`) : même client, mêmes paquets, même `check`, rattachés à un CORPUS et non à un run :
+    triplets de l'étape 5 → contrôle du corpus (core/cross_interview_corpus.py) → préparation déterministe
+    (core/cross_interview_material.py) → UN paquet par corpus → Cross-Interview Comparator joué par Claude Code →
+    schéma, puis validateur de l'étape 6 (core/cross_interview_validator.py) → sorties habituelles
+    <data/outputs/cross_interview/<corpus_id>/analysis/>.
+Tâches et copie octet pour octet des fichiers importés : <corpus_id>/workflow/stage6/ (tasks/, inputs/). Le
+`corpus_id` est une empreinte des fichiers de l'étape 5 (et des exclusions) : ajouter, retirer ou modifier un
+entretien donne un autre corpus. Garde : une analyse complète du MÊME corpus avec les mêmes prompt, schéma,
+versions et paquet n'est pas rejouée (aucun horodatage n'intervient).
+
 Les prompts du dépôt (prompts/*.md) restent la source de vérité de chaque agent : le paquet donne leur
 chemin et leur empreinte, il ne les recopie pas. Voir TRACE_WORKFLOW.md.
 """
@@ -56,11 +66,15 @@ import dataclasses
 import json
 import os
 import re
+import shutil
 from datetime import datetime
 from pathlib import Path
 
 from agents.base import AgentSpec, canonical_json, sha256_text
-from core import accountability, analysis, config, evidence_validator
+from core import accountability, analysis, config, cross_interview, evidence_validator
+from core import cross_interview_corpus as corpus
+from core import cross_interview_material as cm
+from core import cross_interview_validator as cross_validator
 from core import accountability_candidates as candidates_mod
 from core import accountability_episode_validator as episode_validator
 from core import speaker_attribution_auditor as speaker_audit
@@ -73,12 +87,14 @@ from core.run_manager import save_metadata
 
 WORKFLOW_VERSION = "1.0"
 
-# Moteur des étapes 3, 4 et 5. Par défaut : workflow Claude Code (aucun appel API). L'ancien mode par API
+# Moteur des étapes 3 à 6. Par défaut : workflow Claude Code (aucun appel API). L'ancien mode par API
 # (« anthropic ») n'est utilisé que s'il est demandé EXPLICITEMENT ; il n'est jamais un repli automatique.
 ENV_STAGE3_BACKEND = "TRACE_STAGE3_BACKEND"
 ENV_STAGE4_BACKEND = "TRACE_STAGE4_BACKEND"
 ENV_STAGE5_BACKEND = "TRACE_STAGE5_BACKEND"
-STAGE_BACKEND_ENV = {"3": ENV_STAGE3_BACKEND, "4": ENV_STAGE4_BACKEND, "5": ENV_STAGE5_BACKEND}
+ENV_STAGE6_BACKEND = "TRACE_STAGE6_BACKEND"
+STAGE_BACKEND_ENV = {"3": ENV_STAGE3_BACKEND, "4": ENV_STAGE4_BACKEND, "5": ENV_STAGE5_BACKEND,
+                     "6": ENV_STAGE6_BACKEND}
 BACKEND_CLAUDE_CODE = "claude_code"
 BACKEND_ANTHROPIC = "anthropic"
 
@@ -89,7 +105,9 @@ AWAITING_AGENT = "AWAITING_AGENT"
 
 WORKFLOW_SUBDIR = "workflow"
 STAGE3_SUBDIR = "stage3"
-STAGES = ("3", "4", "5")
+STAGES = ("3", "4", "5")   # étapes par entretien (dans un run) ; l'étape 6 porte sur un corpus
+CORPUS_STAGE = "6"
+INPUTS_SUBDIR = "inputs"
 TASKS_SUBDIR = "tasks"
 STATUS_FILENAME = "status.json"
 TASK_FILENAME = "task.json"
@@ -125,10 +143,12 @@ STAGE3_SPECS: tuple[AgentSpec, ...] = (analysis.AUDITOR, analysis.PRACTICE, anal
 STAGE4_SPECS: tuple[AgentSpec, ...] = (accountability.SPEC,)
 # Agent sémantique de l'étape 5 (un seul paquet par entretien).
 STAGE5_SPECS: tuple[AgentSpec, ...] = (trajectory.SPEC,)
-WORKFLOW_SPECS = STAGE3_SPECS + STAGE4_SPECS + STAGE5_SPECS
+# Agent sémantique de l'étape 6 (un seul paquet par corpus).
+STAGE6_SPECS: tuple[AgentSpec, ...] = (cross_interview.SPEC,)
+WORKFLOW_SPECS = STAGE3_SPECS + STAGE4_SPECS + STAGE5_SPECS + STAGE6_SPECS
 SPECS_BY_NAME = {spec.name: spec for spec in WORKFLOW_SPECS}
 STAGE_OF_AGENT = {**{spec.name: "3" for spec in STAGE3_SPECS}, **{spec.name: "4" for spec in STAGE4_SPECS},
-                  **{spec.name: "5" for spec in STAGE5_SPECS}}
+                  **{spec.name: "5" for spec in STAGE5_SPECS}, **{spec.name: "6" for spec in STAGE6_SPECS}}
 # Étapes du pipeline dont l'état est mis à jour par le workflow
 PIPELINE_STEPS_BY_STAGE = {"3": (config.PRACTICE_STEP, config.INTERACTION_STEP), "4": (config.ACCOUNTABILITY_STEP,),
                            "5": (config.TRAJECTORY_STEP,)}
@@ -185,6 +205,10 @@ def stage5_backend(env: dict | None = None) -> str:
     return stage_backend("5", env)
 
 
+def stage6_backend(env: dict | None = None) -> str:
+    return stage_backend("6", env)
+
+
 def workflow_settings(env: dict | None = None) -> LLMSettings:
     """Paramètres des étapes en mode workflow : tailles de blocs lues dans l'environnement, comme dans
     l'application (TRACE_*_CHUNK_TOKENS), mais ni clé, ni modèle d'API, ni paramètre de génération."""
@@ -236,15 +260,17 @@ class NoCache(AnalysisCache):
 # --- Client sans réseau -------------------------------------------------------------------------
 
 class WorkflowClient:
-    """Remplace LLMClient pour les étapes 3 à 5 (même interface : `complete_json`, `aclose`). Aucun appel réseau.
+    """Remplace LLMClient pour les étapes 3 à 6 (même interface : `complete_json`, `aclose`). Aucun appel réseau.
 
     `records` : état de chaque tâche rencontrée pendant ce passage ({task_id: {...}}).
     """
 
-    def __init__(self, tasks_root: Path, *, run_id: str | None = None, interview_dirs: dict[str, str] | None = None):
+    def __init__(self, tasks_root: Path, *, run_id: str | None = None, interview_dirs: dict[str, str] | None = None,
+                 context: dict | None = None):
         self.tasks_root = Path(tasks_root)
         self.run_id = run_id
         self.interview_dirs = interview_dirs or {}
+        self.context = context or {}  # étape 6 : corpus_id, corpus_dir (écrits dans task.json)
         self.records: dict[str, dict] = {}
 
     async def aclose(self) -> None:
@@ -307,6 +333,7 @@ class WorkflowClient:
                        "items_key": spec.items_key},
             "response": {"path": _display_path(task_dir / RESPONSE_FILENAME)},
             "interview_dir": _display_path(Path(interview_dir)) if interview_dir else None,
+            **self.context,
             "check_command": f"{CLI} check {_display_path(task_dir)}",
             "instructions": list(TASK_INSTRUCTIONS),
             "created_at": _now(),
@@ -596,6 +623,131 @@ def read_status(run_dir: Path, stage: str = "3") -> dict | None:
     return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else None
 
 
+# --- Étape 6 : un corpus -----------------------------------------------------------------------------
+
+STAGE6_COMPLETE, STAGE6_NOT_RUN, STAGE6_INCOMPLETE, STAGE6_STALE = "COMPLETE", "NOT_RUN", "INCOMPLETE", "STALE"
+
+
+def corpus_workflow_dir(corpus_dir: Path) -> Path:
+    return Path(corpus_dir) / WORKFLOW_SUBDIR / f"stage{CORPUS_STAGE}"
+
+
+def stage6_identity(prepared) -> dict:
+    """Identité d'une analyse de l'étape 6 : fichiers de l'étape 5 inclus (empreintes), paquet exact, agent,
+    prompt, schéma et versions des préparateur, validateur et contrôle du corpus. Aucun horodatage."""
+    return {"corpus_id": prepared.corpus_id, "input_hashes": prepared.input_hashes,
+            "payload_sha256": sha256_text(prepared.request["user_message"]) if prepared.request else None,
+            **cross_interview.SPEC.identity(), "preprocessor_version": cm.PREPROCESSOR_VERSION,
+            "validator_version": cross_validator.VALIDATOR_VERSION,
+            "corpus_check_version": corpus.CORPUS_CHECK_VERSION}
+
+
+def stage6_state(prepared, corpus_dir: Path) -> dict:
+    """État de l'analyse du corpus sur le disque : COMPLETE (exploitable et de même identité), NOT_RUN,
+    INCOMPLETE ou STALE (même corpus, mais autre prompt, schéma, version ou paquet)."""
+    outputs = cross_interview.read_outputs(Path(corpus_dir))
+    if not outputs["comparison"] or not outputs["manifest"]:
+        return {"status": STAGE6_NOT_RUN, "reasons": ["Étape 6 : aucune comparaison pour ce corpus."]}
+    document, manifest = json.loads(outputs["comparison"]), json.loads(outputs["manifest"])
+    if document.get("status") not in cross_interview.DONE_STATUSES or document.get("analysis_complete") is not True:
+        return {"status": STAGE6_INCOMPLETE, "reasons": [f"Étape 6 : {document.get('status')}."]}
+    identity = stage6_identity(prepared)
+    changed = sorted(k for k, v in identity.items() if manifest.get(k) != v)
+    if changed:
+        return {"status": STAGE6_STALE,
+                "reasons": [f"Étape 6 calculée avec une autre identité ({', '.join(changed)})."]}
+    return {"status": STAGE6_COMPLETE, "reasons": []}
+
+
+def _save_inputs(corpus_dir: Path, uploads: list[tuple[str, bytes]]) -> Path:
+    """Copie OCTET POUR OCTET des fichiers importés (noms d'origine, un sous-dossier par fichier) : `check` et
+    Claude Code reconstruisent exactement le même corpus, y compris pour des fichiers importés dans Streamlit."""
+    inputs = corpus_workflow_dir(corpus_dir) / INPUTS_SUBDIR
+    if inputs.exists():
+        shutil.rmtree(inputs)
+    for index, (name, data) in enumerate(uploads, start=1):
+        target = inputs / f"{index:03d}" / Path(name).name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+    return inputs
+
+
+def read_inputs(corpus_dir: Path) -> list[tuple[str, bytes]]:
+    inputs = corpus_workflow_dir(corpus_dir) / INPUTS_SUBDIR
+    return [(path.name, path.read_bytes()) for path in sorted(inputs.glob("*/*")) if path.is_file()]
+
+
+def run_stage6(uploads: list[tuple[str, bytes]], *, base_dir: Path | None = None, env: dict | None = None,
+               force: bool = False) -> dict:
+    """Un passage de l'étape 6 en mode workflow sur les triplets importés. Aucun appel API, aucune clé.
+
+    Contrôle du corpus et préparation habituels, UNE tâche pour le Cross-Interview Comparator, puis validation et
+    sorties habituelles dans <cross_interview>/<corpus_id>/. Garde : un corpus déjà analysé à l'identique n'est
+    pas rejoué (sauf `force=True`). Moins de deux entretiens exploitables : BLOCKED, aucune tâche.
+    Renvoie {"status", "manifest", "corpus_dir", "prepared"}.
+    """
+    settings = workflow_settings(env)
+    prepared = cross_interview.prepare_stage6(uploads)
+    corpus_dir = cross_interview.corpus_dir_for(prepared, base_dir)
+    if not force and not prepared.blocked and stage6_state(prepared, corpus_dir)["status"] == STAGE6_COMPLETE:
+        manifest = {**json.loads(cross_interview.read_outputs(corpus_dir)["manifest"]), "corpus_dir": str(corpus_dir)}
+        status = _corpus_status(prepared, corpus_dir, WorkflowClient(""), manifest, skipped=True)
+        return {"status": status, "manifest": manifest, "corpus_dir": str(corpus_dir), "prepared": prepared}
+    _save_inputs(corpus_dir, uploads)
+    client = WorkflowClient(corpus_workflow_dir(corpus_dir) / TASKS_SUBDIR,
+                            context={"corpus_id": prepared.corpus_id, "corpus_dir": _display_path(corpus_dir)})
+    manifest = cross_interview.run_stage6(uploads, settings=settings, cache=NoCache(), base_dir=base_dir,
+                                          client=client)
+    status = _corpus_status(prepared, corpus_dir, client, manifest)
+    write_json_atomic(corpus_workflow_dir(corpus_dir) / STATUS_FILENAME, status)
+    return {"status": status, "manifest": manifest, "corpus_dir": str(corpus_dir), "prepared": prepared}
+
+
+def _corpus_status(prepared, corpus_dir: Path, client: WorkflowClient, manifest: dict, skipped: bool = False) -> dict:
+    records = sorted(client.records.values(), key=lambda r: r["label"])
+    pending = [r for r in records if r["state"] == TASK_PENDING]
+    invalid = [r for r in records if r["state"] == TASK_INVALID]
+    if invalid:
+        state = STAGE_INVALID
+    elif pending:
+        state = STAGE_AWAITING
+    elif manifest.get("status") == cross_interview.STATUS_BLOCKED:
+        state = STAGE_BLOCKED
+    elif manifest.get("status") in cross_interview.DONE_STATUSES:
+        state = STAGE_COMPLETE
+    else:
+        state = STAGE_FAILED
+    estimated = prepared.estimated_input_tokens
+    warnings = []
+    if estimated > cross_interview.SINGLE_CALL_MAX_INPUT_TOKENS:
+        warnings.append(f"Paquet au-delà du seuil d'un appel unique ({estimated} tokens estimés, seuil "
+                        f"{cross_interview.SINGLE_CALL_MAX_INPUT_TOKENS}) : paquet unique conservé, aucun repli vers "
+                        "une API ; avertissement PAYLOAD_OVER_THRESHOLD, vérification humaine recommandée.")
+    checked = prepared.checked
+    return {
+        "workflow_version": WORKFLOW_VERSION, "stage": CORPUS_STAGE, "backend": BACKEND_CLAUDE_CODE,
+        "corpus_id": prepared.corpus_id, "corpus_dir": _display_path(Path(corpus_dir)), "status": state,
+        "updated_at": _now(), "api_calls": 0, "skipped": skipped,
+        "phase": "déjà terminée — non rejouée" if skipped else "comparaison",
+        "mode": checked["mode"], "n_total": checked["n_total"], "n_usable": checked["n_usable"],
+        "rows": [{"interview_id": r["interview_id"], "status": r["status"], "reasons": r["reasons"]}
+                 for r in checked["rows"]],
+        "unrecognized": checked["unrecognized"],
+        "estimated_input_tokens": estimated, "warnings": warnings,
+        "reason": (manifest.get("error") or {}).get("message") if state in (STAGE_BLOCKED, STAGE_FAILED) else None,
+        "manifest_status": manifest.get("status"),
+        "tasks_dir": _display_path(corpus_workflow_dir(corpus_dir) / TASKS_SUBDIR),
+        "task_count": len(records), "answered_count": sum(r["state"] == TASK_ANSWERED for r in records),
+        "pending": [_summary(r) for r in pending], "invalid": [_summary(r) for r in invalid],
+        "tasks": [_summary(r) for r in records],
+    }
+
+
+def read_corpus_status(corpus_dir: Path) -> dict | None:
+    path = corpus_workflow_dir(corpus_dir) / STATUS_FILENAME
+    return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else None
+
+
 # --- Contrôle d'une réponse, avant de rejouer l'étape ------------------------------------------
 
 def _task_file(path: Path) -> Path:
@@ -622,6 +774,10 @@ def check_task(path: Path) -> dict:
     Étape 4 : validateur des épisodes (core/accountability_episode_validator.py) appliqué aux SEULS candidats du
     bloc de la tâche (identifiants abrégés rétablis comme dans le pipeline) ; un épisode rejeté (fusion
     déconnectée, épisode sans voix de l'enquêté·e…) est une anomalie bloquante.
+    Étape 6 : validateur de l'étape 6 (core/cross_interview_validator.py) sur le matériau du corpus reconstruit
+    depuis la copie des fichiers importés : entretien inconnu ou exclu, identifiant inconnu ou étranger, appui
+    vide, contre-exemple inconnu, typologie de personnes… sont bloquants ; comptes recalculés, régularités
+    requalifiées, non-observation, cas négatifs et éléments à revoir sont signalés comme dans le pipeline.
     Étape 5 : validateur de l'étape 5 (core/trajectory_validator.py) sur le matériau préparé de l'entretien :
     identifiant inconnu ou inutilisable, ancrage introuvable, appui sans tour de l'enquêté·e… sont bloquants ;
     les requalifications (changement temporel non ancré, exception sans règle…) sont signalées, comme dans le
@@ -657,6 +813,10 @@ def check_task(path: Path) -> dict:
         return report
     if report["blocking"]:
         return report
+
+    if spec.name == cross_interview.SPEC.name:  # étape 6 : un corpus, pas d'entretien ni de transcription
+        issues = _check_comparison(task, output, report)
+        return _classify(report, issues) if issues is not None else report
 
     interview_dir = _resolve(task["interview_dir"])
     transcript = json.loads((interview_dir / config.STRUCTURED_TRANSCRIPT_FILENAME).read_text(encoding="utf-8"))
@@ -696,6 +856,11 @@ def check_task(path: Path) -> dict:
             report["info"].append("Tours où l'enquêté·e semble évoquer un non-usage sans pratique "
                                   "correspondante : "
                                   + ", ".join(cues["uncovered_turn_ids"]) + " (à relire, sans rien inventer).")
+    return _classify(report, issues)
+
+
+def _classify(report: dict, issues: list[dict]) -> dict:
+    """Anomalies des validateurs : « error » bloquante, « warning » avertissement, « info » information."""
     for issue in issues:
         target = {evidence_validator.ERROR: report["blocking"], evidence_validator.WARNING: report["warnings"]}.get(
             issue["severity"], report["info"])
@@ -756,4 +921,35 @@ def _check_trajectory(task: dict, output: dict, interview_dir: Path, report: dic
         report["warnings"].append(f"PAYLOAD_OVER_THRESHOLD : paquet de {estimated} tokens estimés au-delà du seuil "
                                   f"d'un appel unique ({tc.SINGLE_CALL_MAX_INPUT_TOKENS}) ; paquet unique conservé, "
                                   "vérification humaine recommandée.")
+    return validated["report"]["issues"]
+
+
+def _check_comparison(task: dict, output: dict, report: dict) -> list[dict] | None:
+    """Étape 6 : réponse du Comparator passée au validateur habituel, sur le corpus reconstruit. None si le paquet
+    ne correspond plus au corpus."""
+    corpus_dir = _resolve(task["corpus_dir"])
+    prepared = cross_interview.prepare_stage6(read_inputs(corpus_dir))
+    if prepared.request is None or sha256_text(prepared.request["user_message"]) != task["payload"]["sha256"]:
+        report["blocking"].append("Le corpus ne correspond plus au paquet (fichiers importés modifiés ?) : relancez "
+                                  f"l'étape 6 ({CLI} stage6 …) pour obtenir un paquet à jour.")
+        return None
+    validated = cross_validator.validate_comparison(cm.expand_ids(output, prepared.material), prepared.material,
+                                                    prepared.excluded_ids)
+    document = validated["document"]
+    claims = document["cross_case_claims"]
+    estimated = prepared.estimated_input_tokens
+    report["counts"] = {"interviews": prepared.checked["n_usable"], "claims": len(claims),
+                        "kept": sum(c["usable_for_next_stages"] for c in claims),
+                        "rejected": sum(not c["usable_for_next_stages"] for c in claims),
+                        "requalified": sum("model_claim_type" in c for c in claims),
+                        "negative_cases": len(document["negative_cases"]),
+                        "needs_review": sum(c["needs_review"] for c in claims),
+                        "estimated_input_tokens": estimated}
+    for claim in claims:
+        if "model_claim_type" in claim:
+            report["info"].append(f"{claim['cross_claim_id']} : {claim['model_claim_type']} requalifiée en "
+                                  f"{claim['claim_type']} par TRACE (règle de l'étape 6).")
+    if estimated > cross_interview.SINGLE_CALL_MAX_INPUT_TOKENS:
+        report["warnings"].append(f"PAYLOAD_OVER_THRESHOLD : paquet de {estimated} tokens estimés au-delà du seuil "
+                                  f"d'un appel unique ({cross_interview.SINGLE_CALL_MAX_INPUT_TOKENS}).")
     return validated["report"]["issues"]

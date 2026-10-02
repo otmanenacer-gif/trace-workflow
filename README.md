@@ -32,8 +32,8 @@ des entretiens semi-directifs. **Version actuelle :**
 6. **étape 6** — *comparaison inter-entretiens* : à partir des seules sorties
    validées de l'étape 5 de plusieurs entretiens (importées depuis des fichiers
    ou reprises du run, jamais les transcriptions), un contrôle du corpus, une
-   préparation déterministe puis le *Cross-Interview Comparator* (1 appel LLM
-   pour tout le corpus) décrivent régularités, variantes, contrastes, cas
+   préparation déterministe puis le *Cross-Interview Comparator* — **exécuté dans
+   Claude Code, sans appel API**, un paquet pour tout le corpus — décrivent régularités, variantes, contrastes, cas
    négatifs et configurations minoritaires des frontières, critères du métier
    d'étudiant et manières de rendre compte. Comptes en entretiens, non-observation
    distinguée de l'absence, aucune typologie de personnes ; un validateur
@@ -49,16 +49,15 @@ cp .env.example .env             # facultatif : clé API et modèle pour l'étap
 ```
 
 Sans `ANTHROPIC_API_KEY` ni `ANTHROPIC_MODEL`, l'application fonctionne
-normalement pour l'ingestion et pour les étapes 3 à 5 (workflow Claude Code, aucune clé nécessaire) ;
-l'étape 6, pas encore migrée, est désactivée avec un message explicite.
+normalement pour l'ingestion et pour les étapes 3 à 6 (workflow Claude Code, aucune clé nécessaire).
 
-## Étapes 3 à 5 dans Claude Code (sans API)
+## Étapes 3 à 6 dans Claude Code (sans API)
 
 Procédure complète : [`TRACE_WORKFLOW.md`](TRACE_WORKFLOW.md). Ouvrir Claude Code dans le dépôt et demander
 par exemple « Exécute TRACE sur `chemin/entretien.docx` jusqu'à l'étape 5 ». Claude Code lance les parties
 déterministes de TRACE, joue chaque agent dans un sous-agent (`.claude/agents/trace-agent.md`) à partir de son
 prompt (`prompts/*.md`, source de vérité), fait valider chaque réponse par les validateurs existants, puis
-TRACE enregistre les sorties habituelles des étapes 3 à 5 :
+TRACE enregistre les sorties habituelles des étapes 3 à 6 :
 
 ```bash
 python scripts/trace_workflow.py ingest chemin/entretien.docx   # run + ingestion (déterministe)
@@ -67,14 +66,17 @@ python scripts/trace_workflow.py run <run> --until 5            # un passage : c
 python scripts/trace_workflow.py stage3 <run>                   # paquets de tâche / intégration des réponses
 python scripts/trace_workflow.py stage4 <run>                   # idem pour l'étape 4 (un paquet par bloc)
 python scripts/trace_workflow.py stage5 <run>                   # idem pour l'étape 5 (un paquet par entretien)
+python scripts/trace_workflow.py stage6 <run_A> <run_B> …        # étape 6 sur les sorties de l'étape 5 (un paquet
+                                                                # par corpus ; aussi dossiers ou fichiers JSON)
+python scripts/trace_workflow.py stage6 --corpus <corpus_id>    # reprendre un corpus (corpus déjà analysé : non rejoué)
 python scripts/trace_workflow.py check <dossier de tâche>       # validation d'une réponse d'agent
 python scripts/trace_workflow.py status <run>
 ```
 
-Dans Streamlit, les sections « Analyse IA — Étape 3 », « Étape 4 » et « Étape 5 » préparent et reprennent le même workflow
+Dans Streamlit, les sections « Analyse IA — Étape 3 », « Étape 4 », « Étape 5 » et « Étape 6 » préparent et reprennent le même workflow
 (boutons « Préparer / reprendre l'étape … », 0 appel API : tâches en attente, réponses à corriger, résultats,
 téléchargements), et « Ouvrir un run existant » affiche un run préparé dans Claude Code. Les anciens modes par API
-ne sont utilisés que si `TRACE_STAGE3_BACKEND`, `TRACE_STAGE4_BACKEND` ou `TRACE_STAGE5_BACKEND` = `anthropic` (conservés pour les
+ne sont utilisés que si `TRACE_STAGE3_BACKEND` … `TRACE_STAGE6_BACKEND` = `anthropic` (conservés pour les
 anciens tests pendant la migration ; jamais un repli automatique).
 
 ## Lancer l'application
@@ -131,6 +133,7 @@ python -m pytest tests/test_app_stage6.py             # étape 6 : interface (Ap
 python -m pytest tests/test_claude_code_workflow.py   # étape 3 en workflow Claude Code : paquets, validation, restauration
 python -m pytest tests/test_claude_code_workflow_stage4.py  # étape 4 en workflow : blocs, fusion, restauration, étape 5
 python -m pytest tests/test_claude_code_workflow_stage5.py  # étape 5 en workflow : paquet unique, requalifications, garde, étape 6
+python -m pytest tests/test_claude_code_workflow_stage6.py  # étape 6 en workflow : corpus, garde par identité, mêmes sorties
 python scripts/stage6_payload_report.py              # étape 6 : tailles de la représentation (2 / 8 / 17), 0 appel
 ```
 
@@ -477,7 +480,7 @@ core/transcript_structurer.py  découpage en tours de parole (règles explicites
 core/ingestion_validator.py    contrôle de couverture, statistiques, rapport de qualité
 core/ingestion.py              orchestration par fichier et par run
 core/llm_client.py             client LLM (SDK Anthropic) : config, réessais, sortie JSON validée
-core/claude_code_workflow.py   étapes 3 à 5 sans API : paquets de tâche, client sans réseau, passages gardés, contrôle des réponses
+core/claude_code_workflow.py   étapes 3 à 6 sans API : paquets de tâche, client sans réseau, passages gardés, contrôle des réponses
 core/analysis.py               étape 3 : deux agents en parallèle, sorties, manifests, statuts
 core/analysis_cache.py         cache déterministe des analyses
 core/evidence_validator.py     validation déterministe des citations
@@ -512,7 +515,7 @@ prompts/accountability_episode_builder.md  consignes de l'Accountability Episode
 prompts/trajectory_mapper.md   consignes du Trajectory Mapper (étape 5, v1.0)
 prompts/cross_interview_comparator.md  consignes du Cross-Interview Comparator (étape 6, v1.0)
 scripts/stage6_payload_report.py  mesure de la représentation de l'étape 6 (aucun appel)
-scripts/trace_workflow.py      commandes du workflow Claude Code (ingestion, étapes 3 à 5, contrôle, état)
+scripts/trace_workflow.py      commandes du workflow Claude Code (ingestion, étapes 3 à 6, contrôle, état)
 scripts/smoke_test_stage3.py   ancien test réel par API de l'étape 3 (payant, sur confirmation) ; hors workflow
 TRACE_WORKFLOW.md              orchestration du workflow multi-agents dans Claude Code
 CLAUDE.md                      consignes de Claude Code dans ce dépôt

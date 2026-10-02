@@ -148,8 +148,13 @@ def render_pipeline(run: dict | None, llm_enabled: bool) -> None:
             last = st.session_state.get("stage6_last")
             if last:
                 warn = last["status"] not in cross_interview.DONE_STATUSES
-                st.markdown(f"{'🟠' if warn else '🟢'} **{index}. {step}** (IA) — {last['status']} "
+                label = ("en attente du workflow Claude Code"
+                         if (last.get("error") or {}).get("code") == workflow.AWAITING_AGENT else last["status"])
+                st.markdown(f"{'🟠' if warn else '🟢'} **{index}. {step}** (IA) — {label} "
                             f"({last['corpus_n_usable']}/{last['corpus_n_total']} entretien(s) exploitable(s))")
+            elif workflow.stage6_backend() == workflow.BACKEND_CLAUDE_CODE:
+                st.markdown(f"🔵 **{index}. {step}** (IA) — prête, workflow Claude Code (0 appel API), sur import "
+                            "des sorties de l'étape 5")
             elif llm_enabled:
                 st.markdown(f"🔵 **{index}. {step}** (IA) — prête, sur import des sorties de l'étape 5")
             else:
@@ -1135,6 +1140,54 @@ def render_stage6_launcher(files: list[tuple[str, bytes]], prepared) -> None:
     st.rerun()
 
 
+def render_stage6_workflow(files: list[tuple[str, bytes]], prepared) -> None:
+    """Étape 6 sans API : TRACE prépare UN paquet pour le corpus, Claude Code joue le Cross-Interview Comparator."""
+    flash = st.session_state.pop("wf6_flash", None)
+    if flash:
+        (st.warning if flash[0] == "warning" else st.success)(flash[1])
+    st.info(
+        "**Workflow Claude Code** — aucune clé API, aucun appel API, aucun coût. TRACE prépare sans IA la "
+        f"représentation du corpus (≈ {format_count(prepared.estimated_input_tokens)} tokens estimés) et UN paquet "
+        "de tâche ; Claude Code joue le Cross-Interview Comparator (prompt du dépôt) ; TRACE valide la réponse (schéma, "
+        "validateur de l'étape 6 : appuis, comptes en entretiens, non-observation, cas négatifs, requalifications) et "
+        "enregistre les sorties habituelles. Un corpus déjà analysé à l'identique n'est pas rejoué. Procédure : "
+        "`TRACE_WORKFLOW.md`.")
+    if prepared.estimated_input_tokens > cross_interview.SINGLE_CALL_MAX_INPUT_TOKENS:
+        st.warning(f"Représentation au-delà du seuil d'un appel unique ({cross_interview.SINGLE_CALL_MAX_INPUT_TOKENS} "
+                   "tokens) : paquet unique conservé, signalé (PAYLOAD_OVER_THRESHOLD).")
+    if st.button("Préparer / reprendre l'étape 6 (workflow Claude Code, 0 appel API)", type="primary",
+                 key="wf_stage6"):
+        try:
+            result = workflow.run_stage6(files)
+        except (OSError, ValueError, KeyError) as exc:
+            logging.error("Workflow de l'étape 6 interrompu : %s", type(exc).__name__)
+            st.error(f"Workflow de l'étape 6 interrompu ({type(exc).__name__}).")
+            return
+        st.session_state.stage6_last = result["manifest"]
+        status = result["status"]["status"]
+        st.session_state.wf6_flash = (
+            ("success", "Étape 6 terminée (workflow Claude Code, 0 appel API).") if status == workflow.STAGE_COMPLETE
+            else ("warning", f"Étape 6 : {workflow.STATUS_LABELS[status]} — voir ci-dessous."))
+        st.rerun()
+    state = workflow.read_corpus_status(cross_interview.corpus_dir_for(prepared))
+    if not state:
+        return
+    st.markdown(f"**Workflow Claude Code (étape 6) :** {workflow.STATUS_LABELS[state['status']]} — "
+                f"{state['answered_count']}/{state['task_count']} tâche(s) avec une réponse conforme — "
+                f"{state['api_calls']} appel API")
+    for warning in state["warnings"]:
+        st.warning(warning)
+    todo = [(t, "réponse à corriger") for t in state["invalid"]] + [(t, "en attente") for t in state["pending"]]
+    if todo:
+        st.table([{"Tâche": t["task_id"], "Corpus": state["corpus_id"], "Agent": t["agent_label"], "État": label,
+                   "Erreur": t.get("error") or ""} for t, label in todo])
+        st.markdown("Dans **Claude Code**, ouvert dans ce dépôt, demandez :")
+        st.code(f"Exécute TRACE Stage 6 sur le corpus {state['corpus_id']}", language=None)
+        st.caption("Claude Code joue le Comparator (un sous-agent), valide sa réponse "
+                   f"(`{workflow.CLI} check …`), puis rejoue l'étape 6 (`{workflow.CLI} stage6 --corpus "
+                   f"{state['corpus_id']}`). Revenez ensuite ici et cliquez de nouveau sur « Préparer / reprendre ».")
+
+
 def _cross_row(claim: dict) -> dict:
     label = CROSS_TYPE_LABELS.get(claim["claim_type"], claim["claim_type"])
     if claim.get("model_claim_type"):
@@ -1158,13 +1211,16 @@ def render_stage6_results(last: dict | None, current_corpus_id: str | None = Non
                    "importés — relancez la comparaison pour ce corpus.")
     outputs = cross_interview.read_outputs(Path(last["corpus_dir"]))
     manifest = json.loads(outputs["manifest"]) if outputs["manifest"] else last
-    st.markdown(f"**Dernière exécution (étape 6) :** {manifest.get('api_calls') or 0} appel(s) API — "
-                f"{'repris du cache TRACE' if manifest.get('cache_hit') else 'nouvel appel' if manifest.get('llm_called') else 'aucun appel'}"
-                f" — statut {ACC_STATUS_ICONS.get(manifest['status'], '')} **{manifest['status']}** — "
+    origin = ("repris du cache TRACE" if manifest.get("cache_hit") else
+              "réponse d'agent du workflow Claude Code" if manifest.get("model") == workflow.WORKFLOW_MODEL else
+              "nouvel appel" if manifest.get("llm_called") else "aucun appel")
+    st.markdown(f"**Dernière exécution (étape 6) :** {manifest.get('api_calls') or 0} appel(s) API — {origin}"
+                f" — statut **{ai_status_label(manifest, ACC_STATUS_ICONS)}** — "
                 f"N importés : **{manifest['corpus_n_total']}** · N exploitables : **{manifest['corpus_n_usable']}**"
                 f" · aucun appel aux étapes 3, 4 ou 5")
     if manifest.get("error"):
-        st.error(manifest["error"].get("message") or manifest["error"].get("code"))
+        show = st.info if manifest["error"].get("code") == workflow.AWAITING_AGENT else st.error
+        show(manifest["error"].get("message") or manifest["error"].get("code"))
     if not outputs["comparison"]:
         return
     document = json.loads(outputs["comparison"])
@@ -1252,7 +1308,10 @@ def render_stage6_section(run: dict | None) -> None:
         prepared = cross_interview.prepare_stage6(files)
         render_stage6_corpus(prepared)
         if not prepared.blocked:
-            render_stage6_launcher(files, prepared)
+            if workflow.stage6_backend() == workflow.BACKEND_CLAUDE_CODE:
+                render_stage6_workflow(files, prepared)
+            else:
+                render_stage6_launcher(files, prepared)
     render_stage6_results(st.session_state.get("stage6_last"), prepared.corpus_id if prepared else None)
 
 

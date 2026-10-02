@@ -2,11 +2,11 @@
 
 - Exécuter TRACE sur un entretien, ou les tâches TRACE en attente d'un run : suivre **`TRACE_WORKFLOW.md`**
   (commandes `python scripts/trace_workflow.py …`, un sous-agent `trace-agent` par tâche).
-- Les **étapes 3, 4 et 5** passent par ce workflow (`run <run> --until 5`, une étape déjà complète n'est jamais
-  rejouée). L'étape 6 n'est pas encore migrée : s'arrêter après l'étape 5 et le dire.
-- Aucun appel à une API de modèle (Anthropic ou autre) ; ne jamais renseigner `TRACE_STAGE3_BACKEND`,
-  `TRACE_STAGE4_BACKEND` ni `TRACE_STAGE5_BACKEND` à `anthropic` ; ne jamais utiliser `--force` sans demande
-  explicite.
+- Les **étapes 3 à 6** passent par ce workflow : étapes 3 à 5 par run (`run <run> --until 5`), étape 6 par
+  corpus de sorties de l'étape 5 (`stage6 <runs, dossiers ou fichiers>`, puis `stage6 --corpus <corpus_id>`). Une
+  étape (ou un corpus) déjà complète n'est jamais rejouée. Pas d'étape 7 : s'arrêter après l'étape demandée.
+- Aucun appel à une API de modèle (Anthropic ou autre) ; ne jamais renseigner `TRACE_STAGE3_BACKEND` à
+  `TRACE_STAGE6_BACKEND` à `anthropic` ; ne jamais utiliser `--force` sans demande explicite.
 - Les prompts `prompts/*.md`, les schémas (`agents/`) et les validateurs (`core/`) font foi : ne jamais les modifier
   pour faire passer une réponse.
 - Tests : `python -m pytest` (aucun appel réseau, LLM simulé).
