@@ -1,7 +1,7 @@
 """Étape 4 en workflow Claude Code : paquets par bloc, réponses d'agent, validation, fusion, restauration, étape 5.
 
-Aucun appel API : en plus des garde-fous de tests/conftest.py (transport réel interdit, réseau refusé, aucune
-clé), la construction d'un client d'API (LLMClient) est interdite dans les tests du workflow (`no_api_client`).
+Aucun appel API : en plus des garde-fous de tests/conftest.py (réseau refusé, aucune clé), les agents
+simulés (FakeAgents) sont interdits dans les tests du workflow (`workflow_only`).
 L'Accountability Episode Builder est simulé par les lecteurs déterministes existants (tests/synthetic_stage4*.py),
 dont les réponses sont écrites dans response.json, là où un sous-agent Claude Code les écrirait.
 """
@@ -12,7 +12,6 @@ from pathlib import Path
 import pytest
 from streamlit.testing.v1 import AppTest
 
-import core.llm_client as llm_client
 from core import accountability, config, trajectory
 from core import accountability_candidates as ac
 from core import claude_code_workflow as wf
@@ -23,22 +22,22 @@ from tests import synthetic_interviews as si
 from tests import synthetic_stage4 as S
 from tests import synthetic_stage4_otmane as O
 from tests import synthetic_stage5 as S5
-from tests.fake_llm import ACCOUNTABILITY, FakeTransport, fake_settings
-from tests.test_claude_code_workflow import APP, analysis_dir, answer, no_api_client, packet, texts  # noqa: F401
+from tests.fake_llm import ACCOUNTABILITY, FakeAgents
+from tests.test_claude_code_workflow import APP, analysis_dir, answer, workflow_only, packet, texts  # noqa: F401
 
 
 @pytest.fixture
-def api_guard(monkeypatch):
-    """Comme `no_api_client`, mais levable : les tests de comparaison exécutent ENSUITE l'ancien pipeline (LLM
-    simulé) pour référence ; tout le workflow s'exécute avec la garde active."""
+def agents_guard(monkeypatch):
+    """Comme `workflow_only`, mais levable : les tests de comparaison exécutent ENSUITE le pipeline avec agents
+    simulés (FakeAgents) pour référence ; tout le workflow s'exécute avec la garde active."""
     state = {"forbid": True}
-    original = llm_client.LLMClient.__init__
+    original = FakeAgents.complete_json
 
-    def guarded(self, *args, **kwargs):
+    async def guarded(self, **kwargs):
         if state["forbid"]:
-            raise AssertionError("Client d'API construit pendant le workflow Claude Code : interdit.")
-        original(self, *args, **kwargs)
-    monkeypatch.setattr(llm_client.LLMClient, "__init__", guarded)
+            raise AssertionError("Agents simulés sollicités pendant le workflow Claude Code : interdit.")
+        return await original(self, **kwargs)
+    monkeypatch.setattr(FakeAgents, "complete_json", guarded)
     return state
 
 STAGE4_FILES = (config.ACCOUNTABILITY_EPISODES_FILENAME, config.ACCOUNTABILITY_VALIDATION_FILENAME,
@@ -92,7 +91,7 @@ def comparable(document: dict) -> dict:
 
 
 @pytest.fixture
-def reference(tmp_path, api_guard):
+def reference(tmp_path, agents_guard):
     """Entretien de référence de l'étape 4 : étape 3 terminée par le workflow, premières tâches de l'étape 4."""
     agents = responders(S.stage3_responders(), S.REFERENCE_BUILDER)
     return until_stage4_tasks(si.make_ingested_run(tmp_path, S.FILES), agents), agents
@@ -111,7 +110,7 @@ def test_stage4_runs_without_key_from_one_exact_packet(reference):
     prepared = accountability.prepare_stage4(run["files"][0]["ingestion"])
     assert p["task"]["stage"] == "4" and p["task"]["system_prompt"]["path"] == "prompts/accountability_episode_builder.md"
     assert p["system_prompt"] == accountability.SPEC.system_prompt  # le prompt du dépôt, inchangé
-    assert p["payload"] == prepared.requests[0]["user_message"]    # le message que recevait l'API
+    assert p["payload"] == prepared.requests[0]["user_message"]    # le message exact reçu par les agents simulés
     assert p["schema"] == accountability.SPEC.output_schema
     assert not (analysis_dir(run, S.INTERVIEW_ID) / config.ACCOUNTABILITY_EPISODES_FILENAME).exists()
     assert run["files"][0]["accountability"]["error"]["code"] == wf.AWAITING_AGENT
@@ -148,7 +147,7 @@ def test_run_until_never_replays_a_complete_stage3(reference):
     assert trajectory.stage4_state(out.parent)["status"] == trajectory.STAGE4_COMPLETE  # donc jamais périmée
 
 
-def test_stage4_is_blocked_without_stage3_and_writes_no_task(tmp_path, no_api_client):
+def test_stage4_is_blocked_without_stage3_and_writes_no_task(tmp_path, workflow_only):
     run = si.make_ingested_run(tmp_path, S.FILES)
     result = wf.run_stage4(run)
     assert result["status"]["status"] == wf.STAGE_BLOCKED and result["status"]["task_count"] == 0
@@ -157,16 +156,16 @@ def test_stage4_is_blocked_without_stage3_and_writes_no_task(tmp_path, no_api_cl
     assert not wf.tasks_dir(run, "4").exists()
 
 
-def test_same_outputs_as_the_api_pipeline_with_identical_responses(reference, tmp_path, api_guard):
+def test_same_outputs_as_the_simulated_agents_pipeline_with_identical_responses(reference, tmp_path, agents_guard):
     first, agents = reference
     answer(first["status"], agents)
     run_wf = wf.run_until(first["metadata"], "4")["metadata"]
-    api_guard["forbid"] = False  # référence : l'ancien pipeline, LLM simulé
+    agents_guard["forbid"] = False  # référence : le pipeline avec agents simulés
 
-    run_api, _ = S5.run_to_stage4(tmp_path / "api", S.FILES, S.stage3_responders(), S.REFERENCE_BUILDER)
-    assert comparable(episodes_doc(run_wf, S.INTERVIEW_ID)) == comparable(episodes_doc(run_api, S.INTERVIEW_ID))
+    run_sim, _ = S5.run_to_stage4(tmp_path / "simulated", S.FILES, S.stage3_responders(), S.REFERENCE_BUILDER)
+    assert comparable(episodes_doc(run_wf, S.INTERVIEW_ID)) == comparable(episodes_doc(run_sim, S.INTERVIEW_ID))
     validation = [json.loads((analysis_dir(r, S.INTERVIEW_ID) / config.ACCOUNTABILITY_VALIDATION_FILENAME).read_text())
-                  for r in (run_wf, run_api)]
+                  for r in (run_wf, run_sim)]
     assert [{k: v for k, v in d.items() if k != "validated_at"} for d in validation][0] == \
            [{k: v for k, v in d.items() if k != "validated_at"} for d in validation][1]
 
@@ -216,7 +215,7 @@ def test_invalid_quote_is_blocked_by_check_and_flagged_by_the_validator(referenc
 # --- Plusieurs paquets : un par bloc de composantes ----------------------------------------------------------
 
 @pytest.fixture
-def otmane_blocks(tmp_path, monkeypatch, no_api_client):
+def otmane_blocks(tmp_path, monkeypatch, workflow_only):
     """Entretien de régression long, seuil d'un appel abaissé : plusieurs blocs de composantes entières."""
     monkeypatch.setattr(ac, "SINGLE_CALL_MAX_INPUT_TOKENS", 2500)
 
@@ -261,7 +260,7 @@ def test_several_packets_are_independent_validated_separately_and_merged_in_bloc
 
 # --- Restauration et étape 5 ---------------------------------------------------------------------------------
 
-def test_workflow_stage4_restores_into_trace_and_feeds_stage5(reference, tmp_path, api_guard):
+def test_workflow_stage4_restores_into_trace_and_feeds_stage5(reference, tmp_path, agents_guard):
     first, agents = reference
     answer(first["status"], agents)
     run = wf.run_until(first["metadata"], "4")["metadata"]
@@ -276,21 +275,21 @@ def test_workflow_stage4_restores_into_trace_and_feeds_stage5(reference, tmp_pat
     assert trajectory.stage4_state(restored_dir.parent)["status"] == trajectory.STAGE4_COMPLETE
     assert fresh["files"][0]["accountability"]["restored"] is True
 
-    # L'étape 5 (pas encore migrée : LLM simulé) reçoit EXACTEMENT le même matériau qu'après l'ancien pipeline.
-    api_guard["forbid"] = False
-    run_api, cache = S5.run_to_stage4(tmp_path / "api", S.FILES, S.stage3_responders(), S.REFERENCE_BUILDER)
+    # L'étape 5 (agents simulés) reçoit le même matériau après le workflow, la référence et une restauration.
+    agents_guard["forbid"] = False
+    run_sim, cache = S5.run_to_stage4(tmp_path / "simulated", S.FILES, S.stage3_responders(), S.REFERENCE_BUILDER)
     mapper = S5.scripted_mapper(S5.REFERENCE_PLAN)
-    _, from_api = S5.run_stage5(run_api, AnalysisCache(tmp_path / "c1"), mapper)
+    _, from_sim = S5.run_stage5(run_sim, AnalysisCache(tmp_path / "c1"), mapper)
     run, from_workflow = S5.run_stage5(run, AnalysisCache(tmp_path / "c2"), mapper)
     _, from_restore = S5.run_stage5(fresh, AnalysisCache(tmp_path / "c3"), mapper)
-    sent = [t.calls[0]["params"]["messages"][0]["content"] for t in (from_api, from_workflow, from_restore)]
+    sent = [t.calls[0]["params"]["messages"][0]["content"] for t in (from_sim, from_workflow, from_restore)]
     assert sent[0] == sent[1] == sent[2]
     assert run["files"][0]["trajectory"]["status"] == "SUCCESS"
 
 
 # --- Commandes de Claude Code ---------------------------------------------------------------------------------
 
-def test_cli_runs_trace_until_stage4(tmp_path, monkeypatch, capsys, no_api_client):
+def test_cli_runs_trace_until_stage4(tmp_path, monkeypatch, capsys, workflow_only):
     import importlib.util
     monkeypatch.setattr(config, "INPUTS_DIR", tmp_path / "inputs")
     monkeypatch.setattr(config, "OUTPUTS_DIR", tmp_path / "outputs")
@@ -333,7 +332,7 @@ def test_app_runs_stage4_through_the_workflow_without_key(reference, monkeypatch
     at.run()
     assert not at.exception
     assert "Analyse IA désactivée" not in texts(at.warning)
-    assert not [b for b in at.button if b.key == "acc_launch"]  # l'ancien lanceur par API n'est pas proposé
+    assert not [b for b in at.button if b.key == "acc_launch"]  # aucun ancien lanceur par API
     assert "⏳ EN ATTENTE (workflow Claude Code)" in list(table(at, "Étape 4")["Étape 4"])
     assert f"Exécute TRACE sur le run {first['metadata']['run_id']} jusqu'à l'étape 4" in " ".join(
         c.value for c in at.code)

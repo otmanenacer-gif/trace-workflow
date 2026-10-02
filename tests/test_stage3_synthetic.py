@@ -1,9 +1,9 @@
 """Test qualitatif SYNTHÉTIQUE de l'étape 3 (section 18 du cahier des charges).
 
-Le LLM est simulé : ce test vérifie la chaîne complète (ingestion → deux agents
+Les agents sont simulés : ce test vérifie la chaîne complète (ingestion → deux agents
 → validation) et les garde-fous déterministes sur un entretien fictif. Il ne
-mesure PAS la qualité d'un vrai modèle : voir scripts/smoke_test_stage3.py
-pour le test réel (avec accord explicite, car il consomme des tokens).
+mesure PAS la qualité des réponses d'un vrai agent : seule la lecture des sorties produites
+par Claude Code (workflow, TRACE_WORKFLOW.md) sur des entretiens réels le permet.
 """
 
 import json
@@ -13,7 +13,7 @@ from core.analysis import analyze_run
 from core.analysis_cache import AnalysisCache
 from core.interpretation_guard import fold
 from tests import synthetic_interviews as si
-from tests.fake_llm import INTERACTION, PRACTICE, FakeTransport, fake_settings, text_response
+from tests.fake_llm import INTERACTION, PRACTICE, FakeAgents, fake_settings, text_response
 
 # Ce que l'étape 3 ne doit PAS conclure (réservé à l'étape interprétative).
 FORBIDDEN_CONCLUSIONS = ("honte", "identite menacee", "reparation", "breach", "strategie defensive", "accountab",
@@ -23,8 +23,8 @@ FORBIDDEN_CONCLUSIONS = ("honte", "identite menacee", "reparation", "breach", "s
 def run_synthetic(tmp_path, practices=si.GOOD_PRACTICES, signals=si.GOOD_SIGNALS):
     run = si.make_ingested_run(tmp_path)
     assert run["files"][0]["ingestion"]["status"] == "PASS"
-    transport = FakeTransport({PRACTICE: text_response(practices), INTERACTION: text_response(signals)})
-    run = analyze_run(run, settings=fake_settings(), transport=transport, cache=AnalysisCache(tmp_path / "cache"))
+    transport = FakeAgents({PRACTICE: text_response(practices), INTERACTION: text_response(signals)})
+    run = analyze_run(run, settings=fake_settings(), client=transport, cache=AnalysisCache(tmp_path / "cache"))
     out = Path(run["files"][0]["analysis"]["analysis_dir"])
     load = lambda name: json.loads((out / name).read_text(encoding="utf-8"))  # noqa: E731
     return load("practice_extractor.json"), load("interaction_signals.json"), load("evidence_validation.json")
@@ -75,14 +75,14 @@ def test_forbidden_conclusions_are_flagged_by_the_guard(tmp_path):
 
 
 def test_patch_scope_qualifier_and_preference_statement(tmp_path):
-    """Correctif de l'étape 3 sur un mini-entretien synthétique (LLM simulé) :
+    """Correctif de l'étape 3 sur un mini-entretien synthétique (agents simulés) :
     « je l'utilise surtout pour reformuler » → scope_qualifier, pas stated_frequency ;
     « je préfère faire mes plans moi-même » → preference_statement, pas other."""
     run = si.make_ingested_run(tmp_path, si.PATCH_FILES)
     assert run["files"][0]["ingestion"]["status"] == "PASS"
-    transport = FakeTransport({PRACTICE: text_response(si.PATCH_PRACTICES),
+    transport = FakeAgents({PRACTICE: text_response(si.PATCH_PRACTICES),
                                INTERACTION: text_response(si.PATCH_SIGNALS)})
-    run = analyze_run(run, settings=fake_settings(), transport=transport, cache=AnalysisCache(tmp_path / "cache"))
+    run = analyze_run(run, settings=fake_settings(), client=transport, cache=AnalysisCache(tmp_path / "cache"))
     out = Path(run["files"][0]["analysis"]["analysis_dir"])
     load = lambda name: json.loads((out / name).read_text(encoding="utf-8"))  # noqa: E731
     practices, signals = load("practice_extractor.json"), load("interaction_signals.json")
@@ -92,9 +92,9 @@ def test_patch_scope_qualifier_and_preference_statement(tmp_path):
     practice_call, = transport.calls_for(PRACTICE)
     interaction_call, = transport.calls_for(INTERACTION)
     assert "`scope_qualifier`" in practice_call["params"]["system"][0]["text"]
-    assert "scope_qualifier" in practice_call["params"]["output_config"]["format"]["schema"]["$defs"]["Practice"]["required"]
+    assert "scope_qualifier" in practice_call["params"]["output_schema"]["$defs"]["Practice"]["required"]
     assert "`preference_statement`" in interaction_call["params"]["system"][0]["text"]
-    assert "preference_statement" in json.dumps(interaction_call["params"]["output_config"]["format"]["schema"])
+    assert "preference_statement" in json.dumps(interaction_call["params"]["output_schema"])
 
     surtout = next(p for p in practices["practices"] if "surtout" in p["evidence"][0]["quote"])
     assert surtout["stated_frequency"] is None and surtout["scope_qualifier"] == "surtout"

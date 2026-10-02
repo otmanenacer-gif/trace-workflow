@@ -1,4 +1,4 @@
-"""Test synthétique GLOBAL de l'étape 3.5 (section 12), LLM simulé.
+"""Test synthétique GLOBAL de l'étape 3.5 (section 12), agents simulés.
 
 Un entretien fictif contient : un usage de rédaction, la revendication ultérieure
 d'écrire soi-même, un refus explicite de déléguer, une préférence, « c'est assez
@@ -18,7 +18,7 @@ from core import config
 from core.analysis import analyze_run
 from core.analysis_cache import AnalysisCache
 from tests import synthetic_interviews as si
-from tests.fake_llm import AUDITOR, INTERACTION, PRACTICE, FakeTransport, fake_settings, text_response
+from tests.fake_llm import AUDITOR, INTERACTION, PRACTICE, FakeAgents, fake_settings, text_response
 
 
 def test_stage_3_5_synthetic_interview_end_to_end(tmp_path):
@@ -28,10 +28,10 @@ def test_stage_3_5_synthetic_interview_end_to_end(tmp_path):
     transcript_path = interview_dir / config.STRUCTURED_TRANSCRIPT_FILENAME
     transcript_sha = hashlib.sha256(transcript_path.read_bytes()).hexdigest()
 
-    transport = FakeTransport({PRACTICE: text_response(si.STAGE35_PRACTICES),
+    transport = FakeAgents({PRACTICE: text_response(si.STAGE35_PRACTICES),
                                INTERACTION: text_response(si.STAGE35_SIGNALS),
                                AUDITOR: text_response(si.STAGE35_AUDIT)})
-    run = analyze_run(run, settings=fake_settings(), transport=transport, cache=AnalysisCache(tmp_path / "cache"))
+    run = analyze_run(run, settings=fake_settings(), client=transport, cache=AnalysisCache(tmp_path / "cache"))
     out = interview_dir / config.ANALYSIS_SUBDIR
     load = lambda name: json.loads((out / name).read_text(encoding="utf-8"))  # noqa: E731
     practices, signals = load("practice_extractor.json")["practices"], load("interaction_signals.json")["signals"]

@@ -1,6 +1,6 @@
 """Étape 3.7 — Practice Extractor sur un entretien long : blocs, fusion, cache, troncature.
 
-LLM simulé uniquement (tests/fake_llm.py) : aucun appel réel.
+agents simulés uniquement (tests/fake_llm.py) : aucun appel réel.
 """
 
 import copy
@@ -17,7 +17,7 @@ from core.analysis_cache import AnalysisCache
 from core.llm_client import LLMSettings
 from tests import synthetic_interviews as si
 from tests import synthetic_stage37 as S
-from tests.fake_llm import (AUDITOR, INTERACTION, LONG_DISTANCE, PRACTICE, FakeTransport, fake_settings,
+from tests.fake_llm import (AUDITOR, INTERACTION, LONG_DISTANCE, PRACTICE, FakeAgents, fake_settings,
                             text_response)
 from tests.synthetic_long_interview import sent_turns
 
@@ -35,7 +35,7 @@ def long_run(tmp_path):
 
 
 def analyze(tmp_path, run, transport, **settings):
-    return analyze_run(run, settings=fake_settings(**settings), transport=transport,
+    return analyze_run(run, settings=fake_settings(**settings), client=transport,
                        cache=AnalysisCache(tmp_path / "cache"))
 
 
@@ -64,7 +64,6 @@ def test_practice_chunk_size_setting():
     clamped = LLMSettings.from_env({"TRACE_PRACTICE_CHUNK_TOKENS": "50"})
     assert clamped.practice_chunk_tokens == 500 and clamped.problems
     assert "practice_chunk_tokens" not in json.dumps(fake_settings().request_params())  # hors clé de cache
-    assert fake_settings().max_tokens == 32000  # la limite de sortie n'est pas augmentée
 
 
 def test_long_interview_is_split_between_turns_with_light_overlap(long_run):
@@ -83,7 +82,7 @@ def test_long_interview_is_split_between_turns_with_light_overlap(long_run):
 
 def test_short_interview_single_practice_call_unchanged(tmp_path):
     run = si.make_ingested_run(tmp_path)
-    transport = FakeTransport({PRACTICE: lambda p: text_response(si.GOOD_PRACTICES),
+    transport = FakeAgents({PRACTICE: lambda p: text_response(si.GOOD_PRACTICES),
                                INTERACTION: lambda p: text_response(si.GOOD_SIGNALS)})
     run = analyze(tmp_path, run, transport)
     calls = transport.calls_for(PRACTICE)
@@ -101,14 +100,13 @@ def test_short_interview_single_practice_call_unchanged(tmp_path):
 # --- B. Entretien long : plusieurs blocs -----------------------------------------------------
 
 def test_long_interview_practice_chunks_all_analyzed(tmp_path, long_run):
-    transport = FakeTransport(responders())
+    transport = FakeAgents(responders())
     run = analyze(tmp_path, long_run, transport)
     calls = transport.calls_for(PRACTICE)
     assert len(calls) == 4
-    for call in calls:  # même agent : mêmes consignes, même schéma, même limite de sortie
+    for call in calls:  # même agent : mêmes consignes, même schéma
         assert call["params"]["system"][0]["text"] == practice_extractor.SPEC.system_prompt
-        assert call["params"]["output_config"]["format"]["schema"] == practice_extractor.SPEC.output_schema
-        assert call["params"]["max_tokens"] == fake_settings().max_tokens
+        assert call["params"]["output_schema"] == practice_extractor.SPEC.output_schema
         content = call["params"]["messages"][0]["content"]
         assert "EXTRAIT" in content and "un usage et un non-usage restent deux pratiques" in content
         assert len(sent_turns(call["params"])) < S.TURN_COUNT
@@ -131,7 +129,7 @@ def test_long_interview_practice_chunks_all_analyzed(tmp_path, long_run):
 # --- C. Doublon dans le chevauchement → une pratique -----------------------------------------
 
 def test_overlap_duplicate_practice_is_merged_once(tmp_path, long_run):
-    doc = outputs(analyze(tmp_path, long_run, FakeTransport(responders())))["document"]
+    doc = outputs(analyze(tmp_path, long_run, FakeAgents(responders())))["document"]
     info = doc["chunking"]
     assert info["practices_before_dedup"] - info["practices_after_dedup"] == info["duplicates_removed"] == 1
     mails, = find(doc, 90, "use")  # T0089–T0090 : fin du bloc 1 et début du bloc 2
@@ -211,7 +209,7 @@ def test_one_practice_absorbs_at_most_one_practice_per_chunk(long_run):
 # --- D. use + refusal / non_use dans des blocs différents → pratiques distinctes ----------------
 
 def test_use_and_distant_refusal_stay_separate_practices(tmp_path, long_run):
-    doc = outputs(analyze(tmp_path, long_run, FakeTransport(responders())))["document"]
+    doc = outputs(analyze(tmp_path, long_run, FakeAgents(responders())))["document"]
     use, = find(doc, 20, "use")                 # « Il m'arrive de lui faire rédiger » (bloc 1)
     non_use, = find(doc, 150, "non_use")        # « Normalement mes travaux je les fais moi-même » (bloc 2)
     refusal, = find(doc, 24, "refusal")         # « Je ne fais jamais rédiger mes devoirs »
@@ -229,34 +227,34 @@ def test_use_and_distant_refusal_stay_separate_practices(tmp_path, long_run):
 # --- E. past_use + non_use actuel → deux pratiques ---------------------------------------------
 
 def test_past_use_and_current_non_use_stay_two_practices(tmp_path, long_run):
-    doc = outputs(analyze(tmp_path, long_run, FakeTransport(responders())))["document"]
+    doc = outputs(analyze(tmp_path, long_run, FakeAgents(responders())))["document"]
     past, = find(doc, 100, "past_use")
     now, = find(doc, 100, "non_use")
     assert past["practice_id"] != now["practice_id"] and now["non_use_reason"] == "not_stated"
 
 
-# --- F. Bloc tronqué → PARTIAL, jamais présenté comme complet ------------------------------------
+# --- F. Bloc en échec (réponse incomplète) → PARTIAL, jamais présenté comme complet ------------------------------------
 
 def truncating_practice_reader(turn):
     def respond(params):
         if any(t["turn_id"] == S.tid(turn) for t in sent_turns(params)):
-            return text_response('{"practices": [', stop_reason="max_tokens", output_tokens=32000)
+            return text_response('{"practices": [')
         return S.practice_reader(params)
     return respond
 
 
-def test_truncated_practice_chunk_is_partial_then_relaunch_redoes_only_it(tmp_path, long_run):
-    transport = FakeTransport(responders(practice=truncating_practice_reader(140)))  # bloc 2 seulement
+def test_failed_practice_chunk_is_partial_then_relaunch_redoes_only_it(tmp_path, long_run):
+    transport = FakeAgents(responders(practice=truncating_practice_reader(140)))  # bloc 2 seulement
     run = analyze(tmp_path, long_run, transport)
     out = outputs(run)
     doc, manifest = out["document"], out["manifest"]
     assert doc["status"] == manifest["status"] == "PARTIAL"
     assert doc["analysis_complete"] is False and manifest["analysis_complete"] is False
     assert manifest["error"]["code"] == "PARTIAL_ANALYSIS" and "3/4" in manifest["error"]["message"]
-    assert "TRACE_PRACTICE_CHUNK_TOKENS" in manifest["error"]["message"]
+    assert "corrigez la réponse de l'agent" in manifest["error"]["message"]
     info = manifest["chunking"]
-    assert info["truncated_chunks"] == [2] and info["chunks_succeeded"] == 3
-    assert info["chunks"][1]["status"] == "TRUNCATED" and info["chunks"][1]["stop_reason"] == "max_tokens"
+    assert info["failed_chunks"] == [2] and info["truncated_chunks"] == [] and info["chunks_succeeded"] == 3
+    assert info["chunks"][1]["status"] == "FAILED" and info["chunks"][1]["error"]["code"] == "INVALID_JSON"
     assert doc["practices"] and not find(doc, 140, "use")  # les blocs réussis restent, le bloc 2 manque
     assert out["validation"]["agents"]["practice_extractor"]["analysis_complete"] is False
     assert run["last_analysis"]["usage"]["partial"] == 1 and "incomplet" in run["pipeline"]["Extraction des pratiques"]
@@ -264,7 +262,7 @@ def test_truncated_practice_chunk_is_partial_then_relaunch_redoes_only_it(tmp_pa
 
     plan = plan_analysis(run, [S.INTERVIEW_ID], fake_settings(), AnalysisCache(tmp_path / "cache"))
     assert plan["calls"] == 1 and plan["exact"] is True  # seul le bloc 2 manque
-    again = FakeTransport(responders())
+    again = FakeAgents(responders())
     run = analyze(tmp_path, run, again)
     assert len(again.calls_for(PRACTICE)) == 1 and again.calls_for(INTERACTION) == []
     out = outputs(run)
@@ -273,11 +271,11 @@ def test_truncated_practice_chunk_is_partial_then_relaunch_redoes_only_it(tmp_pa
 
 
 def test_all_practice_chunks_failing_is_a_failure_without_output(tmp_path, long_run):
-    transport = FakeTransport(responders(practice=lambda p: text_response("x", stop_reason="max_tokens")))
+    transport = FakeAgents(responders(practice=lambda p: text_response("x")))
     run = analyze(tmp_path, long_run, transport)
     directory = Path(run["files"][0]["analysis"]["analysis_dir"])
     manifest = json.loads((directory / "practice_manifest.json").read_text())
-    assert manifest["status"] == "FAILED" and manifest["error"]["code"] == "TRUNCATED"
+    assert manifest["status"] == "FAILED" and manifest["error"]["code"] == "INVALID_JSON"
     assert not (directory / "practice_extractor.json").exists()
 
 
@@ -285,11 +283,11 @@ def test_all_practice_chunks_failing_is_a_failure_without_output(tmp_path, long_
 
 def test_identical_relaunch_makes_no_practice_call(tmp_path, long_run):
     cache = AnalysisCache(tmp_path / "cache")
-    run = analyze(tmp_path, long_run, FakeTransport(responders()))
+    run = analyze(tmp_path, long_run, FakeAgents(responders()))
     first = outputs(run)["document"]["practices"]
     plan = plan_analysis(run, [S.INTERVIEW_ID], fake_settings(), cache)
     assert plan["calls"] == 0 and plan["exact"] is True
-    second = FakeTransport(responders())
+    second = FakeAgents(responders())
     run = analyze(tmp_path, run, second)
     assert second.calls == []
     out = outputs(run)
@@ -298,11 +296,11 @@ def test_identical_relaunch_makes_no_practice_call(tmp_path, long_run):
 
 
 def test_local_edit_recomputes_only_the_touched_practice_chunk(tmp_path, long_run):
-    analyze(tmp_path, long_run, FakeTransport(responders()))
+    analyze(tmp_path, long_run, FakeAgents(responders()))
     edit = ("Le week-end je lui demande toujours des recettes de cuisine.",
             "Le week-end je lui demande toujours des recettes de cuisine végétarienne.")  # T0260, bloc 3 seul
     run2 = si.make_ingested_run(tmp_path / "edited", S.files(edit))
-    transport = FakeTransport(responders())
+    transport = FakeAgents(responders())
     run2 = analyze(tmp_path, run2, transport)
     calls = transport.calls_for(PRACTICE)
     assert len(calls) == 1 and S.tid(260) in {t["turn_id"] for t in sent_turns(calls[0]["params"])}
@@ -319,7 +317,7 @@ def test_plan_practice_chunking_announces_blocks(tmp_path, long_run):
 # --- H. Citations ------------------------------------------------------------------------------
 
 def test_all_practice_citations_valid_after_merge(tmp_path, long_run):
-    out = outputs(analyze(tmp_path, long_run, FakeTransport(responders())))
+    out = outputs(analyze(tmp_path, long_run, FakeAgents(responders())))
     practices = out["document"]["practices"]
     assert practices and all(e["validation"]["valid"] for p in practices for e in p["evidence"])
     report = out["validation"]["agents"]["practice_extractor"]
@@ -334,7 +332,7 @@ def test_fabricated_practice_quote_in_a_chunk_is_rejected(tmp_path, long_run):
             output["practices"][0] = copy.deepcopy(output["practices"][0])
             output["practices"][0]["evidence"][0]["quote"] = "Phrase inventée qui n'existe pas."
         return text_response(output)
-    out = outputs(analyze(tmp_path, long_run, FakeTransport(responders(practice=reader))))
+    out = outputs(analyze(tmp_path, long_run, FakeAgents(responders(practice=reader))))
     assert out["validation"]["agents"]["practice_extractor"]["invalid_evidence_count"] >= 1
     assert out["manifest"]["status"] == "SUCCESS_WITH_WARNINGS" and out["manifest"]["validation_issue_count"] >= 1
 
@@ -344,7 +342,7 @@ def test_uncovered_non_use_cue_is_reported_not_corrected(tmp_path, long_run):
         output = S.practice_output(params)
         output["practices"] = [p for p in output["practices"] if p["evidence"][0]["turn_id"] != S.tid(150)]
         return text_response(output)
-    doc = outputs(analyze(tmp_path, long_run, FakeTransport(responders(practice=reader))))["document"]
+    doc = outputs(analyze(tmp_path, long_run, FakeAgents(responders(practice=reader))))["document"]
     assert doc["non_use_cues"]["uncovered_turn_ids"] == [S.tid(150)]
     assert doc["item_count"] == S.EXPECTED_PRACTICE_COUNT - 1 and doc["status"] == "SUCCESS"  # information seulement
 

@@ -2,7 +2,7 @@
 
 Le vrai entretien ayant révélé le bug n'est PAS versionné : le fixture ci-dessous en reproduit seulement la
 forme (deux très longs paragraphes contenant chacun de nombreux « Enquêteur : » / « Enquêté : »), avec un
-texte entièrement synthétique. Aucun appel réseau, aucun appel API (LLM simulé).
+texte entièrement synthétique. Aucun appel réseau, aucun appel API (agents simulés).
 """
 
 import re
@@ -18,7 +18,7 @@ from core.analysis_cache import AnalysisCache
 from core.schemas import SPEAKER_INTERVIEWEE, SPEAKER_INTERVIEWER
 from core.transcript_structurer import split_inline_markers, structure_transcript
 from tests import synthetic_interviews as si
-from tests.fake_llm import INTERACTION, PRACTICE, FakeTransport, fake_settings, text_response
+from tests.fake_llm import INTERACTION, PRACTICE, FakeAgents, fake_settings, text_response
 
 OTMANE_FILENAME = "Entretien_paragraphes.txt"
 OTMANE_ID = "ENTRETIEN_PARAGRAPHES"
@@ -131,7 +131,7 @@ def test_otmane_ingestion_now_passes_and_invalidates_stage3_caches(tmp_path, mon
         old_sha = (Path(old_run["files"][0]["ingestion"]["output_dir"]) /
                    config.STRUCTURED_TRANSCRIPT_FILENAME).read_bytes()
         cache = AnalysisCache(tmp_path / "cache")
-        analyze_run(old_run, settings=fake_settings(), transport=FakeTransport(empty), cache=cache)
+        analyze_run(old_run, settings=fake_settings(), client=FakeAgents(empty), cache=cache)
 
     run = si.make_ingested_run(tmp_path / "new", files)
     ingestion = run["files"][0]["ingestion"]

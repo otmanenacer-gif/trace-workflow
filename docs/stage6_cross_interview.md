@@ -1,5 +1,11 @@
 # Étape 6 — Comparaison inter-entretiens (Cross-Interview Comparator)
 
+> **Exécution** : les agents sont joués par Claude Code (workflow multi-agents,
+> [`TRACE_WORKFLOW.md`](../TRACE_WORKFLOW.md)), sans aucun appel à une API de modèle. Dans ce document, un
+> « appel » désigne une **tâche d'agent** du workflow ; les mentions de tokens facturés, de cache de l'API ou
+> de `TRACE_LLM_MAX_TOKENS` décrivent la conception d'origine (exécution par API, retirée) : les champs
+> correspondants des manifests sont conservés et valent toujours 0 / `null`.
+
 ## Pourquoi cette étape
 
 L'étape 5 produit, pour chaque entretien SÉPARÉMENT, une configuration intra-entretien validée. L'étape 6

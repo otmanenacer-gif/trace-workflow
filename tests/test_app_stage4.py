@@ -1,13 +1,13 @@
-"""Interface Streamlit de l'étape 4 (AppTest : sans navigateur, LLM simulé, aucun appel réel)."""
+"""Interface Streamlit de l'étape 4 (AppTest : sans navigateur, agents simulés joués à travers le workflow)."""
 
 import pytest
 from streamlit.testing.v1 import AppTest
 
-import core.llm_client as llm_client
 from core import config
+from core.claude_code_workflow import WorkflowClient
 from tests import synthetic_interviews as si
 from tests import synthetic_stage4 as S
-from tests.fake_llm import ACCOUNTABILITY, INTERACTION, FakeTransport, server_error
+from tests.fake_llm import ACCOUNTABILITY, INTERACTION, FakeAgents, agent_error, answering_workflow
 
 APP = str(config.PROJECT_ROOT / "app.py")
 
@@ -16,15 +16,15 @@ def texts(elements):
     return " ".join(str(e.value) for e in elements)
 
 
+def simulate(monkeypatch, responders: dict) -> FakeAgents:
+    agents = FakeAgents(responders)
+    monkeypatch.setattr(WorkflowClient, "complete_json", answering_workflow(agents))
+    return agents
+
+
 @pytest.fixture
-def fake_api(monkeypatch):
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-FAKE-KEY-000")
-    monkeypatch.setenv("ANTHROPIC_MODEL", "fake-model")
-    monkeypatch.setenv("TRACE_STAGE3_BACKEND", "anthropic")  # ancien mode de l'étape 3 par API (LLM simulé)
-    monkeypatch.setenv("TRACE_STAGE4_BACKEND", "anthropic")  # ancien mode de l'étape 4 par API (LLM simulé)
-    transport = FakeTransport({**S.stage3_responders(), ACCOUNTABILITY: S.REFERENCE_BUILDER})
-    monkeypatch.setattr(llm_client, "AnthropicTransport", lambda settings: transport)
-    return transport
+def fake_agents(monkeypatch):
+    return simulate(monkeypatch, {**S.stage3_responders(), ACCOUNTABILITY: S.REFERENCE_BUILDER})
 
 
 def app_with_run(run):
@@ -37,27 +37,24 @@ def agents(transport):
     return [c["agent"] for c in transport.calls]
 
 
-def test_stage4_waits_for_stage3(tmp_path, fake_api):
+def test_stage4_waits_for_stage3(tmp_path, fake_agents):
     at = app_with_run(si.make_ingested_run(tmp_path, S.FILES))
     assert not at.exception
     assert "Étape 4 — Épisodes d'accountability" in texts(at.header)
     assert "Lancez d'abord l'étape 3" in texts(at.info)
-    assert not [b for b in at.button if b.key == "acc_launch"]
+    assert not [b for b in at.button if b.key in ("wf_stage4", "acc_launch")]
 
 
-def test_stage4_full_flow_with_fake_llm_then_cache(tmp_path, fake_api):
+def test_stage4_full_flow_then_no_replay(tmp_path, fake_agents):
     at = app_with_run(si.make_ingested_run(tmp_path, S.FILES))
-    at.button(key="ai_launch").click().run()
-    assert not at.exception and agents(fake_api).count(ACCOUNTABILITY) == 0  # l'étape 3 ne lance jamais l'étape 4
-    assert "Candidats d'épisodes (déterministes, sans IA) : **6**" in texts(at.info)
-    launch = at.button(key="acc_launch")
-    assert launch.label == "Construire les épisodes d'accountability (1 appel(s) API payant(s))"
-    stage3_calls = len(fake_api.calls)
+    at.button(key="wf_stage3").click().run()
+    assert not at.exception and agents(fake_agents).count(ACCOUNTABILITY) == 0  # l'étape 3 ne lance jamais l'étape 4
+    stage3_calls = len(fake_agents.calls)
 
-    launch.click().run()
+    at.button(key="wf_stage4").click().run()
     assert not at.exception
-    assert agents(fake_api)[stage3_calls:] == [ACCOUNTABILITY]
-    assert "Étape 4 terminée." in texts(at.success)
+    assert agents(fake_agents)[stage3_calls:] == [ACCOUNTABILITY]
+    assert "Étape 4 terminée (workflow Claude Code, 0 appel API)." in texts(at.success)
     table = at.table[-1].value
     assert list(table["Étape 4"]) == ["✅ SUCCESS"] and list(table["Statut étape 3"]) == ["COMPLETE"]
     assert list(table["Candidats"]) == [6] and list(table["Épisodes accountability"]) == [4]
@@ -71,25 +68,20 @@ def test_stage4_full_flow_with_fake_llm_then_cache(tmp_path, fake_api):
     assert len(preview) == 1 and len(preview[0].value) == 3
     assert "Construction des épisodes d'accountability** (IA) — terminé (1/1 entretien(s))" in texts(at.markdown)
 
-    # Relance : le résultat vient du cache, aucun nouvel appel
-    assert at.button(key="acc_launch").label.endswith("(0 appel(s) API payant(s))")
-    at.button(key="acc_launch").click().run()
-    assert not at.exception and agents(fake_api)[stage3_calls:] == [ACCOUNTABILITY]
-    assert list(at.table[-1].value["Étape 4"]) == ["♻️ CACHED"]
+    # Relance : l'étape 4 est complète et à jour, elle n'est pas rejouée
+    at.button(key="wf_stage4").click().run()
+    assert not at.exception and agents(fake_agents)[stage3_calls:] == [ACCOUNTABILITY]
+    assert list(at.table[-1].value["Étape 4"]) == ["✅ SUCCESS"]
 
 
 def test_stage4_blocked_when_stage3_failed(tmp_path, monkeypatch):
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-FAKE-KEY-000")
-    monkeypatch.setenv("ANTHROPIC_MODEL", "fake-model")
-    monkeypatch.setenv("TRACE_STAGE3_BACKEND", "anthropic")  # ancien mode de l'étape 3 par API (LLM simulé)
-    monkeypatch.setenv("TRACE_STAGE4_BACKEND", "anthropic")  # ancien mode de l'étape 4 par API (LLM simulé)
-    responders = {**S.stage3_responders(), INTERACTION: server_error(500), ACCOUNTABILITY: S.REFERENCE_BUILDER}
-    transport = FakeTransport(responders)
-    monkeypatch.setattr(llm_client, "AnthropicTransport", lambda settings: transport)
+    responders = {**S.stage3_responders(), INTERACTION: agent_error(), ACCOUNTABILITY: S.REFERENCE_BUILDER}
+    transport = simulate(monkeypatch, responders)
     at = app_with_run(si.make_ingested_run(tmp_path, S.FILES))
-    at.button(key="ai_launch").click().run()
-    assert "1 entretien(s) bloqué(s)" in texts(at.info)
-    at.button(key="acc_launch").click().run()
+    at.button(key="wf_stage3").click().run()
+    todo = next(t.value for t in at.table if "Tâche" in t.value.columns)
+    assert list(todo["État"]) == ["réponse à corriger"]  # étape 3 incomplète : l'Interaction Reader est à corriger
+    at.button(key="wf_stage4").click().run()
     assert not at.exception and ACCOUNTABILITY not in agents(transport)
     assert list(at.table[-1].value["Étape 4"]) == ["⛔ BLOCKED"]
     assert "Étape 4 non exécutée" in texts(at.error)

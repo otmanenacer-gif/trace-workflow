@@ -159,10 +159,10 @@ STAGE3_AUDIT = {"assessments": [
 
 def stage3_responders(audit=True):
     from tests.fake_llm import AUDITOR, INTERACTION, PRACTICE
-    responders = {PRACTICE: lambda p: text_response(STAGE3_PRACTICES, input_tokens=1900, output_tokens=1400),
-                  INTERACTION: lambda p: text_response(STAGE3_SIGNALS, input_tokens=2000, output_tokens=900)}
+    responders = {PRACTICE: lambda p: text_response(STAGE3_PRACTICES),
+                  INTERACTION: lambda p: text_response(STAGE3_SIGNALS)}
     if audit:
-        responders[AUDITOR] = lambda p: text_response(STAGE3_AUDIT, input_tokens=500, output_tokens=120)
+        responders[AUDITOR] = lambda p: text_response(STAGE3_AUDIT)
     return responders
 
 
@@ -233,8 +233,7 @@ def scripted_output(params: dict, rules: dict[int, dict]) -> dict:
 def scripted_builder(rules: dict[int, dict], output_tokens_per_episode: int = 260):
     def respond(params: dict):
         output = scripted_output(params, rules)
-        return text_response(output, input_tokens=len(params["messages"][0]["content"]) // 3,
-                             output_tokens=60 + output_tokens_per_episode * len(output["episodes"]))
+        return text_response(output)
     return respond
 
 

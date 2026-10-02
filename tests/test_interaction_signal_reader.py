@@ -1,4 +1,4 @@
-"""Tests de l'Interaction Signal Reader : schéma, prompt, signaux observables (LLM simulé)."""
+"""Tests de l'Interaction Signal Reader : schéma, prompt, signaux observables (agents simulés)."""
 
 import copy
 import json
@@ -12,15 +12,15 @@ from agents.interaction_signal_reader import (INTERACTION_SCHEMA_VERSION, INTERA
 from core.analysis import analyze_run
 from core.analysis_cache import AnalysisCache
 from tests import synthetic_interviews as si
-from tests.fake_llm import INTERACTION, PRACTICE, FakeTransport, fake_settings, text_response
+from tests.fake_llm import INTERACTION, PRACTICE, FakeAgents, fake_settings, text_response
 
 EMPTY_PRACTICES = {"practices": [], "extraction_notes": None}
 
 
 def run_signals(tmp_path, output, files=None):
     run = si.make_ingested_run(tmp_path, files)
-    transport = FakeTransport({PRACTICE: text_response(EMPTY_PRACTICES), INTERACTION: text_response(output)})
-    run = analyze_run(run, settings=fake_settings(), transport=transport, cache=AnalysisCache(tmp_path / "cache"))
+    transport = FakeAgents({PRACTICE: text_response(EMPTY_PRACTICES), INTERACTION: text_response(output)})
+    run = analyze_run(run, settings=fake_settings(), client=transport, cache=AnalysisCache(tmp_path / "cache"))
     summary = run["files"][0]["analysis"]
     document = json.loads((Path(summary["analysis_dir"]) / SPEC.output_filename).read_text(encoding="utf-8"))
     return summary["agents"]["interaction_signal_reader"], document

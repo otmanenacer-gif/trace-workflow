@@ -1,4 +1,4 @@
-"""Étape 5 — orchestration : blocages, étape 4 périmée ou partielle, cache, coût, échecs. LLM simulé."""
+"""Étape 5 — orchestration : blocages, étape 4 périmée ou partielle, cache, coût, échecs. agents simulés."""
 
 import dataclasses
 import json
@@ -9,11 +9,11 @@ from core import accountability, config, trajectory
 from core import trajectory_candidates as tc
 from core.analysis import analyze_run
 from core.analysis_cache import AnalysisCache
-from core.llm_client import LLMError, LLMSettings
+from core.llm_client import LLMSettings
 from tests import synthetic_interviews as si
 from tests import synthetic_stage4 as S4
 from tests import synthetic_stage5 as S5
-from tests.fake_llm import ACCOUNTABILITY, TRAJECTORY, FakeTransport, fake_settings, server_error
+from tests.fake_llm import ACCOUNTABILITY, TRAJECTORY, FakeAgents, fake_settings, agent_error
 
 CASE = S5.CONTEXT
 
@@ -27,7 +27,7 @@ def files_written(run) -> set[str]:
 def test_blocked_without_stage4(tmp_path):
     run = si.make_ingested_run(tmp_path, CASE.files)
     cache = AnalysisCache(tmp_path / "cache")
-    run = analyze_run(run, settings=fake_settings(), transport=FakeTransport(CASE.stage3_responders()), cache=cache)
+    run = analyze_run(run, settings=fake_settings(), client=FakeAgents(CASE.stage3_responders()), cache=cache)
     assert trajectory.plan_stage5(run, [CASE.interview_id], fake_settings(), cache)["blocked"] == 1
     run, transport = S5.run_stage5(run, cache, CASE.mapper())
     assert transport.calls == []
@@ -38,7 +38,7 @@ def test_blocked_without_stage4(tmp_path):
 
 
 def test_blocked_when_stage4_failed(tmp_path):
-    run, cache = S5.run_to_stage4(tmp_path, CASE.files, CASE.stage3_responders(), server_error(500))
+    run, cache = S5.run_to_stage4(tmp_path, CASE.files, CASE.stage3_responders(), agent_error())
     assert run["files"][0]["accountability"]["status"] == "FAILED"
     run, transport = S5.run_stage5(run, cache, CASE.mapper())
     assert transport.calls == [] and run["files"][0]["trajectory"]["stage4_status"] == "FAILED"
@@ -109,7 +109,7 @@ def test_changing_stage5_invalidates_only_stage5(tmp_path, monkeypatch):
 def test_rerunning_stage4_with_identical_episodes_keeps_the_stage5_cache(tmp_path):
     run, cache = S5.case_to_stage4(tmp_path, CASE)
     run, _ = S5.run_stage5(run, cache, CASE.mapper())
-    run = accountability.analyze_run_stage4(run, settings=fake_settings(), transport=FakeTransport(
+    run = accountability.analyze_run_stage4(run, settings=fake_settings(), client=FakeAgents(
         {ACCOUNTABILITY: CASE.builder()}), cache=cache, force=True)
     run, transport = S5.run_stage5(run, cache, CASE.mapper())
     assert transport.calls == [] and run["files"][0]["trajectory"]["status"] == "CACHED"
@@ -136,9 +136,10 @@ def test_insufficient_material_costs_nothing(tmp_path):
 
 def test_llm_failure_is_isolated_and_writes_no_trajectory(tmp_path):
     run, cache = S5.case_to_stage4(tmp_path, CASE)
-    run, transport = S5.run_stage5(run, cache, server_error(500))
+    run, transport = S5.run_stage5(run, cache, agent_error())
     summary = run["files"][0]["trajectory"]
-    assert summary["status"] == "FAILED" and summary["api_calls"] == 3  # 1 appel + 2 réessais bornés, jamais plus
+    assert summary["status"] == "FAILED" and len(transport.calls) == 1 and summary["api_calls"] == 0
+    assert summary["error"]["code"] == "SCHEMA_VALIDATION"
     assert config.STUDENT_TRAJECTORY_FILENAME not in files_written(run)
     assert "échec(s)" in run["pipeline"][config.TRAJECTORY_STEP]
 
@@ -157,8 +158,8 @@ def test_one_call_per_interview_and_no_cross_interview_material(tmp_path):
     from tests.fake_llm import INTERACTION, PRACTICE
     stage3 = {PRACTICE: by_interview(lambda c: c.stage3_responders()[PRACTICE]),
               INTERACTION: by_interview(lambda c: c.stage3_responders()[INTERACTION])}
-    run = analyze_run(run, settings=fake_settings(), transport=FakeTransport(stage3), cache=cache)
-    run = accountability.analyze_run_stage4(run, settings=fake_settings(), transport=FakeTransport(
+    run = analyze_run(run, settings=fake_settings(), client=FakeAgents(stage3), cache=cache)
+    run = accountability.analyze_run_stage4(run, settings=fake_settings(), client=FakeAgents(
         {ACCOUNTABILITY: by_interview(lambda c: c.builder())}), cache=cache)
     run, transport = S5.run_stage5(run, cache, by_interview(lambda c: c.mapper()))
     assert len(transport.calls) == 2
@@ -167,26 +168,26 @@ def test_one_call_per_interview_and_no_cross_interview_material(tmp_path):
         assert (S5.CONTEXT.interview_id in content) != (S5.STABLE.interview_id in content)
     assert [f["trajectory"]["status"] for f in run["files"]] == ["SUCCESS", "SUCCESS"]
     assert run["pipeline"][config.TRAJECTORY_STEP] == "terminé (2/2 entretien(s))"
-    assert run["last_trajectory"]["usage"]["api_calls"] == 2
+    assert run["last_trajectory"]["usage"]["api_calls"] == 0  # workflow : aucun appel API
 
 
-def test_over_threshold_is_flagged_but_still_one_call_and_same_max_tokens(tmp_path, monkeypatch):
+def test_over_threshold_is_flagged_but_still_one_call(tmp_path, monkeypatch):
     run, cache = S5.case_to_stage4(tmp_path, CASE)
     monkeypatch.setattr(tc, "SINGLE_CALL_MAX_INPUT_TOKENS", 50)
     settings = fake_settings()
     run, transport = S5.run_stage5(run, cache, CASE.mapper(), settings=settings)
-    assert len(transport.calls) == 1 and transport.calls[0]["params"]["max_tokens"] == settings.max_tokens
+    assert len(transport.calls) == 1  # jamais découpé
     summary = run["files"][0]["trajectory"]
     assert summary["over_single_call_threshold"] is True and summary["status"] == "SUCCESS_WITH_WARNINGS"
     validation = S5.load(run, config.STUDENT_TRAJECTORY_VALIDATION_FILENAME)
     assert "PAYLOAD_OVER_THRESHOLD" in {i["code"] for i in validation["issues"]}
 
 
-def test_not_configured_raises(tmp_path):
+def test_the_agent_client_is_always_injected(tmp_path):
+    """Plus de client construit automatiquement (ni clé, ni API) : le workflow injecte toujours le sien."""
     run, cache = S5.case_to_stage4(tmp_path, CASE)
-    with pytest.raises(LLMError) as info:
+    with pytest.raises(TypeError):
         trajectory.analyze_run_stage5(run, settings=LLMSettings(), cache=cache)
-    assert info.value.code == "NOT_CONFIGURED"
 
 
 # --- Sorties ---------------------------------------------------------------------------------------------------
@@ -207,7 +208,8 @@ def test_output_documents(tmp_path):
     # épisode incertain de l'étape 4 (tour mal attribué) : utilisable, à revoir, propagé dans la représentation
     sent = S5.sent_material(transport.calls[0]["params"])
     assert any(e.get("speaker_warning") for e in sent["episodes"])
-    assert manifest["api_calls"] == 1 and manifest["llm_called"] is True and manifest["cache_key"]
+    assert manifest["api_calls"] == 0 and manifest["billed_this_run"] is False  # champs legacy, neutres
+    assert manifest["llm_called"] is True and manifest["cache_key"]
     assert manifest["payload_sha256"] and manifest["estimated_input_tokens"] < tc.SINGLE_CALL_MAX_INPUT_TOKENS
     assert validation["status"] == document["status"] == "SUCCESS" and validation["error_count"] == 0
     assert run["files"][0]["trajectory"]["configuration_type"] == "contextual_configuration"

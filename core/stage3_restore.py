@@ -2,7 +2,7 @@
 
 Pourquoi : le stockage local de l'application (data/outputs, data/cache) n'est pas durable ; sur
 Streamlit Cloud, un redéploiement l'efface. Un entretien réimporté crée alors un nouveau run sans
-sortie de l'étape 3, et TRACE proposerait de repayer tous les appels. Les quatre JSON téléchargés
+sortie de l'étape 3, et TRACE proposerait de refaire jouer toutes ses tâches d'agent. Les quatre JSON téléchargés
 depuis l'interface suffisent pourtant à l'étape 4 :
 
     practice_extractor.json, interaction_signals.json, evidence_validation.json,

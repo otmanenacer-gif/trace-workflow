@@ -1,4 +1,4 @@
-"""Restauration de sorties de l'étape 4 déjà calculées, puis étape 5 sans relancer les étapes 3 et 4. LLM simulé."""
+"""Restauration de sorties de l'étape 4 déjà calculées, puis étape 5 sans relancer les étapes 3 et 4. agents simulés."""
 
 import json
 from pathlib import Path
@@ -21,7 +21,7 @@ PREFIX = S4.INTERVIEW_ID + "_"
 
 
 def downloaded(tmp_path, files=S4.FILES, responders=None, builder=S4.REFERENCE_BUILDER):
-    """Étapes 3 et 4 calculées (LLM simulé) dans un premier run, puis « téléchargées » (noms préfixés comme l'UI)."""
+    """Étapes 3 et 4 calculées (agents simulés) dans un premier run, puis « téléchargées » (noms préfixés comme l'UI)."""
     run, _ = S5.run_to_stage4(tmp_path / "before", files, responders or S4.stage3_responders(), builder)
     out = S5.analysis_dir(run)
     return ([(PREFIX + n, (out / n).read_bytes()) for n in STAGE3_NAMES],
@@ -195,12 +195,14 @@ def test_other_prompt_version_is_accepted_with_a_warning(tmp_path):
 
 
 def test_restoration_never_calls_any_llm(tmp_path, monkeypatch):
-    import core.llm_client as llm_client
+    from core.claude_code_workflow import WorkflowClient
+    from tests.fake_llm import FakeAgents
 
     def forbidden(*args, **kwargs):
-        raise AssertionError("Appel LLM pendant une restauration")
+        raise AssertionError("Agent sollicité pendant une restauration")
     stage3, stage4 = downloaded(tmp_path)
-    monkeypatch.setattr(llm_client.LLMClient, "complete_json", forbidden)
-    monkeypatch.setattr(llm_client.LLMClient, "__init__", forbidden)
+    for client in (WorkflowClient, FakeAgents):
+        monkeypatch.setattr(client, "complete_json", forbidden)
+        monkeypatch.setattr(client, "__init__", forbidden)
     run = restore_stage4(after_redeploy(tmp_path, stage3), S4.INTERVIEW_ID, stage4)
     assert Path(run["files"][0]["accountability"]["analysis_dir"]).is_dir()

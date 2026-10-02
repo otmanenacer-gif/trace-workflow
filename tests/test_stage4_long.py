@@ -1,6 +1,6 @@
 """Étape 4 — entretien long synthétique (320 tours) : beaucoup de pratiques ordinaires, peu d'épisodes.
 
-Chaîne complète, LLM simulé : ingestion → étape 3 (audit, Practice Extractor et Interaction Reader par
+Chaîne complète, agents simulés : ingestion → étape 3 (audit, Practice Extractor et Interaction Reader par
 blocs, lecture à longue distance) → candidats déterministes → UN appel Accountability Episode Builder
 → validation. Vérifie que l'étape 4 ne produit PAS un épisode par pratique. Les nombres ne sont pas des
 quotas : ils décrivent ce que contient l'entretien synthétique.
@@ -15,7 +15,7 @@ from core.analysis import analyze_run
 from core.analysis_cache import AnalysisCache
 from tests import synthetic_interviews as si
 from tests import synthetic_stage4_long as L
-from tests.fake_llm import ACCOUNTABILITY, FakeTransport, fake_settings
+from tests.fake_llm import ACCOUNTABILITY, FakeAgents, fake_settings
 from tests.synthetic_stage4 import sent_payload, turn_number
 
 
@@ -23,22 +23,22 @@ def test_long_interview_does_not_turn_every_practice_into_an_episode(tmp_path):
     run = si.make_ingested_run(tmp_path, L.files())
     assert run["files"][0]["ingestion"]["turn_count"] == L.TURN_COUNT == 320
     cache = AnalysisCache(tmp_path / "cache")
-    t3 = FakeTransport(L.stage3_responders())
-    run = analyze_run(run, settings=fake_settings(), transport=t3, cache=cache)
+    t3 = FakeAgents(L.stage3_responders())
+    run = analyze_run(run, settings=fake_settings(), client=t3, cache=cache)
     agents = run["files"][0]["analysis"]["agents"]
     assert agents["practice_extractor"]["status"] == agents["interaction_signal_reader"]["status"] == "SUCCESS"
     assert agents["practice_extractor"]["item_count"] == L.EXPECTED_PRACTICE_COUNT == 31
     signal_count = agents["interaction_signal_reader"]["item_count"]
     assert signal_count >= 70  # signaux locaux + contradiction à longue distance
 
-    t4 = FakeTransport({ACCOUNTABILITY: L.BUILDER})
-    run = accountability.analyze_run_stage4(run, settings=fake_settings(), transport=t4, cache=cache)
+    t4 = FakeAgents({ACCOUNTABILITY: L.BUILDER})
+    run = accountability.analyze_run_stage4(run, settings=fake_settings(), client=t4, cache=cache)
     out = Path(run["files"][0]["ingestion"]["output_dir"]) / config.ANALYSIS_SUBDIR
     doc = json.loads((out / config.ACCOUNTABILITY_EPISODES_FILENAME).read_text(encoding="utf-8"))
     manifest = json.loads((out / config.ACCOUNTABILITY_MANIFEST_FILENAME).read_text(encoding="utf-8"))
 
     # Coût : UN appel pour tout l'entretien, sous le seuil d'un appel unique
-    assert len(t4.calls) == 1 and manifest["api_calls"] == 1
+    assert len(t4.calls) == 1 and manifest["api_calls"] == 0
     assert manifest["over_single_call_threshold"] is False
     assert manifest["estimated_input_tokens"] < SINGLE_CALL_MAX_INPUT_TOKENS / 3
     payload = sent_payload(t4.calls[0]["params"])
@@ -64,6 +64,6 @@ def test_long_interview_does_not_turn_every_practice_into_an_episode(tmp_path):
     assert [turn_number(t) for t in candidate["turn_ids"]] == [59, 60, 279, 280]
 
     # Relance : 0 appel
-    again = FakeTransport({ACCOUNTABILITY: L.BUILDER})
-    accountability.analyze_run_stage4(run, settings=fake_settings(), transport=again, cache=cache)
+    again = FakeAgents({ACCOUNTABILITY: L.BUILDER})
+    accountability.analyze_run_stage4(run, settings=fake_settings(), client=again, cache=cache)
     assert again.calls == []

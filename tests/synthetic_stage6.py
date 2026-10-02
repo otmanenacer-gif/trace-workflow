@@ -34,7 +34,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from core import config
-from tests.fake_llm import TRAJECTORY, FakeTransport, fake_settings, text_response
+from tests.fake_llm import TRAJECTORY, FakeAgents, fake_settings, text_response
 
 QUESTION = "Et pour {task}, comment ça se passe ?"
 
@@ -438,22 +438,19 @@ STAGE5_NAMES = (config.STUDENT_TRAJECTORY_FILENAME, config.STUDENT_TRAJECTORY_VA
 
 @lru_cache(maxsize=None)
 def stage5_files(interview_id: str) -> tuple[tuple[str, bytes], ...]:
-    """Les 3 JSON de l'étape 5 d'un entretien synthétique, produits par le vrai orchestrateur (FakeTransport)."""
+    """Les 3 JSON de l'étape 5 d'un entretien synthétique, produits par le vrai orchestrateur (FakeAgents)."""
     from core import trajectory
     from core.analysis_cache import AnalysisCache
-    from core.llm_client import LLMClient
 
     interview = BY_ID[interview_id]
     with tempfile.TemporaryDirectory(prefix="trace_stage6_fixture_") as tmp:
         analysis_dir = Path(tmp) / interview_id / config.ANALYSIS_SUBDIR
         prepared, _ = stage5_inputs(interview, analysis_dir)
         output = mapper_output(interview)
-        transport = FakeTransport({TRAJECTORY: lambda params: text_response(output, input_tokens=4000,
-                                                                            output_tokens=2500)})
+        client = FakeAgents({TRAJECTORY: lambda params: text_response(output)})
         settings = fake_settings()
 
         async def run():
-            client = LLMClient(settings, transport=transport)
             try:
                 return await trajectory.run_stage5_interview(prepared, client, AnalysisCache(Path(tmp) / "cache"),
                                                              settings)
@@ -562,8 +559,7 @@ def scripted_comparator(plan: dict, *, mutate=None):
         output = comparator_output(params, plan)
         if mutate is not None:
             output = mutate(output, sent_material(params))
-        return text_response(output, input_tokens=len(params["messages"][0]["content"]) // 3,
-                             output_tokens=150 + 220 * len(output["cross_case_claims"]))
+        return text_response(output)
     return respond
 
 

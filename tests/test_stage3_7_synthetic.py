@@ -1,4 +1,4 @@
-"""Test synthétique GLOBAL de l'étape 3.7 (entretien long de 330 tours), LLM simulé.
+"""Test synthétique GLOBAL de l'étape 3.7 (entretien long de 330 tours), agents simulés.
 
 Chaîne complète : ingestion → audit des locuteurs → Practice Extractor par blocs → Interaction
 Reader par blocs + lecture à longue distance → fusion → sélectivité → validation. Le lecteur
@@ -15,12 +15,12 @@ from core.analysis import analyze_run, plan_analysis
 from core.analysis_cache import AnalysisCache
 from tests import synthetic_interviews as si
 from tests import synthetic_stage37 as S
-from tests.fake_llm import AUDITOR, INTERACTION, LONG_DISTANCE, PRACTICE, FakeTransport, fake_settings, text_response
+from tests.fake_llm import AUDITOR, INTERACTION, LONG_DISTANCE, PRACTICE, FakeAgents, fake_settings, text_response
 from tests.synthetic_long_interview import sent_turns
 
 
 def transport():
-    return FakeTransport({PRACTICE: S.practice_reader, INTERACTION: S.naive_reader,
+    return FakeAgents({PRACTICE: S.practice_reader, INTERACTION: S.naive_reader,
                           LONG_DISTANCE: S.long_distance_reader,
                           AUDITOR: lambda p: text_response({"assessments": [], "audit_notes": None})})
 
@@ -34,7 +34,7 @@ def test_stage_3_7_long_synthetic_interview_end_to_end(tmp_path):
     cache = AnalysisCache(tmp_path / "cache")
 
     fake = transport()
-    run = analyze_run(run, settings=fake_settings(), transport=fake, cache=cache)
+    run = analyze_run(run, settings=fake_settings(), client=fake, cache=cache)
     out = Path(run["files"][0]["analysis"]["analysis_dir"])
     load = lambda name: json.loads((out / name).read_text(encoding="utf-8"))  # noqa: E731
     practices, signals = load("practice_extractor.json"), load("interaction_signals.json")
@@ -43,7 +43,6 @@ def test_stage_3_7_long_synthetic_interview_end_to_end(tmp_path):
     # Coût : 1 audit + 4 blocs Practice + 3 blocs Interaction + 1 lecture à longue distance ; jamais un appel par tour
     assert {a: len(fake.calls_for(a)) for a in (AUDITOR, PRACTICE, INTERACTION, LONG_DISTANCE)} == {
         AUDITOR: 1, PRACTICE: 4, INTERACTION: 3, LONG_DISTANCE: 1}
-    assert all(c["params"]["max_tokens"] == 32000 for c in fake.calls)  # pas de max_tokens géant
     assert all(len(sent_turns(c["params"])) < S.TURN_COUNT for c in fake.calls)  # jamais l'entretien entier
 
     # Practice Extractor : plusieurs blocs, SUCCESS, usages / non-usages / refus conservés, pas de troncature
@@ -86,6 +85,6 @@ def test_stage_3_7_long_synthetic_interview_end_to_end(tmp_path):
     # Relance identique : 0 appel, pour tous les agents
     assert plan_analysis(run, [S.INTERVIEW_ID], fake_settings(), cache)["calls"] == 0
     again = transport()
-    run = analyze_run(run, settings=fake_settings(), transport=again, cache=cache)
+    run = analyze_run(run, settings=fake_settings(), client=again, cache=cache)
     assert again.calls == [] and run["last_analysis"]["usage"]["api_calls"] == 0
     assert json.loads((out / "interaction_signals.json").read_text())["signals"] == signals["signals"]

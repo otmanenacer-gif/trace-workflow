@@ -1,5 +1,5 @@
 """Étape 5 — entretien long « OTMANE-like » (section 19) : payload compact, 1 appel, aucune invention temporelle,
-aucune comparaison entre entretiens. LLM simulés, aucun appel réel."""
+aucune comparaison entre entretiens. agents simulés, aucun appel réel."""
 
 import json
 
@@ -51,7 +51,8 @@ def test_one_call_with_a_compact_payload(stage4):
     naive = len(json.dumps([episodes["episodes"], episodes["unmarked_practices"], practices], ensure_ascii=False))
     assert manifest["estimated_input_tokens"] < 6_000 < tc.SINGLE_CALL_MAX_INPUT_TOKENS
     assert manifest["payload_chars"] < 0.25 * naive
-    assert manifest["over_single_call_threshold"] is False and manifest["api_calls"] == 1
+    assert manifest["over_single_call_threshold"] is False and manifest["api_calls"] == 0
+    assert len(transport.calls) == 1
     for filler in L.FILLERS:  # aucun tour sans pratique, jamais l'entretien complet
         assert filler[:60] not in message
     assert L.SPECIAL_QUESTIONS[169] not in message  # questions de l'enquêteur non transmises

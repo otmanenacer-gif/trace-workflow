@@ -1,4 +1,4 @@
-"""Étape 5 — tests sociologiques obligatoires (section 18) : pipeline réel, LLM simulés, aucun appel réel.
+"""Étape 5 — tests sociologiques obligatoires (section 18) : pipeline réel, agents simulés, aucun appel réel.
 
 A. changement temporel réel ; B. variation contextuelle (jamais une évolution) ; C. règle + exception ;
 D. stabilité ; E. zone ordinaire ; F. pas de trajectoire ; G. épisode à revoir ; H. mot de l'enquêteur.

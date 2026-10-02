@@ -241,19 +241,19 @@ def _covered(item: dict, present: set[str]) -> bool:
 def practice_reader(params: dict):
     present = {t["turn_id"] for t in sent_turns(params)}
     items = [p for _, ps in sorted(PRACTICES.items()) for p in ps if _covered(p, present)]
-    return text_response({"practices": items, "extraction_notes": None}, input_tokens=4500, output_tokens=2500)
+    return text_response({"practices": items, "extraction_notes": None})
 
 
 def signal_reader(params: dict):
     present = {t["turn_id"] for t in sent_turns(params)}
     items = [s for _, ss in sorted(SIGNALS.items()) for s in ss if _covered(s, present)]
-    return text_response({"signals": items, "reading_notes": None}, input_tokens=5500, output_tokens=2500)
+    return text_response({"signals": items, "reading_notes": None})
 
 
 def long_distance_reader(params: dict):
     present = {t["turn_id"] for t in sent_turns(params)}
     items = [CONTRADICTION] if _covered(CONTRADICTION, present) else []
-    return text_response({"signals": items, "reading_notes": None}, input_tokens=2000, output_tokens=400)
+    return text_response({"signals": items, "reading_notes": None})
 
 
 def stage3_responders():
@@ -334,8 +334,7 @@ def output_for(params: dict, adversarial: bool) -> dict:
 def builder(mode: str = "good"):
     def respond(params: dict):
         output = output_for(params, adversarial=mode == "adversarial")
-        return text_response(output, input_tokens=len(params["messages"][0]["content"]) // 3,
-                             output_tokens=60 + 260 * len(output["episodes"]))
+        return text_response(output)
     return respond
 
 

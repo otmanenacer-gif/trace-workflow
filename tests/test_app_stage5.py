@@ -1,16 +1,16 @@
-"""Interface Streamlit de l'étape 5 (AppTest : sans navigateur, LLM simulé, aucun appel réel)."""
+"""Interface Streamlit de l'étape 5 (AppTest : sans navigateur, agents simulés joués à travers le workflow)."""
 
 import pytest
 from streamlit.testing.v1 import AppTest
 
-import core.llm_client as llm_client
 from core import config
+from core.claude_code_workflow import WorkflowClient
 from core.stage3_restore import restore_stage3
 from core.stage4_restore import restore_stage4
 from tests import synthetic_interviews as si
 from tests import synthetic_stage4 as S4
 from tests import synthetic_stage5 as S5
-from tests.fake_llm import ACCOUNTABILITY, TRAJECTORY, FakeTransport
+from tests.fake_llm import ACCOUNTABILITY, TRAJECTORY, FakeAgents, answering_workflow
 
 APP = str(config.PROJECT_ROOT / "app.py")
 
@@ -23,17 +23,16 @@ def agents(transport):
     return [c["agent"] for c in transport.calls]
 
 
+def simulate(monkeypatch, responders: dict) -> FakeAgents:
+    agents = FakeAgents(responders)
+    monkeypatch.setattr(WorkflowClient, "complete_json", answering_workflow(agents))
+    return agents
+
+
 @pytest.fixture
-def fake_api(monkeypatch):
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-FAKE-KEY-000")
-    monkeypatch.setenv("ANTHROPIC_MODEL", "fake-model")
-    monkeypatch.setenv("TRACE_STAGE3_BACKEND", "anthropic")  # ancien mode de l'étape 3 par API (LLM simulé)
-    monkeypatch.setenv("TRACE_STAGE4_BACKEND", "anthropic")  # ancien mode de l'étape 4 par API (LLM simulé)
-    monkeypatch.setenv("TRACE_STAGE5_BACKEND", "anthropic")  # ancien mode de l'étape 5 par API (LLM simulé)
-    transport = FakeTransport({**S4.stage3_responders(), ACCOUNTABILITY: S4.REFERENCE_BUILDER,
-                               TRAJECTORY: S5.scripted_mapper(S5.REFERENCE_PLAN)})
-    monkeypatch.setattr(llm_client, "AnthropicTransport", lambda settings: transport)
-    return transport
+def fake_agents(monkeypatch):
+    return simulate(monkeypatch, {**S4.stage3_responders(), ACCOUNTABILITY: S4.REFERENCE_BUILDER,
+                                  TRAJECTORY: S5.scripted_mapper(S5.REFERENCE_PLAN)})
 
 
 def app_with_run(run):
@@ -46,29 +45,27 @@ def stage5_table(at):
     return next(t.value for t in reversed(at.table) if "Configuration" in t.value.columns)
 
 
-def test_stage5_waits_for_stage4(tmp_path, fake_api):
+def test_stage5_waits_for_stage4(tmp_path, fake_agents):
     at = app_with_run(si.make_ingested_run(tmp_path, S4.FILES))
     assert not at.exception
     assert "Étape 5 — Configuration et trajectoire intra-entretien" in texts(at.header)
     assert "Lancez d'abord l'étape 4" in texts(at.info)
-    assert not [b for b in at.button if b.key == "traj_launch"]
+    assert not [b for b in at.button if b.key in ("wf_stage5", "traj_launch")]
     # étape 3 absente : la restauration de l'étape 4 renvoie d'abord vers celle de l'étape 3
     assert "Restaurer des résultats Stage 4 existants" in [e.label for e in at.expander]
     assert "restaurez-la (ou lancez-la) d'abord" in texts(at.info)
 
 
-def test_full_flow_stage3_stage4_stage5_then_cache(tmp_path, fake_api):
+def test_full_flow_stage3_stage4_stage5_then_no_replay(tmp_path, fake_agents):
     at = app_with_run(si.make_ingested_run(tmp_path, S4.FILES))
-    at.button(key="ai_launch").click().run()
-    at.button(key="acc_launch").click().run()
-    assert not at.exception and agents(fake_api).count(TRAJECTORY) == 0  # l'étape 4 ne lance jamais l'étape 5
-    launch = at.button(key="traj_launch")
-    assert launch.label == "Construire la configuration intra-entretien (1 appel(s) API payant(s))"
-    before = len(fake_api.calls)
+    at.button(key="wf_stage3").click().run()
+    at.button(key="wf_stage4").click().run()
+    assert not at.exception and agents(fake_agents).count(TRAJECTORY) == 0  # l'étape 4 ne lance jamais l'étape 5
+    before = len(fake_agents.calls)
 
-    launch.click().run()
-    assert not at.exception and agents(fake_api)[before:] == [TRAJECTORY]
-    assert "Étape 5 terminée." in texts(at.success)
+    at.button(key="wf_stage5").click().run()
+    assert not at.exception and agents(fake_agents)[before:] == [TRAJECTORY]
+    assert "Étape 5 terminée (workflow Claude Code, 0 appel API)." in texts(at.success)
     table = stage5_table(at)
     assert list(table["Étape 5"]) == ["✅ SUCCESS"] and list(table["Statut étape 4"]) == ["disponible"]
     assert list(table["Configuration"]) == ["configuration contextuelle"]
@@ -85,18 +82,13 @@ def test_full_flow_stage3_stage4_stage5_then_cache(tmp_path, fake_api):
     assert len(criteria) == 1 and len(criteria[0].value) == 2
     assert "Configuration et trajectoire intra-entretien** (IA) — terminé (1/1 entretien(s))" in texts(at.markdown)
 
-    assert at.button(key="traj_launch").label.endswith("(0 appel(s) API payant(s))")
-    at.button(key="traj_launch").click().run()
-    assert not at.exception and agents(fake_api)[before:] == [TRAJECTORY]
-    assert list(stage5_table(at)["Étape 5"]) == ["♻️ CACHED"]
+    at.button(key="wf_stage5").click().run()  # complète et à jour : non rejouée
+    assert not at.exception and agents(fake_agents)[before:] == [TRAJECTORY]
+    assert list(stage5_table(at)["Étape 5"]) == ["✅ SUCCESS"]
 
 
 def test_restored_stage3_and_stage4_lead_directly_to_stage5(tmp_path, monkeypatch):
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-FAKE-KEY-000")
-    monkeypatch.setenv("ANTHROPIC_MODEL", "fake-model")
-    monkeypatch.setenv("TRACE_STAGE5_BACKEND", "anthropic")  # ancien mode de l'étape 5 par API (LLM simulé)
-    transport = FakeTransport({TRAJECTORY: S5.scripted_mapper(S5.REFERENCE_PLAN)})  # seule l'étape 5 répond
-    monkeypatch.setattr(llm_client, "AnthropicTransport", lambda settings: transport)
+    transport = simulate(monkeypatch, {TRAJECTORY: S5.scripted_mapper(S5.REFERENCE_PLAN)})  # seule l'étape 5 répond
     before, _ = S5.run_to_stage4(tmp_path / "before", S4.FILES, S4.stage3_responders(), S4.REFERENCE_BUILDER)
     out = S5.analysis_dir(before)
     stage3 = [(n, (out / n).read_bytes()) for n in ("practice_extractor.json", "interaction_signals.json",
@@ -108,28 +100,23 @@ def test_restored_stage3_and_stage4_lead_directly_to_stage5(tmp_path, monkeypatc
     assert not at.exception
     assert "Restaurer des résultats Stage 4 existants" in [e.label for e in at.expander]
     assert at.button(key="restore4_launch").disabled  # aucun fichier choisi
-    assert not [b for b in at.button if b.key == "traj_launch"]
+    assert not [b for b in at.button if b.key == "wf_stage5"]
 
     at.session_state["last_run"] = restore_stage4(run, S4.INTERVIEW_ID, stage4)
     at.run()
     assert "Stage 4 restauré depuis fichiers — 0 appel API" in texts(at.success)
     assert "Restaurer des résultats Stage 4 existants" not in [e.label for e in at.expander]
-    assert at.button(key="traj_launch").label == "Construire la configuration intra-entretien (1 appel(s) API payant(s))"
-    at.button(key="traj_launch").click().run()
+    at.button(key="wf_stage5").click().run()
     assert not at.exception and agents(transport) == [TRAJECTORY]  # ni étape 3, ni audit, ni étape 4
     assert list(stage5_table(at)["Étape 5"]) == ["✅ SUCCESS"]
     assert "(restaurée depuis fichiers)" in texts(at.markdown)
 
 
 def test_temporal_interview_shows_the_explicit_change(tmp_path, monkeypatch):
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-FAKE-KEY-000")
-    monkeypatch.setenv("ANTHROPIC_MODEL", "fake-model")
-    monkeypatch.setenv("TRACE_STAGE5_BACKEND", "anthropic")  # ancien mode de l'étape 5 par API (LLM simulé)
     run, _ = S5.case_to_stage4(tmp_path, S5.TEMPORAL)
-    transport = FakeTransport({TRAJECTORY: S5.TEMPORAL.mapper()})
-    monkeypatch.setattr(llm_client, "AnthropicTransport", lambda settings: transport)
+    simulate(monkeypatch, {TRAJECTORY: S5.TEMPORAL.mapper()})
     at = app_with_run(run)
-    at.button(key="traj_launch").click().run()
+    at.button(key="wf_stage5").click().run()
     assert not at.exception
     table = stage5_table(at)
     assert list(table["Configuration"]) == ["trajectoire temporelle explicite"]
@@ -139,14 +126,10 @@ def test_temporal_interview_shows_the_explicit_change(tmp_path, monkeypatch):
 
 
 def test_requalified_configuration_is_shown(tmp_path, monkeypatch):
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-FAKE-KEY-000")
-    monkeypatch.setenv("ANTHROPIC_MODEL", "fake-model")
-    monkeypatch.setenv("TRACE_STAGE5_BACKEND", "anthropic")  # ancien mode de l'étape 5 par API (LLM simulé)
     run, _ = S5.case_to_stage4(tmp_path, S5.NOPATTERN)
-    transport = FakeTransport({TRAJECTORY: S5.NOPATTERN.mapper("adversarial")})
-    monkeypatch.setattr(llm_client, "AnthropicTransport", lambda settings: transport)
+    simulate(monkeypatch, {TRAJECTORY: S5.NOPATTERN.mapper("adversarial")})
     at = app_with_run(run)
-    at.button(key="traj_launch").click().run()
+    at.button(key="wf_stage5").click().run()
     assert not at.exception
     assert list(stage5_table(at)["Changements temporels explicites"]) == [0]
     assert "requalifiée par TRACE" in texts(at.warning)

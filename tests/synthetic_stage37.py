@@ -182,7 +182,7 @@ def practice_output(params: dict) -> dict:
 
 
 def practice_reader(params: dict):
-    return text_response(practice_output(params), input_tokens=5000, output_tokens=1500)
+    return text_response(practice_output(params))
 
 
 # --- Signaux attendus (Interaction Reader simulé) ---------------------------------------------
@@ -279,11 +279,11 @@ def naive_output(params: dict) -> dict:
 
 
 def selective_reader(params: dict):
-    return text_response(selective_output(params), input_tokens=6000, output_tokens=1200)
+    return text_response(selective_output(params))
 
 
 def naive_reader(params: dict):
-    return text_response(naive_output(params), input_tokens=6000, output_tokens=9000)
+    return text_response(naive_output(params))
 
 
 def long_distance_output(params: dict) -> dict:
@@ -292,4 +292,4 @@ def long_distance_output(params: dict) -> dict:
 
 
 def long_distance_reader(params: dict):
-    return text_response(long_distance_output(params), input_tokens=2500, output_tokens=600)
+    return text_response(long_distance_output(params))

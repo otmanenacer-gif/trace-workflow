@@ -17,9 +17,9 @@ entretien à la fois : aucune comparaison entre entretiens.
   → étape 5 BLOCKED : aucun appel, aucune sortie de trajectoire, le manifest dit pourquoi ;
 - PARTIAL → étape 5 exécutée, statut PARTIAL, `analysis_complete: false`.
 
-Coût : 0 appel si moins de `MIN_ITEMS_FOR_LLM` éléments utilisables (configuration `no_clear_pattern`
-déterministe) ; sinon 1 appel par entretien, représentation normalisée. Pas de découpage : un entretien
-au-delà du seuil est signalé (`over_single_call_threshold`), jamais traité en augmentant max_tokens.
+Coût : aucune tâche d'agent si moins de `MIN_ITEMS_FOR_LLM` éléments utilisables (configuration `no_clear_pattern`
+déterministe) ; sinon 1 tâche par entretien (0 appel API), représentation normalisée. Pas de découpage : un entretien
+au-delà du seuil est signalé (`over_single_call_threshold`), jamais découpé.
 Cache propre à l'étape 5 (data/cache/analysis/trajectory_mapper/) : la clé couvre la requête exacte,
 l'agent, sa version, son prompt, son schéma, le modèle et les paramètres. Modifier l'étape 5 n'invalide
 que l'étape 5 ; une étape 4 restaurée depuis fichiers (mêmes épisodes) donne la même clé.
@@ -46,7 +46,7 @@ from core.analysis import (AUDITOR, INTERACTION, PRACTICE, STATUS_CACHED, STATUS
                            STATUS_PENDING, STATUS_SUCCESS, STATUS_SUCCESS_WITH_WARNINGS, _run_coroutine,
                            eligible_files)
 from core.analysis_cache import AnalysisCache, compute_cache_key, write_json_atomic
-from core.llm_client import LLMClient, LLMError, LLMSettings, Transport
+from core.llm_client import LLMError, LLMSettings
 from core.run_manager import save_metadata
 
 logger = logging.getLogger(__name__)
@@ -234,7 +234,7 @@ def plan_stage5(metadata: dict, interview_ids: list[str], settings: LLMSettings,
 
 # --- Exécution sur un entretien ----------------------------------------------------------------------
 
-async def _call(prepared: Stage5Input, client: LLMClient | None, cache: AnalysisCache, settings: LLMSettings,
+async def _call(prepared: Stage5Input, client, cache: AnalysisCache, settings: LLMSettings,
                 force: bool, label: str) -> dict:
     """L'appel unique, repris du cache s'il existe. Ne lève pas d'exception : renvoie un bilan."""
     key_fields = cache_key_fields(prepared, settings)
@@ -251,8 +251,6 @@ async def _call(prepared: Stage5Input, client: LLMClient | None, cache: Analysis
                           response_model=call.get("response_model"), request_id=call.get("request_id"),
                           stop_reason=call.get("stop_reason"))
             return record
-        if client is None:
-            raise LLMError("NOT_CONFIGURED")
         result = await client.complete_json(system_prompt=SPEC.system_prompt,
                                             user_content=prepared.request["user_message"],
                                             output_schema=SPEC.output_schema, response_model=SPEC.output_model,
@@ -263,12 +261,12 @@ async def _call(prepared: Stage5Input, client: LLMClient | None, cache: Analysis
             "model_requested": result.model_requested, "response_model": result.response_model,
             "request_id": result.request_id, "stop_reason": result.stop_reason})
         record.update(status=STATUS_SUCCESS, output=output, created_at=_now(), api_calls=result.attempts,
-                      billed_this_run=result.attempts > 0, usage=result.usage, duration_seconds=result.duration_seconds,
+                      billed_this_run=False, usage=result.usage, duration_seconds=result.duration_seconds,
                       response_model=result.response_model, request_id=result.request_id,
                       stop_reason=result.stop_reason)
     except LLMError as error:
         record.update(status=STATUS_FAILED, error=error.to_dict(), api_calls=error.attempts, usage=error.usage,
-                      billed_this_run=bool(error.usage and error.usage.get("input_tokens")),
+                      billed_this_run=False,
                       duration_seconds=error.duration_seconds, request_id=error.request_id)
     except Exception as exc:  # noqa: BLE001 — isolé à cet entretien, sans contenu d'entretien
         logger.error("Étape 5 %s : erreur inattendue %s\n%s", label, type(exc).__name__,
@@ -296,7 +294,7 @@ def _counts(document: dict) -> dict:
     }
 
 
-async def run_stage5_interview(prepared: Stage5Input, client: LLMClient | None, cache: AnalysisCache,
+async def run_stage5_interview(prepared: Stage5Input, client, cache: AnalysisCache,
                                settings: LLMSettings, force: bool = False) -> dict:
     """Étape 5 sur UN entretien. Ne lève pas d'exception : renvoie le résumé (manifest)."""
     label = f"{prepared.interview_id}/{SPEC.name}"
@@ -453,21 +451,17 @@ def _summary(prepared: Stage5Input, manifest: dict) -> dict:
             **{k: manifest.get(k) for k in SUMMARY_KEYS}}
 
 
-async def run_stage5_interviews(prepared_list: list[Stage5Input], settings: LLMSettings,
-                                transport: Transport | None = None, cache: AnalysisCache | None = None,
-                                force: bool = False, client=None) -> list[dict]:
-    """`client` : client déjà construit, de même interface que LLMClient ; le workflow Claude Code
-    (core/claude_code_workflow.py) y passe un client SANS appel réseau. Sinon, un LLMClient (API) est construit
-    seulement si un entretien a assez de matériau."""
+async def run_stage5_interviews(prepared_list: list[Stage5Input], settings: LLMSettings, *, client,
+                                cache: AnalysisCache | None = None, force: bool = False) -> list[dict]:
+    """`client` : client des agents (`complete_json`, `aclose`), injecté par le workflow Claude Code
+    (core/claude_code_workflow.WorkflowClient, AUCUN appel réseau) ou par les tests (agents simulés). Il n'est
+    sollicité que pour un entretien qui a assez de matériau."""
     cache = cache or AnalysisCache()
-    if client is None and any(p.needs_llm for p in prepared_list):
-        client = LLMClient(settings, transport=transport)
     try:
         manifests = await asyncio.gather(*(run_stage5_interview(p, client, cache, settings, force)
                                            for p in prepared_list))
     finally:
-        if client is not None:
-            await client.aclose()
+        await client.aclose()
     return [_summary(p, m) for p, m in zip(prepared_list, manifests)]
 
 
@@ -502,23 +496,20 @@ def _step_state(metadata: dict) -> str:
     return state + (f", {failed} échec(s))" if failed else ")")
 
 
-def analyze_run_stage5(metadata: dict, interview_ids: list[str] | None = None, *, settings: LLMSettings | None = None,
-                       transport: Transport | None = None, cache: AnalysisCache | None = None,
-                       force: bool = False, client=None) -> dict:
+def analyze_run_stage5(metadata: dict, interview_ids: list[str] | None = None, *, client,
+                       settings: LLMSettings | None = None, cache: AnalysisCache | None = None,
+                       force: bool = False) -> dict:
     """Étape 5 sur les entretiens choisis d'un run (étape 4 déjà disponible). Met à jour metadata.json.
 
-    Sans `client`, lève LLMError (NOT_CONFIGURED) si la clé ou le modèle manque. Avec `client` (workflow
-    Claude Code, sans API), aucune clé n'est demandée.
+    `client` : client des agents, injecté par le workflow Claude Code (aucune clé, aucun appel API).
     """
     settings = settings or LLMSettings.from_env()
-    if client is None and not settings.enabled:
-        raise LLMError("NOT_CONFIGURED", ", ".join(settings.missing))
     files = eligible_files(metadata)
     if interview_ids is not None:
         wanted = set(interview_ids)
         files = [f for f in files if f["ingestion"]["interview_id"] in wanted]
     prepared = [prepare_stage5(f["ingestion"]) for f in files]
-    summaries = _run_coroutine(run_stage5_interviews(prepared, settings, transport, cache, force, client))
+    summaries = _run_coroutine(run_stage5_interviews(prepared, settings, client=client, cache=cache, force=force))
     by_id = {s["interview_id"]: s for s in summaries}
     for info in files:
         info["trajectory"] = by_id[info["ingestion"]["interview_id"]]

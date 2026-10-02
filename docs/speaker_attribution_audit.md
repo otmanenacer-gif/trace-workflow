@@ -1,5 +1,11 @@
 # Étape 3.5 — Speaker Attribution Auditor
 
+> **Exécution** : les agents sont joués par Claude Code (workflow multi-agents,
+> [`TRACE_WORKFLOW.md`](../TRACE_WORKFLOW.md)), sans aucun appel à une API de modèle. Dans ce document, un
+> « appel » désigne une **tâche d'agent** du workflow ; les mentions de tokens facturés, de cache de l'API ou
+> de `TRACE_LLM_MAX_TOKENS` décrivent la conception d'origine (exécution par API, retirée) : les champs
+> correspondants des manifests sont conservés et valent toujours 0 / `null`.
+
 Une transcription peut attribuer un passage au mauvais locuteur : un tour
 marqué `enqueteur` qui contient manifestement une réponse à la première
 personne, une question de l'enquêteur attribuée à l'enquêté·e. L'auditeur

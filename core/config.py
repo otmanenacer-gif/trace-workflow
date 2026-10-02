@@ -19,7 +19,7 @@ PROMPTS_DIR = PROJECT_ROOT / "prompts"
 # Cache des analyses IA (réutilisé d'un run à l'autre, jamais versionné)
 CACHE_DIR = DATA_DIR / "cache" / "analysis"
 
-# Fichier local de configuration (clé API, modèle) — jamais versionné
+# Fichier local de réglages facultatifs (tailles des blocs) — jamais versionné
 ENV_FILE = PROJECT_ROOT / ".env"
 
 # Problématique courante, sauvegardée depuis l'interface

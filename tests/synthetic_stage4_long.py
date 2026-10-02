@@ -208,19 +208,19 @@ def _covered(item: dict, present: set[str]) -> bool:
 def practice_reader(params: dict):
     present = _present(params)
     items = [p for n, ps in sorted(PRACTICES.items()) for p in ps if _covered(p, present)]
-    return text_response({"practices": items, "extraction_notes": None}, input_tokens=4500, output_tokens=2500)
+    return text_response({"practices": items, "extraction_notes": None})
 
 
 def signal_reader(params: dict):
     present = _present(params)
     items = [s for n, ss in sorted(SIGNALS.items()) for s in ss if _covered(s, present)]
-    return text_response({"signals": items, "reading_notes": None}, input_tokens=5500, output_tokens=2500)
+    return text_response({"signals": items, "reading_notes": None})
 
 
 def long_distance_reader(params: dict):
     present = _present(params)
     items = [CONTRADICTION] if _covered(CONTRADICTION, present) else []
-    return text_response({"signals": items, "reading_notes": None}, input_tokens=2000, output_tokens=400)
+    return text_response({"signals": items, "reading_notes": None})
 
 
 def stage3_responders():

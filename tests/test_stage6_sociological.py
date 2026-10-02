@@ -9,12 +9,12 @@ import pytest
 from core import cross_interview as X
 from core.analysis_cache import AnalysisCache
 from tests import synthetic_stage6 as S6
-from tests.fake_llm import COMPARATOR, FakeTransport, fake_settings
+from tests.fake_llm import COMPARATOR, FakeAgents, fake_settings
 
 
 def run(tmp_path, ids, plan=S6.GOOD_PLAN, mutate=None, extra=()):
-    transport = FakeTransport({COMPARATOR: S6.scripted_comparator(plan, mutate=mutate)})
-    manifest = X.run_stage6(S6.uploads([*ids, *extra]), settings=fake_settings(), transport=transport,
+    transport = FakeAgents({COMPARATOR: S6.scripted_comparator(plan, mutate=mutate)})
+    manifest = X.run_stage6(S6.uploads([*ids, *extra]), settings=fake_settings(), client=transport,
                             cache=AnalysisCache(tmp_path / "cache"), base_dir=tmp_path / "out")
     outputs = X.read_outputs(manifest["corpus_dir"])
     document = json.loads(outputs["comparison"]) if outputs["comparison"] else None
@@ -224,8 +224,8 @@ def test_J_excluded_interview_cannot_support_a_claim(tmp_path):
 
 @pytest.mark.parametrize("ids, extra", [(["ENT_A"], ()), (["ENT_A"], ["ENT_X_INVALIDE"]), ([], ())])
 def test_fewer_than_two_usable_interviews_blocks_without_any_call(tmp_path, ids, extra):
-    transport = FakeTransport({})  # tout appel échouerait
-    manifest = X.run_stage6(S6.uploads([*ids, *extra]), settings=fake_settings(), transport=transport,
+    transport = FakeAgents({})  # tout appel échouerait
+    manifest = X.run_stage6(S6.uploads([*ids, *extra]), settings=fake_settings(), client=transport,
                             cache=AnalysisCache(tmp_path / "cache"), base_dir=tmp_path / "out")
     assert manifest["status"] == "BLOCKED" and transport.calls == [] and manifest["api_calls"] == 0
     assert manifest["error"]["code"] == "CORPUS_TOO_SMALL"

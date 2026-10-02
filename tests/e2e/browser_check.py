@@ -1,46 +1,47 @@
-"""Test navigateur de bout en bout (Playwright + Chromium), SANS appel API réel.
+"""Test navigateur de bout en bout (Playwright + Chromium), SANS aucun appel API.
 
     python tests/e2e/browser_check.py [--screenshots DOSSIER] [--chromium CHEMIN]
 
-Deux scénarios, chacun avec un serveur Streamlit local :
-A. app.py sans clé API : l'ingestion fonctionne, l'analyse IA est désactivée
-   avec un message explicite ;
-B. tests/e2e/fake_llm_app.py (LLM simulé) : import de l'entretien synthétique,
-   ingestion, puis étape 3 en mode test (2 appels simulés), statuts, comptes,
-   citation inventée détectée, second lancement repris du cache, mode corpus
-   soumis à confirmation ;
-C. étape 3.5 (LLM simulé) : entretien synthétique dont un tour est mal attribué,
-   1 appel d'audit + 2 agents, avertissement affiché, transcription inchangée ;
-D. étape 3.6 (LLM simulé) : entretien long synthétique (349 tours), annonce des blocs
-   avant exécution, 5 blocs + 1 lecture à longue distance, bilan des blocs,
-   téléchargement de interaction_signals.json fusionné (citations valides) ;
-E. étape 3.7 (LLM simulé) : entretien long synthétique saturé de remplisseurs (330 tours),
-   Practice Extractor en 4 blocs et Interaction Reader en 3 blocs annoncés avant exécution,
+Les étapes 3 à 6 passent par le workflow Claude Code (boutons « Préparer / reprendre l'étape N ») ; avec
+tests/e2e/fake_llm_app.py, chaque tâche écrite est aussitôt jouée par les agents simulés (response.json), puis
+validée par TRACE. Scénarios, chacun avec un serveur Streamlit local :
+A. app.py tel quel, sans clé : ingestion, puis étape 3 : les tâches d'agent sont écrites et listées « en attente »
+   avec l'instruction à donner à Claude Code ; aucune étape désactivée ;
+B. tests/e2e/fake_llm_app.py (agents simulés) : import de l'entretien synthétique,
+   ingestion, puis étape 3 en mode test (2 tâches d'agent), statuts, comptes,
+   citation inventée détectée, relance non rejouée (étape complète), mode corpus ;
+C. étape 3.5 (agents simulés) : entretien synthétique dont un tour est mal attribué,
+   1 tâche d'audit + 2 agents, avertissement affiché, transcription inchangée ;
+D. étape 3.6 (agents simulés) : entretien long synthétique (349 tours), 5 blocs + 1 lecture à longue distance,
+   bilan des blocs, téléchargement de interaction_signals.json fusionné (citations valides) ;
+E. étape 3.7 (agents simulés) : entretien long synthétique saturé de remplisseurs (330 tours),
+   Practice Extractor en 4 blocs et Interaction Reader en 3 blocs,
    lecteur Interaction qui surcode, bilan (blocs, pratiques/signaux avant et après
-   dédoublonnage, anomalies de validation), téléchargements JSON, relance depuis le cache ;
-F. étape 4 (LLM simulé) : entretien synthétique de référence, étape 3 puis épisodes d'accountability
-   (6 candidats annoncés, 1 appel), tableau accountability / ordinaires / incertains, aperçu,
-   téléchargements JSON vérifiés, relance depuis le cache (0 appel) ;
-G. étape 4 sur l'entretien long synthétique (320 tours) : 8 candidats pour 31 pratiques, 1 appel,
+   dédoublonnage, anomalies de validation), téléchargements JSON, relance non rejouée ;
+F. étape 4 (agents simulés) : entretien synthétique de référence, étape 3 puis épisodes d'accountability
+   (6 candidats, 1 tâche d'agent), tableau accountability / ordinaires / incertains, aperçu,
+   téléchargements JSON vérifiés, relance non rejouée (étape complète) ;
+G. étape 4 sur l'entretien long synthétique (320 tours) : 8 candidats pour 31 pratiques, 1 tâche d'agent,
    5 épisodes, 3 pratiques ordinaires examinées, 20 sans marqueur ;
 H. restauration (serveur neuf, cache vide, comme après un redéploiement) : l'entretien de l'étape 4 est
-   réimporté, ses 4 JSON d'étape 3 (calculés au préalable par le LLM simulé) sont importés dans
-   « Restaurer des résultats Stage 3 existants », puis l'étape 4 est lancée : 0 appel d'étape 3, 1 appel
-   d'étape 4, résultats identiques ;
+   réimporté, ses 4 JSON d'étape 3 (calculés au préalable par les agents simulés) sont importés dans
+   « Restaurer des résultats Stage 3 existants », puis l'étape 4 est lancée : aucune tâche d'étape 3,
+   1 tâche d'agent d'étape 4, résultats identiques ;
 I. étape 4.1 : entretien de régression « OTMANE » synthétique (388 tours, longs tours à plusieurs pratiques) :
-   26 candidats, représentation normalisée, 1 appel, 17 épisodes / 8 ordinaires examinées / 22 sans marqueur,
+   26 candidats, représentation normalisée, 1 tâche d'agent, 17 épisodes / 8 ordinaires examinées / 22 sans marqueur,
    aucune fusion de composantes déconnectées, aucun avertissement ;
-J. étape 5 après l'étape 4 (entretien de référence, sans temporalité) : 1 appel, configuration contextuelle,
-   aperçu, 3 téléchargements JSON vérifiés, relance depuis le cache (0 appel) ;
+J. étape 5 après l'étape 4 (entretien de référence, sans temporalité) : 1 tâche d'agent, configuration contextuelle,
+   aperçu, 3 téléchargements JSON vérifiés, relance non rejouée (étape complète) ;
 K. étape 5 sur un entretien à vraie temporalité (« Au lycée » / « Maintenant ») : trajectoire temporelle explicite ;
 L. restauration des étapes 3 PUIS 4 (serveur neuf, cache vide) : « Stage 4 restauré depuis fichiers — 0 appel API »,
-   puis étape 5 directement : 1 appel, aucune exécution des étapes 3 et 4 ;
-M. étape 5 sur l'entretien long « OTMANE-like » (190 tours, 50 pratiques, 20 épisodes) : 1 appel, configuration mixte ;
-N. étape 6, sans run : import de 2 triplets d'étape 5 → comparaison EXPLORATOIRE (1 appel) ;
+   puis étape 5 directement : 1 tâche d'agent, aucune exécution des étapes 3 et 4 ;
+M. étape 5 sur l'entretien long « OTMANE-like » (190 tours, 50 pratiques, 20 épisodes) : 1 tâche d'agent,
+   configuration mixte ;
+N. étape 6, sans run : import de 2 triplets d'étape 5 → comparaison EXPLORATOIRE (1 tâche d'agent) ;
 O. étape 6 sur le corpus synthétique de 17 entretiens + un entretien invalide + un fichier illisible : tableau du corpus
-   (18 entretiens, 17 exploitables, raison d'exclusion), 1 appel, cas négatifs et éléments à revoir visibles,
+   (18 entretiens, 17 exploitables, raison d'exclusion), 1 tâche d'agent, cas négatifs et éléments à revoir visibles,
    3 téléchargements JSON vérifiés ;
-P. relance de l'étape 6 sur le même corpus : 0 appel (cache).
+P. relance de l'étape 6 sur le même corpus : corpus déjà complet, non rejoué.
 
 `--only-stage6` n'exécute que les scénarios N à P.
 
@@ -52,7 +53,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import re
 import shutil
 import socket
 import subprocess
@@ -81,6 +81,18 @@ from tests import synthetic_stage5_long as stage5_long  # noqa: E402
 from tests import synthetic_stage6 as stage6  # noqa: E402
 
 TIMEOUT_MS = 30_000
+WORKFLOW_BUTTON = "Préparer / reprendre l'étape {} (workflow Claude Code, 0 appel API)"
+WORKFLOW_DONE = "Étape {} terminée (workflow Claude Code, 0 appel API)."
+NO_COST = "0 appel(s) API — 0 tokens entrée — 0 tokens sortie"
+
+
+def run_workflow_stage(page, stage: int) -> None:
+    """Clique « Préparer / reprendre l'étape N » et attend la fin de l'étape (tâches jouées par les agents simulés)."""
+    wait_idle(page)
+    page.get_by_role("button", name=WORKFLOW_BUTTON.format(stage)).click()
+    expect(page.get_by_text(WORKFLOW_DONE.format(stage)).first).to_be_visible(timeout=TIMEOUT_MS)
+    wait_idle(page)
+    assert_no_exception(page)
 
 
 def free_port() -> int:
@@ -136,32 +148,33 @@ def scenario_without_key(browser, url: str, interview: Path, shots: Path) -> Non
     page = browser.new_page(viewport={"width": 1400, "height": 1000})
     page.goto(url)
     expect(page.get_by_role("heading", name="TRACE", exact=True)).to_be_visible(timeout=TIMEOUT_MS)
+    expect(page.get_by_text("prête, workflow Claude Code (0 appel API)").first).to_be_visible(timeout=TIMEOUT_MS)
+    assert page.get_by_text("désactivée", exact=False).count() == 0
     upload_and_ingest(page, interview)
-    expect(page.get_by_text("Analyse IA désactivée").first).to_be_visible(timeout=TIMEOUT_MS)
-    assert page.get_by_role("button", name="Lancer les deux analyses IA").count() == 0
+    page.get_by_role("button", name=WORKFLOW_BUTTON.format(3)).click()
+    expect(page.get_by_text("tâche(s) d'agent en attente", exact=False).first).to_be_visible(timeout=TIMEOUT_MS)
+    expect(page.get_by_text("Exécute les tâches TRACE en attente du run", exact=False).first).to_be_visible()
+    assert_no_exception(page)
     page.screenshot(path=str(shots / "A_sans_cle.png"), full_page=True)
-    print("A. sans clé : ingestion OK, analyse IA désactivée avec message explicite")
+    print("A. sans clé : ingestion OK, étape 3 : tâches d'agent écrites, en attente de Claude Code, 0 appel API")
 
 
 def scenario_fake_llm(browser, url: str, interview: Path, shots: Path) -> None:
     page = browser.new_page(viewport={"width": 1400, "height": 1000})
     page.goto(url)
     upload_and_ingest(page, interview)
-    expect(page.get_by_text("2 appels LLM par entretien non présent dans le cache")).to_be_visible()
-    launch = page.get_by_role("button", name="Lancer les deux analyses IA (2 appel(s) API payant(s))")
-    expect(launch).to_be_enabled()
+    expect(page.get_by_text("Workflow Claude Code", exact=False).first).to_be_visible()
     page.screenshot(path=str(shots / "B1_avant_lancement.png"), full_page=True)
 
-    launch.click()
-    expect(page.get_by_text("Analyse IA terminée.")).to_be_visible(timeout=TIMEOUT_MS)
-    expect(page.get_by_text("2 appel(s) API — 4 580 tokens entrée — 3 210 tokens sortie")).to_be_visible()
+    run_workflow_stage(page, 3)
+    expect(page.get_by_text(NO_COST)).to_be_visible()
     table = page.locator("[data-testid=stTable]").last
     expect(table).to_contain_text("SUCCESS_WITH_WARNINGS")   # Practice Extractor : citation inventée
     expect(table).to_contain_text("✅ SUCCESS")              # Interaction Reader
     row = table.locator("tbody tr").first
     cells = [c.strip() for c in row.locator("td").all_inner_texts()]
     print("   ligne de résultats :", cells)
-    assert cells[1:4] == ["✅ SUCCESS", "0", "0"], cells  # audit des locuteurs : aucun tour suspect, aucun appel
+    assert cells[1:4] == ["✅ SUCCESS", "0", "0"], cells  # audit des locuteurs : aucun tour suspect, aucune tâche
     assert cells[6:9] == ["6", "10", "1"], cells  # pratiques, signaux, citations invalides
     assert cells[-1] == "1", cells  # entretien court : un seul bloc (un appel Interaction Reader)
     page.get_by_text("Analyse IA — ENTRETIEN_SYNTHETIQUE — aperçu").click()
@@ -171,42 +184,33 @@ def scenario_fake_llm(browser, url: str, interview: Path, shots: Path) -> None:
     expect(page.get_by_text("(IA) — terminé (1/1 entretien(s))").first).to_be_visible()
     assert_no_exception(page)
     page.screenshot(path=str(shots / "B2_resultats.png"), full_page=True)
-    print("B. LLM simulé : 2 agents SUCCESS / SUCCESS_WITH_WARNINGS, citation inventée détectée, téléchargements OK")
+    print("B. agents simulés (workflow) : SUCCESS / SUCCESS_WITH_WARNINGS, citation inventée détectée, "
+          "téléchargements OK, 0 appel API")
 
-    # Second lancement : tout vient du cache
-    relaunch = page.get_by_role("button", name="Lancer les deux analyses IA (0 appel(s) API payant(s))")
-    expect(relaunch).to_be_visible(timeout=TIMEOUT_MS)
-    relaunch.click()
-    expect(page.locator("[data-testid=stTable]").last).to_contain_text("CACHED", timeout=TIMEOUT_MS)
-    expect(page.get_by_text("0 appel(s) API — 0 tokens entrée — 0 tokens sortie")).to_be_visible()
-    print("   second lancement : CACHED, 0 appel API")
+    # Relance : l'étape est complète et à jour, elle n'est pas rejouée
+    run_workflow_stage(page, 3)
+    expect(page.locator("[data-testid=stTable]").last).to_contain_text("SUCCESS_WITH_WARNINGS", timeout=TIMEOUT_MS)
+    print("   relance : étape 3 complète, non rejouée, 0 appel API")
 
-    # Mode corpus : confirmation obligatoire
+    # Mode corpus : tous les entretiens du run
     page.get_by_text("Corpus complet").click()
-    corpus_button = page.get_by_role("button", name="Lancer les deux analyses IA (0 appel(s) API payant(s))")
-    expect(corpus_button).to_be_disabled(timeout=TIMEOUT_MS)
-    page.get_by_text("Je confirme lancer l'analyse IA sur tout le corpus.").click()
-    expect(corpus_button).to_be_enabled(timeout=TIMEOUT_MS)
+    run_workflow_stage(page, 3)
     page.screenshot(path=str(shots / "B3_mode_corpus.png"), full_page=True)
-    print("   mode corpus : bouton désactivé tant que la case de confirmation n'est pas cochée")
+    print("   mode corpus : étape 3 sur tout le run (déjà complète, non rejouée)")
 
 
 def scenario_stage35(browser, url: str, interview: Path, shots: Path) -> None:
     page = browser.new_page(viewport={"width": 1400, "height": 1000})
     page.goto(url)
     upload_and_ingest(page, interview)
-    expect(page.get_by_text("1 tour(s) suspect(s), 1 appel(s) d'audit").first).to_be_visible(timeout=TIMEOUT_MS)
-    launch = page.get_by_role("button", name="Lancer les deux analyses IA (au plus 3 appel(s) API payant(s))")
-    expect(launch).to_be_enabled()
-    launch.click()
-    expect(page.get_by_text("Analyse IA terminée.")).to_be_visible(timeout=TIMEOUT_MS)
-    expect(page.get_by_text("3 appel(s) API — 4 900 tokens entrée — 2 250 tokens sortie")).to_be_visible()
+    run_workflow_stage(page, 3)
+    expect(page.get_by_text(NO_COST)).to_be_visible()
     title = f"Audit d'attribution des locuteurs — {si.STAGE35_INTERVIEW_ID} — 1 tour(s) suspect(s), 1 à vérifier"
     page.get_by_text(title).click()
     expect(page.get_by_text("Ces suggestions ne modifient pas la transcription originale.")).to_be_visible()
     expect(page.get_by_role("button", name="Télécharger speaker_attribution_audit.json")).to_be_visible()
     page.screenshot(path=str(shots / "C_etape_3_5_audit_locuteurs.png"), full_page=True)
-    print("C. étape 3.5 : 1 appel d'audit + 2 agents, tour mal attribué signalé, transcription non modifiable")
+    print("C. étape 3.5 : 1 tâche d'audit + 2 agents, tour mal attribué signalé, transcription non modifiable")
 
 
 def wait_idle(page) -> None:
@@ -237,17 +241,9 @@ def scenario_long_interview(browser, url: str, interview: Path, shots: Path) -> 
     page = browser.new_page(viewport={"width": 1400, "height": 1000})
     page.goto(url)
     upload_and_ingest(page, interview)
-    expect(page.get_by_text("entretien long : analyse en 5 blocs").first).to_be_visible(timeout=TIMEOUT_MS)
-    expect(page.get_by_text("soit au plus 6 appels Interaction Reader").first).to_be_visible()
-    # étape 3.7 : le Practice Extractor lit aussi l'entretien long par blocs (6 blocs)
-    expect(page.get_by_text("soit au plus 6 appels Practice Extractor").first).to_be_visible()
-    launch = page.get_by_role("button", name="Lancer les deux analyses IA (au plus 12 appel(s) API payant(s))")
-    expect(launch).to_be_enabled()
     page.screenshot(path=str(shots / "D1_entretien_long_avant.png"), full_page=True)
-    launch.click()
-    expect(page.get_by_text("Analyse IA terminée.")).to_be_visible(timeout=TIMEOUT_MS)
-    expect(page.get_by_text("12 appel(s) API").first).to_be_visible()
-    wait_idle(page)  # la relance qui suit l'analyse remplace le tableau d'avancement par celui des résultats
+    run_workflow_stage(page, 3)  # 6 blocs Practice + 5 blocs Interaction + 1 lecture à longue distance
+    expect(page.get_by_text(NO_COST)).to_be_visible()
     table = page.locator("[data-testid=stTable]").last
     row = [c.strip() for c in table.locator("tbody tr").first.locator("td").all_inner_texts()]
     print("   ligne de résultats :", row)
@@ -268,29 +264,16 @@ def scenario_long_interview(browser, url: str, interview: Path, shots: Path) -> 
     print(f"D. entretien long : 5 blocs + 1 lecture à longue distance, {len(document['signals'])} signaux "
           f"(avant dédoublonnage : {chunking['signals_before_dedup']}), téléchargement OK")
 
-    relaunch = page.get_by_role("button", name="Lancer les deux analyses IA (0 appel(s) API payant(s))")
-    expect(relaunch).to_be_visible(timeout=TIMEOUT_MS)
-    relaunch.click()
-    expect(page.get_by_text("0 appel(s) API — 0 tokens entrée — 0 tokens sortie")).to_be_visible(timeout=TIMEOUT_MS)
-    assert_no_exception(page)
-    print("   second lancement : 0 appel API (blocs et lecture à longue distance en cache)")
+    run_workflow_stage(page, 3)
+    print("   relance : étape 3 complète, non rejouée")
 
 
 def scenario_stage37(browser, url: str, interview: Path, shots: Path) -> None:
     page = browser.new_page(viewport={"width": 1400, "height": 1000})
     page.goto(url)
     upload_and_ingest(page, interview)
-    expect(page.get_by_text("Practice Extractor — ENTRETIEN_ETAPE_3_7 : entretien long : analyse en 4 blocs").first
-           ).to_be_visible(timeout=TIMEOUT_MS)
-    expect(page.get_by_text("Interaction Reader — ENTRETIEN_ETAPE_3_7 : entretien long : analyse en 3 blocs").first
-           ).to_be_visible()
-    launch = page.get_by_role("button", name="Lancer les deux analyses IA (au plus 9 appel(s) API payant(s))")
-    expect(launch).to_be_enabled()
     page.screenshot(path=str(shots / "E1_etape_3_7_avant.png"), full_page=True)
-    launch.click()
-    expect(page.get_by_text("Analyse IA terminée.")).to_be_visible(timeout=TIMEOUT_MS)
-    expect(page.get_by_text("9 appel(s) API").first).to_be_visible()
-    wait_idle(page)
+    run_workflow_stage(page, 3)  # 1 audit + 4 blocs Practice + 3 blocs Interaction + 1 lecture à longue distance
     table = page.locator("[data-testid=stTable]").last
     row = [c.strip() for c in table.locator("tbody tr").first.locator("td").all_inner_texts()]
     print("   ligne de résultats :", row)
@@ -316,12 +299,8 @@ def scenario_stage37(browser, url: str, interview: Path, shots: Path) -> None:
           f"({len(signals['signals'])} signaux pour {markers} remplisseurs ; avant dédoublonnage : "
           f"{signals['chunking']['signals_before_dedup']}), 0 anomalie, téléchargements OK")
 
-    relaunch = page.get_by_role("button", name="Lancer les deux analyses IA (0 appel(s) API payant(s))")
-    expect(relaunch).to_be_visible(timeout=TIMEOUT_MS)
-    relaunch.click()
-    expect(page.get_by_text("0 appel(s) API — 0 tokens entrée — 0 tokens sortie")).to_be_visible(timeout=TIMEOUT_MS)
-    assert_no_exception(page)
-    print("   second lancement : 0 appel API (tous les blocs en cache)")
+    run_workflow_stage(page, 3)
+    print("   relance : étape 3 complète, non rejouée")
 
 
 def stage4_row(page) -> list[str]:
@@ -330,29 +309,23 @@ def stage4_row(page) -> list[str]:
     return [c.strip() for c in table.locator("tbody tr").first.locator("td").all_inner_texts()]
 
 
-def run_stage3_then_stage4(page, interview: Path, stage3_label: str, candidates: int) -> None:
+def run_stage3_then_stage4(page, interview: Path) -> None:
     upload_and_ingest(page, interview)
-    page.get_by_role("button", name=stage3_label).click()
-    expect(page.get_by_text("Analyse IA terminée.")).to_be_visible(timeout=TIMEOUT_MS)
-    wait_idle(page)
+    run_workflow_stage(page, 3)
     expect(page.get_by_role("heading", name="Étape 4 — Épisodes d'accountability")).to_be_visible(timeout=TIMEOUT_MS)
-    expect(page.get_by_text(f"Candidats d'épisodes (déterministes, sans IA) : {candidates}").first).to_be_visible()
-    launch = page.get_by_role("button", name="Construire les épisodes d'accountability (1 appel(s) API payant(s))")
-    expect(launch).to_be_enabled()
-    launch.click()
-    expect(page.get_by_text("Étape 4 terminée.")).to_be_visible(timeout=TIMEOUT_MS)
+    run_workflow_stage(page, 4)
 
 
 def scenario_stage4(browser, url: str, interview: Path, shots: Path) -> None:
     page = browser.new_page(viewport={"width": 1400, "height": 1300})
     page.goto(url)
-    run_stage3_then_stage4(page, interview, "Lancer les deux analyses IA (au plus 3 appel(s) API payant(s))", 6)
-    expect(page.get_by_text("Dernière exécution (étape 4) : 1 appel(s) API").first).to_be_visible()
+    run_stage3_then_stage4(page, interview)
+    expect(page.get_by_text("Dernière exécution (étape 4) : 0 appel(s) API").first).to_be_visible()
     row = stage4_row(page)
     print("   ligne étape 4 :", row)
     # Entretien, statut étape 3, étape 4, candidats, accountability, ordinaires examinées, sans marqueur, incertains,
     # rejetés, avertissements, appels
-    assert row == [stage4.INTERVIEW_ID, "COMPLETE", "✅ SUCCESS", "6", "4", "1", "4", "1", "0", "0", "1"], row
+    assert row == [stage4.INTERVIEW_ID, "COMPLETE", "✅ SUCCESS", "6", "4", "1", "4", "1", "0", "0", "0"], row
     label = f"Épisodes d'accountability — {stage4.INTERVIEW_ID} — aperçu"
     page.get_by_text(label).click()
     expect(page.get_by_text("Épisodes (6) — 3 premiers")).to_be_visible(timeout=TIMEOUT_MS)
@@ -367,42 +340,38 @@ def scenario_stage4(browser, url: str, interview: Path, shots: Path) -> None:
     assert uncertain["speaker_warnings"] and uncertain["needs_review"] is True
     assert validation["status"] == "SUCCESS" and validation["error_count"] == validation["warning_count"] == 0
     assert_no_exception(page)
-    print("F. étape 4 : 6 candidats, 1 appel, 4 épisodes / 1 ordinaire examinée + 4 sans marqueur / 1 incertain, "
-          "téléchargements JSON OK")
+    print("F. étape 4 : 6 candidats, 1 tâche d'agent, 4 épisodes / 1 ordinaire examinée + 4 sans marqueur / "
+          "1 incertain, téléchargements JSON OK, 0 appel API")
 
-    relaunch = page.get_by_role("button", name="Construire les épisodes d'accountability (0 appel(s) API payant(s))")
-    expect(relaunch).to_be_visible(timeout=TIMEOUT_MS)
-    relaunch.click()
-    expect(page.get_by_text("Dernière exécution (étape 4) : 0 appel(s) API").first).to_be_visible(timeout=TIMEOUT_MS)
+    run_workflow_stage(page, 4)
     row = stage4_row(page)
-    assert row[2] == "♻️ CACHED" and row[-1] == "0", row
-    assert_no_exception(page)
-    page.screenshot(path=str(shots / "F2_etape_4_cache.png"), full_page=True)
-    print("   relance étape 4 : CACHED, 0 appel API")
+    assert row[2] == "✅ SUCCESS" and row[-1] == "0", row
+    page.screenshot(path=str(shots / "F2_etape_4_relance.png"), full_page=True)
+    print("   relance étape 4 : complète, non rejouée, 0 appel API")
     stage5_after_stage4(page, shots)
 
 
 def scenario_stage4_long(browser, url: str, interview: Path, shots: Path) -> None:
     page = browser.new_page(viewport={"width": 1400, "height": 1300})
     page.goto(url)
-    run_stage3_then_stage4(page, interview, "Lancer les deux analyses IA (au plus 7 appel(s) API payant(s))", 8)
+    run_stage3_then_stage4(page, interview)
     row = stage4_row(page)
     print("   ligne étape 4 :", row)
-    assert row == [stage4_long.INTERVIEW_ID, "COMPLETE", "✅ SUCCESS", "8", "5", "3", "20", "0", "0", "0", "1"], row
+    assert row == [stage4_long.INTERVIEW_ID, "COMPLETE", "✅ SUCCESS", "8", "5", "3", "20", "0", "0", "0", "0"], row
     assert_no_exception(page)
     page.screenshot(path=str(shots / "G_etape_4_long.png"), full_page=True)
-    print("G. étape 4, entretien long : 31 pratiques → 8 candidats, 1 appel, 5 épisodes, 3 ordinaires examinées, "
+    print("G. étape 4, entretien long : 31 pratiques → 8 candidats, 1 tâche, 5 épisodes, 3 ordinaires examinées, "
           "20 sans marqueur")
 
 
 def stage3_downloads(work: Path) -> list[Path]:
-    """Calcule l'étape 3 de l'entretien de référence (LLM simulé, hors data/) et écrit les 4 JSON
+    """Calcule l'étape 3 de l'entretien de référence (agents simulés, hors data/) et écrit les 4 JSON
     « téléchargés », nommés comme les boutons de téléchargement de l'interface."""
     from core.analysis import analyze_run
     from core.analysis_cache import AnalysisCache
-    from tests.fake_llm import FakeTransport, fake_settings
+    from tests.fake_llm import FakeAgents, fake_settings
     run = si.make_ingested_run(work / "precomputed", stage4.FILES)
-    analyze_run(run, settings=fake_settings(), transport=FakeTransport(stage4.stage3_responders()),
+    analyze_run(run, settings=fake_settings(), client=FakeAgents(stage4.stage3_responders()),
                 cache=AnalysisCache(work / "precomputed_cache"))
     out = Path(run["files"][0]["ingestion"]["output_dir"]) / "analysis"
     paths = []
@@ -432,30 +401,26 @@ def scenario_restore(browser, url: str, interview: Path, downloads: list[Path], 
     expect(page.get_by_text("Stage 3 restauré depuis fichiers — 0 appel API").first).to_be_visible(timeout=TIMEOUT_MS)
     wait_idle(page)
     assert page.get_by_text("Dernière exécution :", exact=False).count() == 0  # aucune exécution de l'étape 3
-    expect(page.get_by_text("Candidats d'épisodes (déterministes, sans IA) : 6").first).to_be_visible()
-    launch = page.get_by_role("button", name="Construire les épisodes d'accountability (1 appel(s) API payant(s))")
-    expect(launch).to_be_enabled()
-    launch.click()
-    expect(page.get_by_text("Étape 4 terminée.")).to_be_visible(timeout=TIMEOUT_MS)
-    expect(page.get_by_text("Dernière exécution (étape 4) : 1 appel(s) API").first).to_be_visible()
+    run_workflow_stage(page, 4)
+    expect(page.get_by_text("Dernière exécution (étape 4) : 0 appel(s) API").first).to_be_visible()
     row = stage4_row(page)
     print("   ligne étape 4 :", row)
-    assert row == [stage4.INTERVIEW_ID, "COMPLETE", "✅ SUCCESS", "6", "4", "1", "4", "1", "0", "0", "1"], row
+    assert row == [stage4.INTERVIEW_ID, "COMPLETE", "✅ SUCCESS", "6", "4", "1", "4", "1", "0", "0", "0"], row
     stage3_table = page.locator("[data-testid=stTable]").filter(has_text="Practice Extractor")
     expect(stage3_table).to_contain_text("SUCCESS")  # sorties restaurées affichées comme une étape 3 normale
     assert_no_exception(page)
     page.screenshot(path=str(shots / "H2_restauration_etape_4.png"), full_page=True)
     print("H. restauration : 4 JSON importés, « Stage 3 restauré depuis fichiers — 0 appel API », "
-          "0 appel d'étape 3, étape 4 : 1 appel, 4 épisodes / 1 ordinaire + 4 sans marqueur / 1 incertain")
+          "aucune tâche d'étape 3, étape 4 : 1 tâche, 4 épisodes / 1 ordinaire + 4 sans marqueur / 1 incertain")
 
 
 def scenario_otmane(browser, url: str, interview: Path, shots: Path) -> None:
     page = browser.new_page(viewport={"width": 1400, "height": 1300})
     page.goto(url)
-    run_stage3_then_stage4(page, interview, "Lancer les deux analyses IA (au plus 8 appel(s) API payant(s))", 26)
+    run_stage3_then_stage4(page, interview)
     row = stage4_row(page)
     print("   ligne étape 4 :", row)
-    assert row == [otmane.INTERVIEW_ID, "COMPLETE", "✅ SUCCESS", "26", "17", "8", "22", "0", "0", "0", "1"], row
+    assert row == [otmane.INTERVIEW_ID, "COMPLETE", "✅ SUCCESS", "26", "17", "8", "22", "0", "0", "0", "0"], row
     label = f"Épisodes d'accountability — {otmane.INTERVIEW_ID} — aperçu"
     page.get_by_text(label).click()
     episodes = download_json(page, label, "accountability_episodes.json")
@@ -464,14 +429,11 @@ def scenario_otmane(browser, url: str, interview: Path, shots: Path) -> None:
     assert "coupable" not in json.dumps(episodes["episodes"], ensure_ascii=False)
     assert_no_exception(page)
     page.screenshot(path=str(shots / "I_etape_4_1_otmane.png"), full_page=True)
-    print("I. étape 4.1 « OTMANE » synthétique : 26 candidats, 1 appel, 25 épisodes utilisables, aucune fusion "
+    print("I. étape 4.1 « OTMANE » synthétique : 26 candidats, 1 tâche, 25 épisodes utilisables, aucune fusion "
           "déconnectée, mot de l'enquêteur non attribué")
 
 
 # --- Étape 5 -------------------------------------------------------------------------------------------
-
-STAGE5_LAUNCH = "Construire la configuration intra-entretien ({} appel(s) API payant(s))"
-
 
 def stage5_row(page) -> list[str]:
     wait_idle(page)
@@ -482,12 +444,8 @@ def stage5_row(page) -> list[str]:
 def launch_stage5(page) -> list[str]:
     expect(page.get_by_role("heading", name="Étape 5 — Configuration et trajectoire intra-entretien")).to_be_visible(
         timeout=TIMEOUT_MS)
-    launch = page.get_by_role("button", name=STAGE5_LAUNCH.format(1))
-    expect(launch).to_be_enabled(timeout=TIMEOUT_MS)
-    launch.click()
-    expect(page.get_by_text("Étape 5 terminée.")).to_be_visible(timeout=TIMEOUT_MS)
-    expect(page.get_by_text("Dernière exécution (étape 5) : 1 appel(s) API").first).to_be_visible()
-    assert_no_exception(page)
+    run_workflow_stage(page, 5)
+    expect(page.get_by_text("Dernière exécution (étape 5) : 0 appel(s) API").first).to_be_visible()
     return stage5_row(page)
 
 
@@ -497,7 +455,7 @@ def stage5_after_stage4(page, shots: Path) -> None:
     # Entretien, étape 4, étape 5, configuration, retenues, frontières, variations, temporels, exceptions, tensions,
     # zones ordinaires, critères, avertissements, appels
     assert row == [stage4.INTERVIEW_ID, "disponible", "✅ SUCCESS", "configuration contextuelle", "3", "0", "0", "0",
-                   "1", "0", "1", "2", "0", "1"], row
+                   "1", "0", "1", "2", "0", "0"], row
     label = f"Configuration intra-entretien — {stage4.INTERVIEW_ID} — aperçu"
     page.get_by_text(label).click()
     expect(page.get_by_text("Affirmations retenues (3)")).to_be_visible(timeout=TIMEOUT_MS)
@@ -508,28 +466,20 @@ def stage5_after_stage4(page, shots: Path) -> None:
     assert document["configuration_type"] == "contextual_configuration" and document["explicit_temporal_changes"] == []
     assert len(document["exceptions"]) == len(document["ordinary_zones"]) == 1
     assert validation["error_count"] == validation["warning_count"] == 0
-    assert manifest["api_calls"] == 1 and manifest["stage4_status"] == "COMPLETE"
-    print("J. étape 5 après l'étape 4 : 1 appel, configuration contextuelle, 3 affirmations, 2 critères, "
-          "téléchargements JSON OK")
-    relaunch = page.get_by_role("button", name=STAGE5_LAUNCH.format(0))
-    expect(relaunch).to_be_visible(timeout=TIMEOUT_MS)
-    relaunch.click()
-    expect(page.get_by_text("Dernière exécution (étape 5) : 0 appel(s) API").first).to_be_visible(timeout=TIMEOUT_MS)
+    assert manifest["api_calls"] == 0 and manifest["llm_called"] is True and manifest["stage4_status"] == "COMPLETE"
+    print("J. étape 5 après l'étape 4 : 1 tâche, configuration contextuelle, 3 affirmations, 2 critères, "
+          "téléchargements JSON OK, 0 appel API")
+    run_workflow_stage(page, 5)
     row = stage5_row(page)
-    assert row[2] == "♻️ CACHED" and row[-1] == "0", row
-    assert_no_exception(page)
-    page.screenshot(path=str(shots / "J2_etape_5_cache.png"), full_page=True)
-    print("   relance étape 5 : CACHED, 0 appel API")
+    assert row[2] == "✅ SUCCESS" and row[-1] == "0", row
+    page.screenshot(path=str(shots / "J2_etape_5_relance.png"), full_page=True)
+    print("   relance étape 5 : complète, non rejouée, 0 appel API")
 
 
 def stage3_and_stage4(page, interview: Path) -> None:
     upload_and_ingest(page, interview)
-    page.get_by_role("button", name=re.compile(r"^Lancer les deux analyses IA")).click()
-    expect(page.get_by_text("Analyse IA terminée.")).to_be_visible(timeout=TIMEOUT_MS)
-    wait_idle(page)
-    page.get_by_role("button", name="Construire les épisodes d'accountability (1 appel(s) API payant(s))").click()
-    expect(page.get_by_text("Étape 4 terminée.")).to_be_visible(timeout=TIMEOUT_MS)
-    wait_idle(page)
+    run_workflow_stage(page, 3)
+    run_workflow_stage(page, 4)
 
 
 def scenario_stage5_temporal(browser, url: str, interview: Path, shots: Path) -> None:
@@ -561,13 +511,13 @@ def scenario_stage5_long(browser, url: str, interview: Path, shots: Path) -> Non
     print("   ligne étape 5 :", row)
     assert row == [stage5_long.INTERVIEW_ID, "disponible", "✅ SUCCESS",
                    "mixte (changement temporel explicite et variations contextuelles)", "10", "2", "2", "1", "1", "1",
-                   "2", "5", "0", "1"], row
+                   "2", "5", "0", "0"], row
     page.screenshot(path=str(shots / "M_etape_5_long.png"), full_page=True)
-    print("M. étape 5, entretien long OTMANE-like : 50 pratiques, 20 épisodes, 1 appel, configuration mixte")
+    print("M. étape 5, entretien long OTMANE-like : 50 pratiques, 20 épisodes, 1 tâche, configuration mixte")
 
 
 def stage4_downloads(work: Path) -> list[Path]:
-    """Calcule les étapes 3 et 4 de l'entretien de référence (LLM simulé, hors data/) et écrit les 6 JSON
+    """Calcule les étapes 3 et 4 de l'entretien de référence (agents simulés, hors data/) et écrit les 6 JSON
     « téléchargés », nommés comme les boutons de téléchargement de l'interface."""
     run, _ = stage5.run_to_stage4(work / "precomputed4", stage4.FILES, stage4.stage3_responders(),
                                   stage4.REFERENCE_BUILDER)
@@ -609,7 +559,7 @@ def scenario_restore_stage4(browser, url: str, interview: Path, downloads: list[
     row = launch_stage5(page)
     print("   ligne étape 5 :", row)
     assert row == [stage4.INTERVIEW_ID, "disponible", "✅ SUCCESS", "configuration contextuelle", "3", "0", "0", "0",
-                   "1", "0", "1", "2", "0", "1"], row
+                   "1", "0", "1", "2", "0", "0"], row
     assert page.get_by_text("Dernière exécution :", exact=False).count() == 0  # aucune exécution de l'étape 3
     assert page.get_by_text("Dernière exécution (étape 4)", exact=False).count() == 0  # ni de l'étape 4
     label = f"Configuration intra-entretien — {stage4.INTERVIEW_ID} — aperçu"
@@ -617,11 +567,10 @@ def scenario_restore_stage4(browser, url: str, interview: Path, downloads: list[
     expect(page.get_by_text("(restaurée depuis fichiers)", exact=False).first).to_be_visible(timeout=TIMEOUT_MS)
     assert_no_exception(page)
     page.screenshot(path=str(shots / "L2_restauration_etape_4_etape_5.png"), full_page=True)
-    print("L. restauration étapes 3 et 4 : « Stage 4 restauré depuis fichiers — 0 appel API », étape 5 : 1 appel, "
-          "0 appel d'étape 3 ou 4")
+    print("L. restauration étapes 3 et 4 : « Stage 4 restauré depuis fichiers — 0 appel API », étape 5 : 1 tâche, "
+          "aucune tâche d'étape 3 ou 4")
 
 
-STAGE6_LAUNCH = "Lancer la comparaison inter-entretiens ({} appel(s) API payant(s))"
 STAGE6_LABEL = "Sorties de l'étape 5"
 
 
@@ -645,14 +594,9 @@ def stage6_download(page, name: str) -> dict:
     return json.loads(Path(info.value.path()).read_text(encoding="utf-8"))
 
 
-def launch_stage6(page, calls: int) -> None:
-    launch = page.get_by_role("button", name=STAGE6_LAUNCH.format(calls))
-    expect(launch).to_be_enabled(timeout=TIMEOUT_MS)
-    launch.click()
-    expect(page.get_by_text(f"Dernière exécution (étape 6) : {calls} appel(s) API").first).to_be_visible(
-        timeout=TIMEOUT_MS)
-    wait_idle(page)
-    assert_no_exception(page)
+def launch_stage6(page) -> None:
+    run_workflow_stage(page, 6)
+    expect(page.get_by_text("Dernière exécution (étape 6) : 0 appel(s) API").first).to_be_visible(timeout=TIMEOUT_MS)
 
 
 def scenario_stage6_exploratory(browser, url: str, corpus_dir: Path, shots: Path) -> None:
@@ -664,13 +608,13 @@ def scenario_stage6_exploratory(browser, url: str, corpus_dir: Path, shots: Path
     assert [r[:2] for r in rows] == [["ENT_A", "✅ exploitable"], ["ENT_B", "✅ exploitable"]], rows
     expect(page.get_by_text("N exploitables : 2").first).to_be_visible()
     expect(page.get_by_text("la comparaison sera marquée EXPLORATOIRE", exact=False)).to_be_visible()
-    launch_stage6(page, 1)
+    launch_stage6(page)
     expect(page.get_by_text("Comparaison EXPLORATOIRE", exact=False).first).to_be_visible()
     document = stage6_download(page, "cross_interview_comparison.json")
     assert document["exploratory"] is True and (document["corpus_n_total"], document["corpus_n_usable"]) == (2, 2)
     assert all(c["confidence"] != "high" for c in document["cross_case_claims"])
     page.screenshot(path=str(shots / "N_etape_6_exploratoire.png"), full_page=True)
-    print("N. étape 6 exploratoire : 2 entretiens importés depuis fichiers, 1 appel, aucune confiance « high »")
+    print("N. étape 6 exploratoire : 2 entretiens importés depuis fichiers, 1 tâche, aucune confiance « high »")
 
 
 def scenario_stage6_corpus(browser, url: str, corpus_dir: Path, shots: Path) -> None:
@@ -689,7 +633,7 @@ def scenario_stage6_corpus(browser, url: str, corpus_dir: Path, shots: Path) -> 
     expect(page.get_by_text("ENT_X_INVALIDE exclu : validation_error_count = 2", exact=False)).to_be_visible()
     expect(page.get_by_text("Fichier ignoré — notes_illisibles.json : JSON invalide.")).to_be_visible()
     page.screenshot(path=str(shots / "O1_etape_6_corpus.png"), full_page=True)
-    launch_stage6(page, 1)
+    launch_stage6(page)
     expect(page.get_by_text("Cas négatifs (3)")).to_be_visible(timeout=TIMEOUT_MS)
     expect(page.get_by_text("cas négatifs : 3", exact=False).first).to_be_visible()
     expect(page.get_by_text("Avertissements de validation", exact=False).first).to_be_visible()
@@ -704,20 +648,15 @@ def scenario_stage6_corpus(browser, url: str, corpus_dir: Path, shots: Path) -> 
     review = [c for c in document["cross_case_claims"] if "SUPPORTED_ONLY_BY_REVIEW_ITEMS" in c["review_reasons"]]
     assert len(review) == 1 and review[0]["confidence"] == "low" and review[0]["needs_review"] is True
     assert validation["error_count"] == 0 and validation["excluded_interviews"][0]["interview_id"] == "ENT_X_INVALIDE"
-    assert manifest["api_calls"] == 1 and manifest["map_reduce_used"] is False
+    assert manifest["api_calls"] == 0 and manifest["llm_called"] is True and manifest["map_reduce_used"] is False
     assert manifest["upstream_stage_calls"] == 0 and manifest["estimated_input_tokens"] < 12_000
-    print(f"O. étape 6 sur 17 entretiens (+1 invalide, +1 illisible) : 1 appel, "
+    print(f"O. étape 6 sur 17 entretiens (+1 invalide, +1 illisible) : 1 tâche, 0 appel API, "
           f"{manifest['estimated_input_tokens']} tokens estimés, {manifest['payload_chars']} caractères, "
           "3 cas négatifs (ENT_D, ENT_H, ENT_L), 1 pattern à revoir, téléchargements JSON OK")
 
-    relaunch = page.get_by_role("button", name=STAGE6_LAUNCH.format(0))
-    expect(relaunch).to_be_visible(timeout=TIMEOUT_MS)
-    relaunch.click()
-    expect(page.get_by_text("Dernière exécution (étape 6) : 0 appel(s) API").first).to_be_visible(timeout=TIMEOUT_MS)
-    expect(page.get_by_text("repris du cache TRACE", exact=False).first).to_be_visible()
-    assert_no_exception(page)
-    page.screenshot(path=str(shots / "P_etape_6_cache.png"), full_page=True)
-    print("P. relance de l'étape 6 : CACHED, 0 appel API")
+    launch_stage6(page)
+    page.screenshot(path=str(shots / "P_etape_6_relance.png"), full_page=True)
+    print("P. relance de l'étape 6 : corpus identique déjà complet, non rejoué, 0 appel API")
 
 
 def run_dirs() -> set[Path]:
@@ -753,7 +692,7 @@ def main() -> int:
     stage5_long_file.write_text(stage5_long.text(), encoding="utf-8")
     stage6_dir = work / "stage6_corpus"
     stage6.write_corpus(stage6_dir, [*stage6.IDS_17, "ENT_X_INVALIDE"])
-    base_env = {k: v for k, v in os.environ.items() if not k.startswith(("ANTHROPIC_", "TRACE_"))}
+    base_env = {k: v for k, v in os.environ.items() if not k.startswith("TRACE_")}
     before = run_dirs()
     try:
         with sync_playwright() as pw:

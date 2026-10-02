@@ -6,11 +6,10 @@
                      → TRACE rejoue l'étape 3 : schéma, post-traitements, fusion, preuves, garde-fou
                      → sorties habituelles de l'étape 3          <run>/interviews/<id>/analysis/
 
-Principe : l'orchestration de l'étape 3 (core/analysis.py) est INCHANGÉE. Seul l'appel au modèle
-(`LLMClient.complete_json`) est remplacé par `WorkflowClient.complete_json`, qui ne fait AUCUN appel réseau
-et n'utilise ni clé ni SDK de transport :
-- si la réponse de l'agent (response.json) existe pour cette requête EXACTE, elle est validée par le MÊME
-  schéma Pydantic que la réponse de l'API (core.llm_client.parse_json_output), puis rendue au pipeline ;
+Principe : l'orchestration de l'étape 3 (core/analysis.py) est celle de TRACE ; chaque appel d'agent passe par
+`WorkflowClient.complete_json`, qui ne fait AUCUN appel réseau et n'utilise ni clé ni SDK de modèle :
+- si la réponse de l'agent (response.json) existe pour cette requête EXACTE, elle est validée par le schéma
+  Pydantic de l'agent (core.llm_client.parse_json_output), puis rendue au pipeline ;
 - sinon le paquet de tâche est écrit (agent, chemin du prompt système, message exact, schéma JSON, chemins
   utiles) et l'appel est signalé « en attente » (LLMError AWAITING_AGENT) : le pipeline le traite comme un
   appel non abouti — rien n'est inventé, aucun repli vers une API.
@@ -64,7 +63,6 @@ from __future__ import annotations
 
 import dataclasses
 import json
-import os
 import re
 import shutil
 from datetime import datetime
@@ -87,16 +85,8 @@ from core.run_manager import save_metadata
 
 WORKFLOW_VERSION = "1.0"
 
-# Moteur des étapes 3 à 6. Par défaut : workflow Claude Code (aucun appel API). L'ancien mode par API
-# (« anthropic ») n'est utilisé que s'il est demandé EXPLICITEMENT ; il n'est jamais un repli automatique.
-ENV_STAGE3_BACKEND = "TRACE_STAGE3_BACKEND"
-ENV_STAGE4_BACKEND = "TRACE_STAGE4_BACKEND"
-ENV_STAGE5_BACKEND = "TRACE_STAGE5_BACKEND"
-ENV_STAGE6_BACKEND = "TRACE_STAGE6_BACKEND"
-STAGE_BACKEND_ENV = {"3": ENV_STAGE3_BACKEND, "4": ENV_STAGE4_BACKEND, "5": ENV_STAGE5_BACKEND,
-                     "6": ENV_STAGE6_BACKEND}
+# Moteur des étapes 3 à 6 (champ « backend » des status.json) : le workflow Claude Code, le seul moteur de TRACE.
 BACKEND_CLAUDE_CODE = "claude_code"
-BACKEND_ANTHROPIC = "anthropic"
 
 # Étiquette écrite dans les manifests et documents à la place d'un identifiant de modèle d'API.
 WORKFLOW_MODEL = "workflow_claude_code"
@@ -187,33 +177,10 @@ def _resolve(path: str) -> Path:
 
 # --- Configuration ------------------------------------------------------------------------------
 
-def stage_backend(stage: str, env: dict | None = None) -> str:
-    """Moteur d'une étape : `claude_code` (défaut) ou `anthropic` (ancien mode, sur demande explicite)."""
-    raw = ((os.environ if env is None else env).get(STAGE_BACKEND_ENV[stage]) or "").strip().lower()
-    return BACKEND_ANTHROPIC if raw == BACKEND_ANTHROPIC else BACKEND_CLAUDE_CODE
-
-
-def stage3_backend(env: dict | None = None) -> str:
-    return stage_backend("3", env)
-
-
-def stage4_backend(env: dict | None = None) -> str:
-    return stage_backend("4", env)
-
-
-def stage5_backend(env: dict | None = None) -> str:
-    return stage_backend("5", env)
-
-
-def stage6_backend(env: dict | None = None) -> str:
-    return stage_backend("6", env)
-
-
 def workflow_settings(env: dict | None = None) -> LLMSettings:
-    """Paramètres des étapes en mode workflow : tailles de blocs lues dans l'environnement, comme dans
-    l'application (TRACE_*_CHUNK_TOKENS), mais ni clé, ni modèle d'API, ni paramètre de génération."""
-    return dataclasses.replace(LLMSettings.from_env(env), api_key=None, model=WORKFLOW_MODEL, effort=None,
-                               temperature=None)
+    """Paramètres des étapes : tailles de blocs lues dans l'environnement (TRACE_*_CHUNK_TOKENS) ; le champ
+    « model » des manifests porte l'étiquette du workflow (ni clé, ni modèle d'API, ni paramètre de génération)."""
+    return dataclasses.replace(LLMSettings.from_env(env), model=WORKFLOW_MODEL)
 
 
 def stage_dir(metadata: dict, stage: str = "3") -> Path:
@@ -260,7 +227,8 @@ class NoCache(AnalysisCache):
 # --- Client sans réseau -------------------------------------------------------------------------
 
 class WorkflowClient:
-    """Remplace LLMClient pour les étapes 3 à 6 (même interface : `complete_json`, `aclose`). Aucun appel réseau.
+    """Client des agents des étapes 3 à 6 (`complete_json`, `aclose`), injecté dans les orchestrateurs.
+    Aucun appel réseau.
 
     `records` : état de chaque tâche rencontrée pendant ce passage ({task_id: {...}}).
     """

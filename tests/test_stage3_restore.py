@@ -1,4 +1,4 @@
-"""Restauration de sorties de l'étape 3 déjà calculées, puis étape 4 sans relancer l'étape 3. LLM simulé."""
+"""Restauration de sorties de l'étape 3 déjà calculées, puis étape 4 sans relancer l'étape 3. agents simulés."""
 
 import json
 from pathlib import Path
@@ -6,23 +6,22 @@ from pathlib import Path
 import pytest
 from streamlit.testing.v1 import AppTest
 
-import core.llm_client as llm_client
 from core import accountability, config, stage3_restore
 from core.analysis import analyze_run
 from core.analysis_cache import AnalysisCache
 from core.stage3_restore import RestoreError, check_restore, restore_stage3
 from tests import synthetic_interviews as si
 from tests import synthetic_stage4 as S
-from tests.fake_llm import ACCOUNTABILITY, FakeTransport, fake_settings
+from tests.fake_llm import ACCOUNTABILITY, FakeAgents, fake_settings
 
 NAMES = ("practice_extractor.json", "interaction_signals.json", "evidence_validation.json",
          "speaker_attribution_audit.json")
 
 
 def downloaded_stage3(tmp_path, files=S.FILES, prefix=S.INTERVIEW_ID + "_") -> list[tuple[str, bytes]]:
-    """Étape 3 calculée (LLM simulé) dans un premier run, puis « téléchargée » (noms préfixés comme dans l'UI)."""
+    """Étape 3 calculée (agents simulés) dans un premier run, puis « téléchargée » (noms préfixés comme dans l'UI)."""
     run = si.make_ingested_run(tmp_path / "before", files)
-    analyze_run(run, settings=fake_settings(), transport=FakeTransport(S.stage3_responders()),
+    analyze_run(run, settings=fake_settings(), client=FakeAgents(S.stage3_responders()),
                 cache=AnalysisCache(tmp_path / "before_cache"))
     out = Path(run["files"][0]["ingestion"]["output_dir"]) / config.ANALYSIS_SUBDIR
     return [(prefix + name, (out / name).read_bytes()) for name in NAMES]
@@ -54,7 +53,7 @@ def rejected(run, uploads, interview_id=S.INTERVIEW_ID) -> str:
 
 def stage4_only_transport():
     """Seul l'Accountability Episode Builder répond : un appel de l'étape 3 lèverait une erreur."""
-    return FakeTransport({ACCOUNTABILITY: S.REFERENCE_BUILDER})
+    return FakeAgents({ACCOUNTABILITY: S.REFERENCE_BUILDER})
 
 
 # --- Restauration réussie --------------------------------------------------------------------------
@@ -81,7 +80,7 @@ def test_restored_stage3_feeds_stage4_without_any_stage3_call(tmp_path):
     plan = accountability.plan_stage4(run, [S.INTERVIEW_ID], fake_settings(), cache)
     assert plan["blocked"] == 0 and plan["calls"] == 1 and plan["candidates"] == 6
     transport = stage4_only_transport()
-    run = accountability.analyze_run_stage4(run, settings=fake_settings(), transport=transport, cache=cache)
+    run = accountability.analyze_run_stage4(run, settings=fake_settings(), client=transport, cache=cache)
     assert [c["agent"] for c in transport.calls] == [ACCOUNTABILITY]  # aucune étape 3, aucun audit
     result = run["files"][0]["accountability"]
     assert result["status"] == "SUCCESS" and result["stage3_status"] == "COMPLETE"
@@ -93,14 +92,14 @@ def test_restored_stage3_feeds_stage4_without_any_stage3_call(tmp_path):
 
 
 def test_restore_replaces_a_failed_stage3_and_removes_stale_stage4_outputs(tmp_path):
-    from tests.fake_llm import INTERACTION, server_error
+    from tests.fake_llm import INTERACTION, agent_error
     uploads = downloaded_stage3(tmp_path)
     run = fresh_run(tmp_path)
-    responders = {**S.stage3_responders(), INTERACTION: server_error(500)}
-    run = analyze_run(run, settings=fake_settings(), transport=FakeTransport(responders),
+    responders = {**S.stage3_responders(), INTERACTION: agent_error()}
+    run = analyze_run(run, settings=fake_settings(), client=FakeAgents(responders),
                       cache=AnalysisCache(tmp_path / "c"))
     analysis_dir = Path(run["files"][0]["ingestion"]["output_dir"]) / config.ANALYSIS_SUBDIR
-    run = accountability.analyze_run_stage4(run, settings=fake_settings(), transport=stage4_only_transport(),
+    run = accountability.analyze_run_stage4(run, settings=fake_settings(), client=stage4_only_transport(),
                                             cache=AnalysisCache(tmp_path / "c"))
     assert run["files"][0]["accountability"]["status"] == "BLOCKED"
     run = restore_stage3(run, S.INTERVIEW_ID, uploads)
@@ -192,11 +191,10 @@ def test_older_agent_version_is_accepted_with_a_warning(tmp_path):
 # --- Interface ----------------------------------------------------------------------------------------
 
 def test_app_offers_restore_then_shows_restored_stage3_and_stage4(tmp_path, monkeypatch):
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-FAKE-KEY-000")
-    monkeypatch.setenv("ANTHROPIC_MODEL", "fake-model")
-    monkeypatch.setenv("TRACE_STAGE4_BACKEND", "anthropic")  # ancien mode de l'étape 4 par API (LLM simulé)
-    transport = stage4_only_transport()
-    monkeypatch.setattr(llm_client, "AnthropicTransport", lambda settings: transport)
+    from core.claude_code_workflow import WorkflowClient
+    from tests.fake_llm import answering_workflow
+    transport = stage4_only_transport()  # agents simulés, joués à travers le workflow (response.json)
+    monkeypatch.setattr(WorkflowClient, "complete_json", answering_workflow(transport))
     uploads = downloaded_stage3(tmp_path)
     run = fresh_run(tmp_path)
     at = AppTest.from_file(str(config.PROJECT_ROOT / "app.py"), default_timeout=30)
@@ -205,13 +203,12 @@ def test_app_offers_restore_then_shows_restored_stage3_and_stage4(tmp_path, monk
     assert not at.exception
     assert "Restaurer des résultats Stage 3 existants" in [e.label for e in at.expander]
     assert at.button(key="restore_launch").disabled  # aucun fichier choisi
-    assert not [b for b in at.button if b.key == "acc_launch"]
+    assert not [b for b in at.button if b.key == "wf_stage4"]  # l'étape 4 attend l'étape 3
 
     at.session_state["last_run"] = restore_stage3(run, S.INTERVIEW_ID, uploads)
     at.run()
     assert "Stage 3 restauré depuis fichiers — 0 appel API" in " ".join(str(s.value) for s in at.success)
     assert "Restaurer des résultats Stage 3 existants" not in [e.label for e in at.expander]
-    assert at.button(key="acc_launch").label == "Construire les épisodes d'accountability (1 appel(s) API payant(s))"
-    at.button(key="acc_launch").click().run()
-    assert not at.exception and [c["agent"] for c in transport.calls] == [ACCOUNTABILITY]
+    at.button(key="wf_stage4").click().run()
+    assert not at.exception and [c["agent"] for c in transport.calls] == [ACCOUNTABILITY]  # aucune étape 3
     assert list(at.table[-1].value["Épisodes accountability"]) == [4]

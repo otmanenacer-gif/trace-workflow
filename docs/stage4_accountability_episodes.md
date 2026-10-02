@@ -1,5 +1,11 @@
 # Étape 4 — Épisodes d'accountability
 
+> **Exécution** : les agents sont joués par Claude Code (workflow multi-agents,
+> [`TRACE_WORKFLOW.md`](../TRACE_WORKFLOW.md)), sans aucun appel à une API de modèle. Dans ce document, un
+> « appel » désigne une **tâche d'agent** du workflow ; les mentions de tokens facturés, de cache de l'API ou
+> de `TRACE_LLM_MAX_TOKENS` décrivent la conception d'origine (exécution par API, retirée) : les champs
+> correspondants des manifests sont conservés et valent toujours 0 / `null`.
+
 ## Pourquoi cette étape
 
 La problématique de TRACE porte sur la manière dont les étudiant·es rendent leurs usages et
@@ -309,7 +315,7 @@ est invalidé, celui de l'étape 3 ne l'est pas.
 - `tests/test_stage4_1.py` : proximité intra-tour, relations et composantes, fusions déconnectées,
   vocabulaire sensible au locuteur, identifiants abrégés, coût (régression « OTMANE » synthétique,
   `tests/synthetic_stage4_otmane.py`), découpage par composantes, bloc en échec ;
-- `tests/e2e/browser_check.py` scénarios F, G, H et I : Chromium + Streamlit + LLM simulé.
+- `tests/e2e/browser_check.py` scénarios F, G, H et I : Chromium + Streamlit + agents simulés.
 
 Le LLM est simulé par `tests/fake_llm.FakeTransport` (agent `ACCOUNTABILITY`) ; le lecteur simulé
 `tests/synthetic_stage4.scripted_builder` lit les candidats réellement envoyés et applique une table de

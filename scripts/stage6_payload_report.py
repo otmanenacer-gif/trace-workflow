@@ -3,7 +3,7 @@
     python scripts/stage6_payload_report.py
 
 Corpus synthétiques de 2, 8 et 17 entretiens (tests/synthetic_stage6.py, sorties d'étape 5 produites par le vrai
-orchestrateur avec un LLM simulé), puis projection : 17 entretiens de la taille de l'entretien long
+orchestrateur avec des agents simulés), puis projection : 17 entretiens de la taille de l'entretien long
 « OTMANE-like » (tests/synthetic_stage5_long.py, étapes 3 à 5 simulées).
 """
 

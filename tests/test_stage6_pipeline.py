@@ -1,5 +1,5 @@
 """Étape 6 — orchestration : cache, invalidation ciblée, échecs, isolement des étapes 3 à 5, seuil, déterminisme,
-mesures sur 2, 8 et 17 entretiens. LLM simulé, aucun appel réel."""
+mesures sur 2, 8 et 17 entretiens. agents simulés, aucun appel réel."""
 
 import hashlib
 import json
@@ -11,17 +11,16 @@ from core import config
 from core import cross_interview as X
 from core import cross_interview_corpus as corpus
 from core.analysis_cache import AnalysisCache
-from core.llm_client import LLMError
 from tests import synthetic_stage5 as S5
 from tests import synthetic_stage6 as S6
-from tests.fake_llm import COMPARATOR, FakeTransport, fake_settings, server_error
+from tests.fake_llm import COMPARATOR, FakeAgents, fake_settings, agent_error
 
 VOLATILE = ("generated_at", "cache_hit", "llm_called", "status", "validation_warning_count")
 
 
 def run(tmp_path, uploads, transport=None, **kwargs):
-    transport = transport or FakeTransport({COMPARATOR: S6.scripted_comparator(S6.GOOD_PLAN)})
-    manifest = X.run_stage6(uploads, settings=kwargs.pop("settings", fake_settings()), transport=transport,
+    transport = transport or FakeAgents({COMPARATOR: S6.scripted_comparator(S6.GOOD_PLAN)})
+    manifest = X.run_stage6(uploads, settings=kwargs.pop("settings", fake_settings()), client=transport,
                             cache=kwargs.pop("cache", AnalysisCache(tmp_path / "cache")),
                             base_dir=kwargs.pop("base_dir", tmp_path / "out"), **kwargs)
     return manifest, transport
@@ -35,7 +34,7 @@ def comparison(manifest) -> dict:
 
 def test_same_corpus_and_version_gives_zero_call(tmp_path):
     first, transport = run(tmp_path, S6.uploads(S6.IDS_8))
-    assert first["status"] == "SUCCESS" and first["api_calls"] == 1 and len(transport.calls) == 1
+    assert first["status"] == "SUCCESS" and first["api_calls"] == 0 and first["llm_called"] is True and len(transport.calls) == 1
     again, transport2 = run(tmp_path, list(reversed(S6.uploads(S6.IDS_8))))  # même corpus, autre ordre d'import
     assert again["status"] == "CACHED" and again["api_calls"] == 0 and transport2.calls == []
     assert again["corpus_id"] == first["corpus_id"] and again["cache_key"] == first["cache_key"]
@@ -102,8 +101,8 @@ def test_corpus_directory_keeps_byte_identical_copies_and_the_import_report(tmp_
 # --- Échecs ---------------------------------------------------------------------------------------------------------
 
 def test_failed_call_writes_no_comparison_and_is_not_cached(tmp_path):
-    failing = FakeTransport({COMPARATOR: server_error(500)})
-    manifest, _ = run(tmp_path, S6.uploads(S6.IDS_4), transport=failing, settings=fake_settings(max_retries=0))
+    failing = FakeAgents({COMPARATOR: agent_error()})
+    manifest, _ = run(tmp_path, S6.uploads(S6.IDS_4), transport=failing, settings=fake_settings())
     assert manifest["status"] == "FAILED" and manifest["analysis_complete"] is False
     outputs = X.read_outputs(manifest["corpus_dir"])
     assert outputs["comparison"] is None and json.loads(outputs["validation"])["available"] is False
@@ -114,17 +113,14 @@ def test_failed_call_writes_no_comparison_and_is_not_cached(tmp_path):
 def test_a_previous_comparison_is_removed_after_a_failure(tmp_path):
     ok, _ = run(tmp_path, S6.uploads(S6.IDS_4))
     assert X.read_outputs(ok["corpus_dir"])["comparison"]
-    failed, _ = run(tmp_path, S6.uploads(S6.IDS_4), transport=FakeTransport({COMPARATOR: server_error(500)}),
-                    settings=fake_settings(max_retries=0), force=True)
+    failed, _ = run(tmp_path, S6.uploads(S6.IDS_4), transport=FakeAgents({COMPARATOR: agent_error()}),
+                    settings=fake_settings(), force=True)
     assert failed["status"] == "FAILED" and X.read_outputs(failed["corpus_dir"])["comparison"] is None
 
 
-def test_missing_key_is_refused_before_any_call_unless_blocked(tmp_path):
-    with pytest.raises(LLMError) as error:
-        run(tmp_path, S6.uploads(S6.IDS_2), settings=fake_settings(api_key=None))
-    assert error.value.code == "NOT_CONFIGURED"
-    blocked, transport = run(tmp_path, S6.uploads(["ENT_A"]), settings=fake_settings(api_key=None))
-    assert blocked["status"] == "BLOCKED" and transport.calls == []
+def test_blocked_corpus_never_reaches_the_agent(tmp_path):
+    blocked, transport = run(tmp_path, S6.uploads(["ENT_A"]))
+    assert blocked["status"] == "BLOCKED" and transport.calls == [] and blocked["api_calls"] == 0
 
 
 def test_over_threshold_is_flagged_and_still_one_call(tmp_path, monkeypatch):
@@ -142,7 +138,7 @@ def test_over_threshold_is_flagged_and_still_one_call(tmp_path, monkeypatch):
 @pytest.mark.parametrize("ids, max_tokens", [(S6.IDS_2, 2_500), (S6.IDS_8, 6_500), (S6.IDS_17, 11_000)])
 def test_one_call_per_corpus_and_payload_size(tmp_path, ids, max_tokens):
     manifest, transport = run(tmp_path, S6.uploads(ids))
-    assert len(transport.calls) == 1 and manifest["api_calls"] == 1
+    assert len(transport.calls) == 1 and manifest["api_calls"] == 0
     assert manifest["estimated_input_tokens"] < max_tokens < X.SINGLE_CALL_MAX_INPUT_TOKENS
     assert manifest["payload_chars"] < 0.2 * manifest["raw_stage5_chars"]
     message = transport.calls[0]["params"]["messages"][0]["content"]

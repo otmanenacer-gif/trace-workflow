@@ -1,4 +1,4 @@
-"""Tests du Practice Extractor : schéma, prompt « aveugle », validation des preuves (LLM simulé)."""
+"""Tests du Practice Extractor : schéma, prompt « aveugle », validation des preuves (agents simulés)."""
 
 import copy
 import json
@@ -11,7 +11,7 @@ from agents.practice_extractor import PRACTICE_EXTRACTOR_VERSION, PRACTICE_SCHEM
 from core.analysis import analyze_run
 from core.analysis_cache import AnalysisCache
 from tests import synthetic_interviews as si
-from tests.fake_llm import INTERACTION, PRACTICE, FakeTransport, fake_settings, text_response
+from tests.fake_llm import INTERACTION, PRACTICE, FakeAgents, fake_settings, text_response
 
 EMPTY_SIGNALS = {"signals": [], "reading_notes": None}
 
@@ -22,8 +22,8 @@ THEORY_TERMS = ("accountab", "garfinkel", "breach", "réparation", "reparation",
 
 def run_practices(tmp_path, output, files=None):
     run = si.make_ingested_run(tmp_path, files)
-    transport = FakeTransport({PRACTICE: text_response(output), INTERACTION: text_response(EMPTY_SIGNALS)})
-    run = analyze_run(run, settings=fake_settings(), transport=transport, cache=AnalysisCache(tmp_path / "cache"))
+    transport = FakeAgents({PRACTICE: text_response(output), INTERACTION: text_response(EMPTY_SIGNALS)})
+    run = analyze_run(run, settings=fake_settings(), client=transport, cache=AnalysisCache(tmp_path / "cache"))
     summary = run["files"][0]["analysis"]
     document = json.loads((Path(summary["analysis_dir"]) / SPEC.output_filename).read_text(encoding="utf-8"))
     return summary["agents"]["practice_extractor"], document
@@ -169,10 +169,10 @@ def test_scope_qualifier_is_explicit_and_nullable():
 def test_surtout_as_frequency_is_never_recorded(tmp_path):
     """Une réponse qui range « surtout » dans stated_frequency est rejetée : rien n'est écrit ni mis en cache."""
     run = si.make_ingested_run(tmp_path)
-    transport = FakeTransport({PRACTICE: text_response(_with_practice_fields(stated_frequency="surtout")),
+    transport = FakeAgents({PRACTICE: text_response(_with_practice_fields(stated_frequency="surtout")),
                                INTERACTION: text_response(EMPTY_SIGNALS)})
     cache = AnalysisCache(tmp_path / "cache")
-    run = analyze_run(run, settings=fake_settings(), transport=transport, cache=cache)
+    run = analyze_run(run, settings=fake_settings(), client=transport, cache=cache)
     summary = run["files"][0]["analysis"]
     agent = summary["agents"]["practice_extractor"]
     assert agent["status"] == "FAILED" and agent["error"]["code"] == "SCHEMA_VALIDATION"

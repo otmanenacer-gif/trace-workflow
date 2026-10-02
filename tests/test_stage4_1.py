@@ -1,6 +1,6 @@
 """Étape 4.1 — stabilisation après le premier run réel : proximité intra-tour, fusions, représentation, vocabulaire.
 
-Aucun appel réel : LLM simulé. Les nombres décrivent les fixtures synthétiques, pas des quotas.
+Aucun appel réel : agents simulés. Les nombres décrivent les fixtures synthétiques, pas des quotas.
 """
 
 import json
@@ -16,7 +16,7 @@ from core.analysis_cache import AnalysisCache
 from core.interaction_chunking import estimate_tokens
 from tests import synthetic_interviews as si
 from tests import synthetic_stage4_otmane as O
-from tests.fake_llm import ACCOUNTABILITY, FakeTransport, fake_settings, server_error
+from tests.fake_llm import ACCOUNTABILITY, FakeAgents, fake_settings, agent_error
 from tests.synthetic_interviews import practice, signal
 
 IID = "LONG"
@@ -123,9 +123,9 @@ def test_components_allow_chains_but_never_join_unrelated_candidates():
 def otmane_run(tmp_path, mode="good", **settings):
     run = si.make_ingested_run(tmp_path, O.files())
     cache = AnalysisCache(tmp_path / "cache")
-    run = analyze_run(run, settings=fake_settings(), transport=FakeTransport(O.stage3_responders()), cache=cache)
-    transport = FakeTransport({ACCOUNTABILITY: O.builder(mode)})
-    run = accountability.analyze_run_stage4(run, settings=fake_settings(**settings), transport=transport, cache=cache)
+    run = analyze_run(run, settings=fake_settings(), client=FakeAgents(O.stage3_responders()), cache=cache)
+    transport = FakeAgents({ACCOUNTABILITY: O.builder(mode)})
+    run = accountability.analyze_run_stage4(run, settings=fake_settings(**settings), client=transport, cache=cache)
     out = Path(run["files"][0]["ingestion"]["output_dir"]) / config.ANALYSIS_SUBDIR
     doc = json.loads((out / config.ACCOUNTABILITY_EPISODES_FILENAME).read_text(encoding="utf-8"))
     return run, doc, transport, cache
@@ -192,8 +192,8 @@ def test_otmane_cost_normalized_payload(tmp_path):
         assert sent.count(f'"{pid}":{{') == 1
     assert O.INTERVIEW_ID + "_T" not in sent.split("<candidates>")[1]  # identifiants abrégés, préfixe déclaré une fois
     # relance : 0 appel
-    again = FakeTransport({ACCOUNTABILITY: O.builder()})
-    accountability.analyze_run_stage4(run, settings=fake_settings(), transport=again, cache=cache)
+    again = FakeAgents({ACCOUNTABILITY: O.builder()})
+    accountability.analyze_run_stage4(run, settings=fake_settings(), client=again, cache=cache)
     assert again.calls == []
 
 
@@ -210,8 +210,8 @@ def test_oversized_payload_is_split_by_whole_components(tmp_path, monkeypatch):
     assert doc["candidate_count"] == sum(len(O.sent_payload(c["params"])["candidates"]) for c in calls)
     assert doc["status"] == "SUCCESS" and doc["validation_error_count"] == 0
     assert doc["usable_episode_count"] == doc["candidate_count"] - 1  # même résultat qu'en un appel
-    again = FakeTransport({ACCOUNTABILITY: O.builder()})
-    accountability.analyze_run_stage4(run, settings=fake_settings(), transport=again, cache=cache)
+    again = FakeAgents({ACCOUNTABILITY: O.builder()})
+    accountability.analyze_run_stage4(run, settings=fake_settings(), client=again, cache=cache)
     assert again.calls == []  # cache par bloc
 
 
@@ -222,13 +222,13 @@ def test_one_failed_chunk_gives_a_partial_result(tmp_path, monkeypatch):
 
     def flaky(params):
         state["n"] += 1
-        return server_error(500) if state["n"] == 1 else good(params)
+        return agent_error() if state["n"] == 1 else good(params)
 
     run = si.make_ingested_run(tmp_path, O.files())
     cache = AnalysisCache(tmp_path / "cache")
-    run = analyze_run(run, settings=fake_settings(), transport=FakeTransport(O.stage3_responders()), cache=cache)
-    run = accountability.analyze_run_stage4(run, settings=fake_settings(max_retries=0),
-                                            transport=FakeTransport({ACCOUNTABILITY: flaky}), cache=cache)
+    run = analyze_run(run, settings=fake_settings(), client=FakeAgents(O.stage3_responders()), cache=cache)
+    run = accountability.analyze_run_stage4(run, settings=fake_settings(),
+                                            client=FakeAgents({ACCOUNTABILITY: flaky}), cache=cache)
     summary = run["files"][0]["accountability"]
     assert summary["status"] == "PARTIAL" and summary["analysis_complete"] is False
     assert summary["error"]["code"] == "PARTIAL_ANALYSIS" and summary["episode_count"] > 0

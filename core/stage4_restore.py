@@ -2,7 +2,7 @@
 
 Pourquoi : le stockage local de l'application (data/outputs, data/cache) n'est pas durable ; un
 redéploiement l'efface. Après restauration de l'étape 3 (core/stage3_restore.py), l'étape 5 trouverait
-une étape 4 absente et proposerait de la repayer. Les deux JSON téléchargés depuis l'interface suffisent :
+une étape 4 absente et proposerait de la refaire. Les deux JSON téléchargés depuis l'interface suffisent :
 
     accountability_episodes.json, accountability_episode_validation.json
 

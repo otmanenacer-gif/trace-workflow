@@ -1,5 +1,5 @@
 """Tests du Speaker Attribution Auditor (étape 3.5) : présélection déterministe, appel conditionnel,
-cache, transcript jamais modifié, avertissements transmis aux agents. LLM simulé uniquement."""
+cache, transcript jamais modifié, avertissements transmis aux agents. agents simulés uniquement."""
 
 import copy
 import dataclasses
@@ -7,7 +7,6 @@ import hashlib
 import json
 from pathlib import Path
 
-import anthropic
 import pytest
 
 import core.analysis as analysis
@@ -16,7 +15,7 @@ from core import config, speaker_attribution_auditor as sa
 from core.analysis import analyze_run, plan_analysis
 from core.analysis_cache import AnalysisCache
 from tests import synthetic_interviews as si
-from tests.fake_llm import AUDITOR, INTERACTION, PRACTICE, FakeTransport, fake_settings, status_error, text_response
+from tests.fake_llm import AUDITOR, INTERACTION, PRACTICE, FakeAgents, fake_settings, agent_error, text_response
 
 EMPTY_PRACTICES = {"practices": [], "extraction_notes": None}
 EMPTY_SIGNALS = {"signals": [], "reading_notes": None}
@@ -36,14 +35,14 @@ def responders(audit=si.AUDIT_ASSESSMENTS, practices=EMPTY_PRACTICES, signals=EM
     found = {PRACTICE: lambda p: text_response(practices), INTERACTION: lambda p: text_response(signals)}
     if audit is not None:
         found[AUDITOR] = audit if callable(audit) or isinstance(audit, BaseException) else (
-            lambda p: text_response(audit, input_tokens=500, output_tokens=120))
+            lambda p: text_response(audit))
     return found
 
 
 def run(tmp_path, files, cache=None, **kwargs):
     run_ = si.make_ingested_run(tmp_path, files)
-    transport = FakeTransport(responders(**kwargs))
-    run_ = analyze_run(run_, settings=fake_settings(), transport=transport, cache=cache or AnalysisCache(tmp_path / "cache"))
+    transport = FakeAgents(responders(**kwargs))
+    run_ = analyze_run(run_, settings=fake_settings(), client=transport, cache=cache or AnalysisCache(tmp_path / "cache"))
     return run_, transport
 
 
@@ -168,7 +167,7 @@ def test_several_candidates_give_exactly_one_call_on_an_excerpt(tmp_path):
         si.au_tid(4), "enqueteur", "enquete", "high")
     assert first["needs_review"] is True and all(e["validation"]["valid"] for e in first["evidence"])
     usage = run_["last_analysis"]["usage"]
-    assert usage["api_calls"] == 3 and usage["input_tokens"] == 2 * 1200 + 500
+    assert usage["api_calls"] == 0 and len(transport.calls) == 3
 
 
 def test_audit_result_is_cached(tmp_path):
@@ -185,7 +184,7 @@ def test_plan_counts_the_audit_call_only_when_needed(tmp_path):
     cache = AnalysisCache(tmp_path / "cache")
     plan = plan_analysis(run_, [si.AUDIT_INTERVIEW_ID], fake_settings(), cache)
     assert plan == {"interviews": 1, "calls": 3, "cached": 0, "audit_calls": 1, "candidate_turns": 2, "exact": False}
-    analyze_run(run_, settings=fake_settings(), transport=FakeTransport(responders()), cache=cache)
+    analyze_run(run_, settings=fake_settings(), client=FakeAgents(responders()), cache=cache)
     assert plan_analysis(run_, [si.AUDIT_INTERVIEW_ID], fake_settings(), cache) == {
         "interviews": 1, "calls": 0, "cached": 3, "audit_calls": 0, "candidate_turns": 2, "exact": True}
     normal = si.make_ingested_run(tmp_path / "n", si.NORMAL_FILES)
@@ -233,7 +232,7 @@ def test_transcript_files_are_never_modified(tmp_path):
 
     before = digest()
     transcript_before = json.loads((interview_dir / config.STRUCTURED_TRANSCRIPT_FILENAME).read_text())
-    run_ = analyze_run(run_, settings=fake_settings(), transport=FakeTransport(responders()),
+    run_ = analyze_run(run_, settings=fake_settings(), client=FakeAgents(responders()),
                        cache=AnalysisCache(tmp_path / "cache"))
     assert digest() == before
     transcript_after = json.loads((interview_dir / config.STRUCTURED_TRANSCRIPT_FILENAME).read_text())
@@ -342,7 +341,7 @@ def test_ambiguous_assessment_keeps_low_confidence_and_no_suggestion(tmp_path):
 
 
 def test_audit_failure_never_blocks_the_agents(tmp_path):
-    run_, transport = run(tmp_path, si.AUDIT_FILES, audit=status_error(anthropic.BadRequestError, 400))
+    run_, transport = run(tmp_path, si.AUDIT_FILES, audit=agent_error())
     summary = run_["files"][0]["analysis"]
     assert summary["speaker_audit"]["status"] == "FAILED"
     assert summary["agents"]["practice_extractor"]["status"] == "SUCCESS"
@@ -402,14 +401,14 @@ def test_warning_never_suggests_the_current_speaker():
 def test_unexpected_audit_error_never_blocks_agents_nor_leaves_stale_files(tmp_path, monkeypatch):
     cache = AnalysisCache(tmp_path / "cache")
     run_ = si.make_ingested_run(tmp_path, si.AUDIT_FILES)
-    analyze_run(run_, settings=fake_settings(), transport=FakeTransport(responders()), cache=cache)
+    analyze_run(run_, settings=fake_settings(), client=FakeAgents(responders()), cache=cache)
     assert (out_dir(run_) / "speaker_attribution_audit.json").exists()
 
     def broken(_transcript):
         raise RuntimeError("bug")
 
     monkeypatch.setattr(sa, "prepare_audit", broken)
-    run_ = analyze_run(run_, settings=fake_settings(), transport=FakeTransport(responders()), cache=cache, force=True)
+    run_ = analyze_run(run_, settings=fake_settings(), client=FakeAgents(responders()), cache=cache, force=True)
     summary = run_["files"][0]["analysis"]
     assert summary["speaker_audit"]["status"] == "FAILED"
     assert summary["agents"]["practice_extractor"]["status"] == "SUCCESS"

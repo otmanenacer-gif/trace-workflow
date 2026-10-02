@@ -1,7 +1,7 @@
 """Étape 3.7 — les cinq catégories d'avertissements observées sur le vrai entretien long.
 
 Pour chacune : (1) un objet CORRECT ne la déclenche plus (cause évitable corrigée) ;
-(2) un objet INCORRECT la déclenche toujours (le contrôle reste actif). LLM simulé uniquement.
+(2) un objet INCORRECT la déclenche toujours (le contrôle reste actif). agents simulés uniquement.
 """
 
 import json
@@ -14,7 +14,7 @@ from core.analysis_cache import AnalysisCache
 from core.evidence_validator import validate_agent_output
 from tests import synthetic_interviews as si
 from tests import synthetic_stage37 as S
-from tests.fake_llm import AUDITOR, INTERACTION, LONG_DISTANCE, PRACTICE, FakeTransport, fake_settings, text_response
+from tests.fake_llm import AUDITOR, INTERACTION, LONG_DISTANCE, PRACTICE, FakeAgents, fake_settings, text_response
 
 TRANSCRIPT = {"interview_id": "W", "turns": [
     {"turn_id": "W_T0001", "speaker": "enqueteur", "text": "Tu as peur que tes profs le voient ?"},
@@ -59,10 +59,10 @@ def test_no_interviewee_evidence_not_raised_for_audited_interviewer_turn():
 def long_outputs(tmp_path):
     """Fonction (pas module) : chaque test s'exécute sous les garde-fous de tests/conftest.py (aucun appel réel)."""
     run = si.make_ingested_run(tmp_path, S.files())
-    transport = FakeTransport({PRACTICE: S.practice_reader, INTERACTION: S.naive_reader,
+    transport = FakeAgents({PRACTICE: S.practice_reader, INTERACTION: S.naive_reader,
                                LONG_DISTANCE: S.long_distance_reader,
                                AUDITOR: lambda p: text_response({"assessments": [], "audit_notes": None})})
-    run = analyze_run(run, settings=fake_settings(), transport=transport, cache=AnalysisCache(tmp_path / "cache"))
+    run = analyze_run(run, settings=fake_settings(), client=transport, cache=AnalysisCache(tmp_path / "cache"))
     directory = Path(run["files"][0]["analysis"]["analysis_dir"])
     read = lambda name: json.loads((directory / name).read_text(encoding="utf-8"))  # noqa: E731
     return {"signals": read("interaction_signals.json"), "practices": read("practice_extractor.json"),
@@ -110,9 +110,9 @@ def test_short_interview_signal_with_unlisted_cited_turn_is_completed(tmp_path):
                                               si.ev(12, "Mais le plan de la dissert, c'est moi qui l'ai fait")])],
               "reading_notes": None}
     run = si.make_ingested_run(tmp_path)
-    transport = FakeTransport({PRACTICE: lambda p: text_response({"practices": [], "extraction_notes": None}),
+    transport = FakeAgents({PRACTICE: lambda p: text_response({"practices": [], "extraction_notes": None}),
                                INTERACTION: lambda p: text_response(output)})
-    run = analyze_run(run, settings=fake_settings(), transport=transport, cache=AnalysisCache(tmp_path / "cache"))
+    run = analyze_run(run, settings=fake_settings(), client=transport, cache=AnalysisCache(tmp_path / "cache"))
     doc = json.loads((Path(run["files"][0]["analysis"]["analysis_dir"]) / "interaction_signals.json").read_text())
     signal, = doc["signals"]
     assert signal["turn_ids"] == [si.tid(11), si.tid(12)] and signal["review_reasons"] == []

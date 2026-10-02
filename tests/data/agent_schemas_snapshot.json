@@ -1,0 +1,1516 @@
+{
+ "accountability_episode_builder": {
+  "output_schema": {
+   "$defs": {
+    "AccountingMove": {
+     "additionalProperties": false,
+     "properties": {
+      "description": {
+       "description": "Ce que le passage fait, décrit au discours rapporté, sans motivation supposée.",
+       "title": "Description",
+       "type": "string"
+      },
+      "evidence_turn_ids": {
+       "description": "Tours où l'opération est accomplie.",
+       "items": {
+        "type": "string"
+       },
+       "minItems": 1,
+       "title": "Evidence Turn Ids",
+       "type": "array"
+      },
+      "type": {
+       "enum": [
+        "restriction",
+        "exception",
+        "general_rule",
+        "distinction",
+        "comparison",
+        "refusal",
+        "preference",
+        "appeal_to_control",
+        "appeal_to_verification",
+        "appeal_to_effort",
+        "appeal_to_learning",
+        "appeal_to_authorship",
+        "appeal_to_external_judgment",
+        "normalization",
+        "self_evaluation",
+        "reformulation",
+        "other_explicit_move"
+       ],
+       "title": "Type",
+       "type": "string"
+      }
+     },
+     "required": [
+      "type",
+      "description",
+      "evidence_turn_ids"
+     ],
+     "title": "AccountingMove",
+     "type": "object"
+    },
+    "EpisodeDraft": {
+     "additionalProperties": false,
+     "properties": {
+      "accountability_problem": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Question pratique rendue accountable (ex. « jusqu'où l'outil peut-il intervenir dans l'écriture ? »), null pour ordinary_practice.",
+       "title": "Accountability Problem"
+      },
+      "accounting_moves": {
+       "items": {
+        "$ref": "#/$defs/AccountingMove"
+       },
+       "title": "Accounting Moves",
+       "type": "array"
+      },
+      "boundary_objects": {
+       "description": "Frontières explicitement construites dans le texte (« faire / faire faire »), sinon [].",
+       "items": {
+        "type": "string"
+       },
+       "title": "Boundary Objects",
+       "type": "array"
+      },
+      "candidate_ids": {
+       "description": "Candidat(s) dont l'épisode est construit.",
+       "items": {
+        "type": "string"
+       },
+       "minItems": 1,
+       "title": "Candidate Ids",
+       "type": "array"
+      },
+      "confidence": {
+       "enum": [
+        "high",
+        "medium",
+        "low"
+       ],
+       "title": "Confidence",
+       "type": "string"
+      },
+      "episode_status": {
+       "enum": [
+        "accountability_episode",
+        "ordinary_practice",
+        "uncertain"
+       ],
+       "title": "Episode Status",
+       "type": "string"
+      },
+      "episode_summary": {
+       "title": "Episode Summary",
+       "type": "string"
+      },
+      "evidence": {
+       "items": {
+        "$ref": "#/$defs/Evidence"
+       },
+       "minItems": 1,
+       "title": "Evidence",
+       "type": "array"
+      },
+      "external_reference": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Autrui ou norme explicitement évoqués, sinon null.",
+       "title": "External Reference"
+      },
+      "needs_review": {
+       "title": "Needs Review",
+       "type": "boolean"
+      },
+      "practice_ids": {
+       "items": {
+        "type": "string"
+       },
+       "title": "Practice Ids",
+       "type": "array"
+      },
+      "signal_ids": {
+       "items": {
+        "type": "string"
+       },
+       "title": "Signal Ids",
+       "type": "array"
+      },
+      "student_role_reference": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Référence explicite au rôle d'étudiant·e, sinon null.",
+       "title": "Student Role Reference"
+      },
+      "turn_end": {
+       "title": "Turn End",
+       "type": "string"
+      },
+      "turn_start": {
+       "title": "Turn Start",
+       "type": "string"
+      }
+     },
+     "required": [
+      "candidate_ids",
+      "turn_start",
+      "turn_end",
+      "practice_ids",
+      "signal_ids",
+      "episode_status",
+      "accountability_problem",
+      "accounting_moves",
+      "boundary_objects",
+      "student_role_reference",
+      "external_reference",
+      "episode_summary",
+      "confidence",
+      "needs_review",
+      "evidence"
+     ],
+     "title": "EpisodeDraft",
+     "type": "object"
+    },
+    "Evidence": {
+     "additionalProperties": false,
+     "properties": {
+      "quote": {
+       "description": "Copie exacte d'un passage du champ text de ce tour.",
+       "title": "Quote",
+       "type": "string"
+      },
+      "turn_id": {
+       "description": "Identifiant exact du tour cité (turn_id).",
+       "title": "Turn Id",
+       "type": "string"
+      }
+     },
+     "required": [
+      "turn_id",
+      "quote"
+     ],
+     "title": "Evidence",
+     "type": "object"
+    }
+   },
+   "additionalProperties": false,
+   "properties": {
+    "builder_notes": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Builder Notes"
+    },
+    "episodes": {
+     "items": {
+      "$ref": "#/$defs/EpisodeDraft"
+     },
+     "title": "Episodes",
+     "type": "array"
+    }
+   },
+   "required": [
+    "episodes",
+    "builder_notes"
+   ],
+   "title": "AccountabilityEpisodeOutput",
+   "type": "object"
+  },
+  "schema_sha256": "c8a036208f209b20f4010f45941af0c33cf8ab9904894b5daf0b715f3b46e304"
+ },
+ "cross_interview_comparator": {
+  "output_schema": {
+   "$defs": {
+    "Counterexample": {
+     "additionalProperties": false,
+     "properties": {
+      "claim_ids": {
+       "description": "Affirmations de l'étape 5 de cet entretien qui le documentent.",
+       "items": {
+        "type": "string"
+       },
+       "title": "Claim Ids",
+       "type": "array"
+      },
+      "criterion_ids": {
+       "description": "Critères de l'étape 5 de cet entretien qui le documentent.",
+       "items": {
+        "type": "string"
+       },
+       "title": "Criterion Ids",
+       "type": "array"
+      },
+      "description": {
+       "description": "Ce que cet entretien dit ou rapporte, au discours rapporté.",
+       "title": "Description",
+       "type": "string"
+      },
+      "evidence_turn_ids": {
+       "description": "Tours déjà cités par ces éléments.",
+       "items": {
+        "type": "string"
+       },
+       "title": "Evidence Turn Ids",
+       "type": "array"
+      },
+      "interview_id": {
+       "description": "Entretien (I01…) qui complique l'affirmation.",
+       "title": "Interview Id",
+       "type": "string"
+      },
+      "relation": {
+       "enum": [
+        "contrary_case",
+        "explicit_refusal",
+        "divergent_variant"
+       ],
+       "title": "Relation",
+       "type": "string"
+      }
+     },
+     "required": [
+      "interview_id",
+      "relation",
+      "description",
+      "claim_ids",
+      "criterion_ids",
+      "evidence_turn_ids"
+     ],
+     "title": "Counterexample",
+     "type": "object"
+    },
+    "CrossClaimDraft": {
+     "additionalProperties": false,
+     "properties": {
+      "claim_type": {
+       "enum": [
+        "recurring_boundary",
+        "divergent_boundary",
+        "recurring_accounting_move",
+        "divergent_accounting_move",
+        "recurring_student_role_criterion",
+        "divergent_student_role_criterion",
+        "ordinary_zone_pattern",
+        "exception_pattern",
+        "contextual_association",
+        "temporal_pattern",
+        "unresolved_cross_case_contrast",
+        "minority_configuration",
+        "negative_case"
+       ],
+       "title": "Claim Type",
+       "type": "string"
+      },
+      "confidence": {
+       "enum": [
+        "high",
+        "medium",
+        "low"
+       ],
+       "title": "Confidence",
+       "type": "string"
+      },
+      "contexts": {
+       "description": "Tâches ou contextes concernés, dans les termes du matériau.",
+       "items": {
+        "type": "string"
+       },
+       "title": "Contexts",
+       "type": "array"
+      },
+      "counterexamples": {
+       "description": "Cas qui compliquent l'affirmation, sinon [].",
+       "items": {
+        "$ref": "#/$defs/Counterexample"
+       },
+       "title": "Counterexamples",
+       "type": "array"
+      },
+      "criterion_label": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Critère comparé (types *_student_role_criterion), sinon null.",
+       "title": "Criterion Label"
+      },
+      "description": {
+       "description": "Description traçable : entretiens, frontières, critères, sans généraliser.",
+       "title": "Description",
+       "type": "string"
+      },
+      "n_supporting_interviews": {
+       "description": "Nombre d'ENTRETIENS distincts dans `support`.",
+       "title": "N Supporting Interviews",
+       "type": "integer"
+      },
+      "needs_review": {
+       "title": "Needs Review",
+       "type": "boolean"
+      },
+      "related_claim_numbers": {
+       "description": "negative_case : numéros (1…) des affirmations qu'il complique, sinon [].",
+       "items": {
+        "type": "integer"
+       },
+       "title": "Related Claim Numbers",
+       "type": "array"
+      },
+      "support": {
+       "items": {
+        "$ref": "#/$defs/SupportRef"
+       },
+       "minItems": 1,
+       "title": "Support",
+       "type": "array"
+      }
+     },
+     "required": [
+      "claim_type",
+      "description",
+      "criterion_label",
+      "support",
+      "counterexamples",
+      "contexts",
+      "n_supporting_interviews",
+      "related_claim_numbers",
+      "confidence",
+      "needs_review"
+     ],
+     "title": "CrossClaimDraft",
+     "type": "object"
+    },
+    "SupportRef": {
+     "additionalProperties": false,
+     "properties": {
+      "claim_ids": {
+       "description": "Affirmations de l'étape 5 de CET entretien (TC…), sinon [].",
+       "items": {
+        "type": "string"
+       },
+       "title": "Claim Ids",
+       "type": "array"
+      },
+      "criterion_ids": {
+       "description": "Critères de l'étape 5 de CET entretien (RC…), sinon [].",
+       "items": {
+        "type": "string"
+       },
+       "title": "Criterion Ids",
+       "type": "array"
+      },
+      "evidence_turn_ids": {
+       "description": "Tours (T…) déjà cités par ces affirmations ou critères.",
+       "items": {
+        "type": "string"
+       },
+       "title": "Evidence Turn Ids",
+       "type": "array"
+      },
+      "interview_id": {
+       "description": "Entretien (I01…) qui appuie l'affirmation.",
+       "title": "Interview Id",
+       "type": "string"
+      }
+     },
+     "required": [
+      "interview_id",
+      "claim_ids",
+      "criterion_ids",
+      "evidence_turn_ids"
+     ],
+     "title": "SupportRef",
+     "type": "object"
+    }
+   },
+   "additionalProperties": false,
+   "properties": {
+    "comparator_notes": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Comparator Notes"
+    },
+    "confidence": {
+     "enum": [
+      "high",
+      "medium",
+      "low"
+     ],
+     "title": "Confidence",
+     "type": "string"
+    },
+    "cross_case_claims": {
+     "items": {
+      "$ref": "#/$defs/CrossClaimDraft"
+     },
+     "title": "Cross Case Claims",
+     "type": "array"
+    },
+    "cross_case_summary": {
+     "description": "Synthèse descriptive (4 à 8 phrases), comptes en entretiens.",
+     "title": "Cross Case Summary",
+     "type": "string"
+    },
+    "needs_review": {
+     "title": "Needs Review",
+     "type": "boolean"
+    }
+   },
+   "required": [
+    "cross_case_claims",
+    "cross_case_summary",
+    "confidence",
+    "needs_review",
+    "comparator_notes"
+   ],
+   "title": "CrossInterviewComparatorOutput",
+   "type": "object"
+  },
+  "schema_sha256": "b404afd4804cb69ee3f5bdf79fda7c29b8d10f5cb9885a2b20c54e685139b6b9"
+ },
+ "interaction_signal_reader": {
+  "output_schema": {
+   "$defs": {
+    "Evidence": {
+     "additionalProperties": false,
+     "properties": {
+      "quote": {
+       "description": "Copie exacte d'un passage du champ text de ce tour.",
+       "title": "Quote",
+       "type": "string"
+      },
+      "turn_id": {
+       "description": "Identifiant exact du tour cité (turn_id).",
+       "title": "Turn Id",
+       "type": "string"
+      }
+     },
+     "required": [
+      "turn_id",
+      "quote"
+     ],
+     "title": "Evidence",
+     "type": "object"
+    },
+    "InteractionSignal": {
+     "additionalProperties": false,
+     "properties": {
+      "cross_turn_reference": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Cross Turn Reference"
+      },
+      "description": {
+       "description": "Description purement textuelle, sans interprétation.",
+       "title": "Description",
+       "type": "string"
+      },
+      "evidence": {
+       "items": {
+        "$ref": "#/$defs/Evidence"
+       },
+       "minItems": 1,
+       "title": "Evidence",
+       "type": "array"
+      },
+      "explicit_affect": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Affect nommé par l'enquêté·e dans une citation, sinon null.",
+       "title": "Explicit Affect"
+      },
+      "explicitness": {
+       "enum": [
+        "direct",
+        "strongly_supported",
+        "unclear"
+       ],
+       "title": "Explicitness",
+       "type": "string"
+      },
+      "needs_human_review": {
+       "title": "Needs Human Review",
+       "type": "boolean"
+      },
+      "signal_type": {
+       "enum": [
+        "explicit_emotion",
+        "hesitation",
+        "self_correction",
+        "self_reformulation",
+        "minimization",
+        "intensification",
+        "restriction",
+        "exception",
+        "contrast",
+        "cross_turn_contradiction",
+        "vocabulary_shift",
+        "modalization",
+        "normative_formulation",
+        "generalization",
+        "reference_to_teacher_judgment",
+        "reference_to_peer_judgment",
+        "reference_to_rule",
+        "distancing_from_own_practice",
+        "attribution_to_others",
+        "transcribed_laughter",
+        "transcribed_silence",
+        "significant_repetition",
+        "pronoun_shift",
+        "preference_statement",
+        "metadiscursive_self_evaluation",
+        "other"
+       ],
+       "title": "Signal Type",
+       "type": "string"
+      },
+      "surface_form": {
+       "description": "Mots exacts qui portent le signal.",
+       "title": "Surface Form",
+       "type": "string"
+      },
+      "topic": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Topic"
+      },
+      "turn_ids": {
+       "items": {
+        "type": "string"
+       },
+       "minItems": 1,
+       "title": "Turn Ids",
+       "type": "array"
+      }
+     },
+     "required": [
+      "turn_ids",
+      "signal_type",
+      "surface_form",
+      "description",
+      "topic",
+      "evidence",
+      "explicit_affect",
+      "cross_turn_reference",
+      "explicitness",
+      "needs_human_review"
+     ],
+     "title": "InteractionSignal",
+     "type": "object"
+    }
+   },
+   "additionalProperties": false,
+   "properties": {
+    "reading_notes": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Reading Notes"
+    },
+    "signals": {
+     "items": {
+      "$ref": "#/$defs/InteractionSignal"
+     },
+     "title": "Signals",
+     "type": "array"
+    }
+   },
+   "required": [
+    "signals",
+    "reading_notes"
+   ],
+   "title": "InteractionSignalOutput",
+   "type": "object"
+  },
+  "schema_sha256": "1579b9cc6fc10cbe1878c8040538ce3f52201ddf30ff44b3f417084b6fcd6583"
+ },
+ "interaction_signal_reader_long_distance": {
+  "output_schema": {
+   "$defs": {
+    "Evidence": {
+     "additionalProperties": false,
+     "properties": {
+      "quote": {
+       "description": "Copie exacte d'un passage du champ text de ce tour.",
+       "title": "Quote",
+       "type": "string"
+      },
+      "turn_id": {
+       "description": "Identifiant exact du tour cité (turn_id).",
+       "title": "Turn Id",
+       "type": "string"
+      }
+     },
+     "required": [
+      "turn_id",
+      "quote"
+     ],
+     "title": "Evidence",
+     "type": "object"
+    },
+    "LongDistanceSignal": {
+     "additionalProperties": false,
+     "description": "Même signal que InteractionSignal, restreint aux phénomènes entre passages éloignés.",
+     "properties": {
+      "cross_turn_reference": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Cross Turn Reference"
+      },
+      "description": {
+       "description": "Description purement textuelle, sans interprétation.",
+       "title": "Description",
+       "type": "string"
+      },
+      "evidence": {
+       "items": {
+        "$ref": "#/$defs/Evidence"
+       },
+       "minItems": 1,
+       "title": "Evidence",
+       "type": "array"
+      },
+      "explicit_affect": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Affect nommé par l'enquêté·e dans une citation, sinon null.",
+       "title": "Explicit Affect"
+      },
+      "explicitness": {
+       "enum": [
+        "direct",
+        "strongly_supported",
+        "unclear"
+       ],
+       "title": "Explicitness",
+       "type": "string"
+      },
+      "needs_human_review": {
+       "title": "Needs Human Review",
+       "type": "boolean"
+      },
+      "signal_type": {
+       "enum": [
+        "cross_turn_contradiction",
+        "significant_repetition",
+        "vocabulary_shift"
+       ],
+       "title": "Signal Type",
+       "type": "string"
+      },
+      "surface_form": {
+       "description": "Mots exacts qui portent le signal.",
+       "title": "Surface Form",
+       "type": "string"
+      },
+      "topic": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Topic"
+      },
+      "turn_ids": {
+       "items": {
+        "type": "string"
+       },
+       "minItems": 1,
+       "title": "Turn Ids",
+       "type": "array"
+      }
+     },
+     "required": [
+      "turn_ids",
+      "signal_type",
+      "surface_form",
+      "description",
+      "topic",
+      "evidence",
+      "explicit_affect",
+      "cross_turn_reference",
+      "explicitness",
+      "needs_human_review"
+     ],
+     "title": "LongDistanceSignal",
+     "type": "object"
+    }
+   },
+   "additionalProperties": false,
+   "properties": {
+    "reading_notes": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Reading Notes"
+    },
+    "signals": {
+     "items": {
+      "$ref": "#/$defs/LongDistanceSignal"
+     },
+     "title": "Signals",
+     "type": "array"
+    }
+   },
+   "required": [
+    "signals",
+    "reading_notes"
+   ],
+   "title": "LongDistanceSignalOutput",
+   "type": "object"
+  },
+  "schema_sha256": "0dbaa6b85dadd535727ee32d6f8572fe56732e53a1448efbb676dbd9bb4ddcb7"
+ },
+ "practice_extractor": {
+  "output_schema": {
+   "$defs": {
+    "Evidence": {
+     "additionalProperties": false,
+     "properties": {
+      "quote": {
+       "description": "Copie exacte d'un passage du champ text de ce tour.",
+       "title": "Quote",
+       "type": "string"
+      },
+      "turn_id": {
+       "description": "Identifiant exact du tour cité (turn_id).",
+       "title": "Turn Id",
+       "type": "string"
+      }
+     },
+     "required": [
+      "turn_id",
+      "quote"
+     ],
+     "title": "Evidence",
+     "type": "object"
+    },
+    "Practice": {
+     "additionalProperties": false,
+     "properties": {
+      "academic_task": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Academic Task"
+      },
+      "ai_action": {
+       "items": {
+        "type": "string"
+       },
+       "title": "Ai Action",
+       "type": "array"
+      },
+      "ai_tool": {
+       "items": {
+        "type": "string"
+       },
+       "title": "Ai Tool",
+       "type": "array"
+      },
+      "assessment_context": {
+       "enum": [
+        "graded",
+        "ungraded",
+        "exam",
+        "class",
+        "personal",
+        "unknown"
+       ],
+       "title": "Assessment Context",
+       "type": "string"
+      },
+      "context": {
+       "title": "Context",
+       "type": "string"
+      },
+      "discipline": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Discipline"
+      },
+      "evidence": {
+       "items": {
+        "$ref": "#/$defs/Evidence"
+       },
+       "minItems": 1,
+       "title": "Evidence",
+       "type": "array"
+      },
+      "explicit_constraints": {
+       "items": {
+        "type": "string"
+       },
+       "title": "Explicit Constraints",
+       "type": "array"
+      },
+      "explicitness": {
+       "enum": [
+        "direct",
+        "strongly_supported",
+        "unclear"
+       ],
+       "title": "Explicitness",
+       "type": "string"
+      },
+      "non_use_reason": {
+       "anyOf": [
+        {
+         "enum": [
+          "not_stated",
+          "preference",
+          "personal_rule",
+          "external_rule",
+          "technical_limitation",
+          "other"
+         ],
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Pour non_use / refusal uniquement : ce sur quoi l'enquêté·e fait reposer le non-usage (not_stated si aucune raison n'est formulée) ; null pour les autres statuts.",
+       "title": "Non Use Reason"
+      },
+      "other_actors": {
+       "items": {
+        "type": "string"
+       },
+       "title": "Other Actors",
+       "type": "array"
+      },
+      "practice_domain": {
+       "description": "Domaine de la situation : academic, personal, professional, mixed ou unknown.",
+       "enum": [
+        "academic",
+        "personal",
+        "professional",
+        "mixed",
+        "unknown"
+       ],
+       "title": "Practice Domain",
+       "type": "string"
+      },
+      "scope_qualifier": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Qualificatif de portée employé par l'enquêté·e (« surtout », « principalement »…), sinon null.",
+       "title": "Scope Qualifier"
+      },
+      "stated_frequency": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Fréquence uniquement (« parfois », « souvent », « rarement », « une fois », « jamais », « toujours »…), sinon null. « surtout » n'est pas une fréquence : voir scope_qualifier.",
+       "title": "Stated Frequency"
+      },
+      "stated_reason": {
+       "description": "Raisons données par l'enquêté·e uniquement.",
+       "items": {
+        "type": "string"
+       },
+       "title": "Stated Reason",
+       "type": "array"
+      },
+      "student_action_after": {
+       "items": {
+        "type": "string"
+       },
+       "title": "Student Action After",
+       "type": "array"
+      },
+      "student_action_before": {
+       "items": {
+        "type": "string"
+       },
+       "title": "Student Action Before",
+       "type": "array"
+      },
+      "summary": {
+       "description": "Phrase descriptive au discours rapporté.",
+       "title": "Summary",
+       "type": "string"
+      },
+      "turn_end": {
+       "title": "Turn End",
+       "type": "string"
+      },
+      "turn_start": {
+       "title": "Turn Start",
+       "type": "string"
+      },
+      "uncertainty_note": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Uncertainty Note"
+      },
+      "use_status": {
+       "enum": [
+        "use",
+        "non_use",
+        "refusal",
+        "hypothetical",
+        "past_use"
+       ],
+       "title": "Use Status",
+       "type": "string"
+      },
+      "verification_or_control": {
+       "items": {
+        "type": "string"
+       },
+       "title": "Verification Or Control",
+       "type": "array"
+      }
+     },
+     "required": [
+      "summary",
+      "turn_start",
+      "turn_end",
+      "use_status",
+      "non_use_reason",
+      "practice_domain",
+      "academic_task",
+      "discipline",
+      "context",
+      "ai_tool",
+      "student_action_before",
+      "ai_action",
+      "student_action_after",
+      "stated_reason",
+      "explicit_constraints",
+      "verification_or_control",
+      "stated_frequency",
+      "scope_qualifier",
+      "assessment_context",
+      "other_actors",
+      "evidence",
+      "explicitness",
+      "uncertainty_note"
+     ],
+     "title": "Practice",
+     "type": "object"
+    }
+   },
+   "additionalProperties": false,
+   "properties": {
+    "extraction_notes": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Extraction Notes"
+    },
+    "practices": {
+     "items": {
+      "$ref": "#/$defs/Practice"
+     },
+     "title": "Practices",
+     "type": "array"
+    }
+   },
+   "required": [
+    "practices",
+    "extraction_notes"
+   ],
+   "title": "PracticeExtractorOutput",
+   "type": "object"
+  },
+  "schema_sha256": "4d098ea8bcc5d56956e75efffa0e707cc34ba70040468d24aa62651e6f7fe163"
+ },
+ "speaker_attribution_auditor": {
+  "output_schema": {
+   "$defs": {
+    "Evidence": {
+     "additionalProperties": false,
+     "properties": {
+      "quote": {
+       "description": "Copie exacte d'un passage du champ text de ce tour.",
+       "title": "Quote",
+       "type": "string"
+      },
+      "turn_id": {
+       "description": "Identifiant exact du tour cité (turn_id).",
+       "title": "Turn Id",
+       "type": "string"
+      }
+     },
+     "required": [
+      "turn_id",
+      "quote"
+     ],
+     "title": "Evidence",
+     "type": "object"
+    },
+    "SpeakerAssessment": {
+     "additionalProperties": false,
+     "properties": {
+      "confidence": {
+       "enum": [
+        "high",
+        "medium",
+        "low"
+       ],
+       "title": "Confidence",
+       "type": "string"
+      },
+      "evidence": {
+       "items": {
+        "$ref": "#/$defs/Evidence"
+       },
+       "minItems": 1,
+       "title": "Evidence",
+       "type": "array"
+      },
+      "needs_review": {
+       "title": "Needs Review",
+       "type": "boolean"
+      },
+      "reason": {
+       "description": "Explication brève, fondée sur la forme du texte et l'enchaînement des tours.",
+       "title": "Reason",
+       "type": "string"
+      },
+      "suggested_speaker": {
+       "anyOf": [
+        {
+         "enum": [
+          "enqueteur",
+          "enquete"
+         ],
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "L'autre rôle si le texte indique clairement qu'il a prononcé ce tour ; null si l'attribution actuelle est plausible ou si le passage est ambigu.",
+       "title": "Suggested Speaker"
+      },
+      "turn_id": {
+       "description": "turn_id exact du tour candidat évalué.",
+       "title": "Turn Id",
+       "type": "string"
+      }
+     },
+     "required": [
+      "turn_id",
+      "suggested_speaker",
+      "confidence",
+      "reason",
+      "needs_review",
+      "evidence"
+     ],
+     "title": "SpeakerAssessment",
+     "type": "object"
+    }
+   },
+   "additionalProperties": false,
+   "properties": {
+    "assessments": {
+     "items": {
+      "$ref": "#/$defs/SpeakerAssessment"
+     },
+     "title": "Assessments",
+     "type": "array"
+    },
+    "audit_notes": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Audit Notes"
+    }
+   },
+   "required": [
+    "assessments",
+    "audit_notes"
+   ],
+   "title": "SpeakerAuditOutput",
+   "type": "object"
+  },
+  "schema_sha256": "8eb71181218001195e8ee19afa7ee6987bebaf05a53e10f3838a65c272e70558"
+ },
+ "trajectory_mapper": {
+  "output_schema": {
+   "$defs": {
+    "RoleCriterionDraft": {
+     "additionalProperties": false,
+     "properties": {
+      "confidence": {
+       "enum": [
+        "high",
+        "medium",
+        "low"
+       ],
+       "title": "Confidence",
+       "type": "string"
+      },
+      "criterion": {
+       "description": "Critère explicitement mobilisé dans les épisodes (ex. « faire soi-même le plan »).",
+       "title": "Criterion",
+       "type": "string"
+      },
+      "description": {
+       "description": "Commence par « Dans cet entretien, l'étudiant·e associe… ».",
+       "title": "Description",
+       "type": "string"
+      },
+      "episode_ids": {
+       "items": {
+        "type": "string"
+       },
+       "minItems": 1,
+       "title": "Episode Ids",
+       "type": "array"
+      },
+      "evidence_turn_ids": {
+       "items": {
+        "type": "string"
+       },
+       "minItems": 1,
+       "title": "Evidence Turn Ids",
+       "type": "array"
+      },
+      "needs_review": {
+       "title": "Needs Review",
+       "type": "boolean"
+      }
+     },
+     "required": [
+      "criterion",
+      "description",
+      "episode_ids",
+      "evidence_turn_ids",
+      "confidence",
+      "needs_review"
+     ],
+     "title": "RoleCriterionDraft",
+     "type": "object"
+    },
+    "TemporalAnchor": {
+     "additionalProperties": false,
+     "properties": {
+      "text": {
+       "description": "Copie exacte de l'expression temporelle (« au lycée », « maintenant »…).",
+       "title": "Text",
+       "type": "string"
+      },
+      "turn_id": {
+       "description": "Tour de l'enquêté·e où figure l'expression.",
+       "title": "Turn Id",
+       "type": "string"
+      }
+     },
+     "required": [
+      "text",
+      "turn_id"
+     ],
+     "title": "TemporalAnchor",
+     "type": "object"
+    },
+    "TrajectoryClaimDraft": {
+     "additionalProperties": false,
+     "properties": {
+      "accounting_move_types": {
+       "description": "Opérations concernées (recurring_accounting_move), sinon [].",
+       "items": {
+        "enum": [
+         "restriction",
+         "exception",
+         "general_rule",
+         "distinction",
+         "comparison",
+         "refusal",
+         "preference",
+         "appeal_to_control",
+         "appeal_to_verification",
+         "appeal_to_effort",
+         "appeal_to_learning",
+         "appeal_to_authorship",
+         "appeal_to_external_judgment",
+         "normalization",
+         "self_evaluation",
+         "reformulation",
+         "other_explicit_move"
+        ],
+        "type": "string"
+       },
+       "title": "Accounting Move Types",
+       "type": "array"
+      },
+      "claim_type": {
+       "enum": [
+        "stable_boundary",
+        "contextual_variation",
+        "explicit_temporal_change",
+        "exception",
+        "unresolved_tension",
+        "ordinary_zone",
+        "recurring_accounting_move"
+       ],
+       "title": "Claim Type",
+       "type": "string"
+      },
+      "confidence": {
+       "enum": [
+        "high",
+        "medium",
+        "low"
+       ],
+       "title": "Confidence",
+       "type": "string"
+      },
+      "contexts": {
+       "description": "Tâches ou contextes concernés, dans les termes du matériau.",
+       "items": {
+        "type": "string"
+       },
+       "title": "Contexts",
+       "type": "array"
+      },
+      "description": {
+       "description": "Ce que le matériau montre, au discours rapporté, sans motivation supposée.",
+       "title": "Description",
+       "type": "string"
+      },
+      "episode_ids": {
+       "description": "Épisodes (E…) sur lesquels repose l'affirmation.",
+       "items": {
+        "type": "string"
+       },
+       "title": "Episode Ids",
+       "type": "array"
+      },
+      "evidence_turn_ids": {
+       "description": "Tours qui appuient l'affirmation.",
+       "items": {
+        "type": "string"
+       },
+       "minItems": 1,
+       "title": "Evidence Turn Ids",
+       "type": "array"
+      },
+      "needs_review": {
+       "title": "Needs Review",
+       "type": "boolean"
+      },
+      "practice_ids": {
+       "description": "Pratiques sans marqueur (P…) mobilisées, sinon [].",
+       "items": {
+        "type": "string"
+       },
+       "title": "Practice Ids",
+       "type": "array"
+      },
+      "temporal_anchors": {
+       "description": "Ancrages temporels explicites cités, sinon [].",
+       "items": {
+        "$ref": "#/$defs/TemporalAnchor"
+       },
+       "title": "Temporal Anchors",
+       "type": "array"
+      }
+     },
+     "required": [
+      "claim_type",
+      "description",
+      "episode_ids",
+      "practice_ids",
+      "contexts",
+      "accounting_move_types",
+      "temporal_anchors",
+      "evidence_turn_ids",
+      "confidence",
+      "needs_review"
+     ],
+     "title": "TrajectoryClaimDraft",
+     "type": "object"
+    }
+   },
+   "additionalProperties": false,
+   "properties": {
+    "claims": {
+     "items": {
+      "$ref": "#/$defs/TrajectoryClaimDraft"
+     },
+     "title": "Claims",
+     "type": "array"
+    },
+    "confidence": {
+     "enum": [
+      "high",
+      "medium",
+      "low"
+     ],
+     "title": "Confidence",
+     "type": "string"
+    },
+    "configuration_type": {
+     "enum": [
+      "temporal_trajectory",
+      "contextual_configuration",
+      "mixed",
+      "no_clear_pattern"
+     ],
+     "title": "Configuration Type",
+     "type": "string"
+    },
+    "mapper_notes": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Mapper Notes"
+    },
+    "needs_review": {
+     "title": "Needs Review",
+     "type": "boolean"
+    },
+    "student_role_criteria": {
+     "items": {
+      "$ref": "#/$defs/RoleCriterionDraft"
+     },
+     "title": "Student Role Criteria",
+     "type": "array"
+    },
+    "trajectory_summary": {
+     "description": "Synthèse descriptive de CET entretien (3 à 6 phrases).",
+     "title": "Trajectory Summary",
+     "type": "string"
+    }
+   },
+   "required": [
+    "configuration_type",
+    "claims",
+    "student_role_criteria",
+    "trajectory_summary",
+    "confidence",
+    "needs_review",
+    "mapper_notes"
+   ],
+   "title": "TrajectoryMapperOutput",
+   "type": "object"
+  },
+  "schema_sha256": "bcaf26181ab71b18d993e2ed3b7cc2f9afaff3355ffa126b9b734b0ba8fd71b5"
+ }
+}

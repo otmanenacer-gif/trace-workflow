@@ -1,7 +1,8 @@
-"""Éléments communs aux agents de l'étape 3 (sans logique d'orchestration).
+"""Éléments communs aux agents (sans logique d'orchestration).
 
 - `Evidence` : citation reliant un objet produit par un agent au transcript ;
 - `AgentSpec` : identité versionnée d'un agent (nom, version, schéma, prompt) ;
+- `strict_json_schema` : schéma JSON du paquet de tâche, dérivé du modèle Pydantic de l'agent ;
 - `build_agent_input` / `render_user_message` : représentation compacte d'UN
   entretien envoyée au modèle (turn_id, locuteur, texte, page et, le cas
   échéant, un avertissement d'attribution du locuteur), rien d'autre.
@@ -10,13 +11,13 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
-import anthropic
 from pydantic import BaseModel, ConfigDict, Field
 
 Explicitness = Literal["direct", "strongly_supported", "unclear"]
@@ -42,6 +43,93 @@ USER_MESSAGE_TEMPLATE = """Entretien à analyser : {interview_id} ({turn_count} 
 </transcript>
 
 Applique tes consignes à cette transcription et réponds avec l'objet JSON demandé."""
+
+
+# --- Schéma JSON d'un agent ----------------------------------------------------------------------
+
+# Formats de chaîne conservés tels quels ; tout autre mot-clé non retenu est recopié dans la description.
+SUPPORTED_STRING_FORMATS = frozenset({"date-time", "time", "date", "duration", "email", "hostname", "uri", "ipv4",
+                                      "ipv6", "uuid"})
+
+
+def strict_json_schema(schema: type[BaseModel] | dict[str, Any]) -> dict[str, Any]:
+    """Schéma JSON « strict » d'un modèle Pydantic, écrit dans `schema.json` de chaque paquet de tâche.
+
+    Règles (identiques à la transformation utilisée jusqu'ici, si bien que `schema_sha256` — donc les clés de
+    cache, les manifests et les contrôles de restauration — est inchangé ; voir
+    tests/data/agent_schemas_snapshot.json) :
+    - objets : `additionalProperties: false`, propriétés transformées récursivement, `required` conservé ;
+    - `anyOf` / `oneOf` deviennent `anyOf`, `allOf` est conservé ; `$defs` et `$ref` sont conservés ;
+    - chaînes : seuls les formats de SUPPORTED_STRING_FORMATS restent un `format` ;
+    - tableaux : `items` transformé, `minItems` conservé s'il vaut 0 ou 1 ;
+    - tout autre mot-clé (minimum, maxLength, minItems > 1, format non retenu…) est ajouté à la description,
+      au format « {clé: valeur, …} », pour rester lisible par l'agent.
+    La réponse de l'agent est de toute façon validée par le modèle Pydantic COMPLET (core.llm_client).
+    """
+    if inspect.isclass(schema) and issubclass(schema, BaseModel):
+        schema = schema.model_json_schema()
+    rest = dict(schema)
+    strict: dict[str, Any] = {}
+
+    defs = rest.pop("$defs", None)
+    if defs is not None:
+        strict["$defs"] = {name: strict_json_schema(sub) for name, sub in defs.items()}
+    ref = rest.pop("$ref", None)
+    if ref is not None:
+        strict["$ref"] = ref
+        return strict
+
+    type_ = rest.pop("type", None)
+    any_of, one_of, all_of = rest.pop("anyOf", None), rest.pop("oneOf", None), rest.pop("allOf", None)
+    if isinstance(any_of, list):
+        strict["anyOf"] = [strict_json_schema(variant) for variant in any_of]
+    elif isinstance(one_of, list):
+        strict["anyOf"] = [strict_json_schema(variant) for variant in one_of]
+    elif isinstance(all_of, list):
+        strict["allOf"] = [strict_json_schema(variant) for variant in all_of]
+    elif type_ is None:
+        raise ValueError("Schéma sans 'type', 'anyOf', 'oneOf' ni 'allOf'.")
+    else:
+        strict["type"] = type_
+
+    enum = rest.pop("enum", None)
+    if isinstance(enum, list):
+        strict["enum"] = enum
+    for key in ("description", "title"):
+        value = rest.pop(key, None)
+        if value is not None:
+            strict[key] = value
+
+    if type_ == "object":
+        strict["properties"] = {key: strict_json_schema(sub) for key, sub in rest.pop("properties", {}).items()}
+        rest.pop("additionalProperties", None)
+        strict["additionalProperties"] = False
+        required = rest.pop("required", None)
+        if required is not None:
+            strict["required"] = required
+    elif type_ == "string":
+        string_format = rest.pop("format", None)
+        if string_format in SUPPORTED_STRING_FORMATS:
+            strict["format"] = string_format
+        elif string_format:
+            rest["format"] = string_format
+    elif type_ == "array":
+        items = rest.pop("items", None)
+        if items is not None:
+            strict["items"] = strict_json_schema(items)
+        min_items = rest.pop("minItems", None)
+        if min_items in (0, 1):
+            strict["minItems"] = min_items
+        elif min_items is not None:
+            rest["minItems"] = min_items
+    elif type_ not in ("boolean", "integer", "number", "null", None):
+        raise ValueError(f"Type de schéma non pris en charge : {type_!r}.")
+
+    if rest:  # contraintes non exprimées dans le schéma strict : rappelées dans la description
+        description = strict.get("description")
+        strict["description"] = ((description + "\n\n") if description is not None else "") + \
+            "{" + ", ".join(f"{key}: {value}" for key, value in rest.items()) + "}"
+    return strict
 
 
 def sha256_text(text: str) -> str:
@@ -80,8 +168,8 @@ class AgentSpec:
 
     @cached_property
     def output_schema(self) -> dict:
-        """JSON schema envoyé à l'API (transformation officielle du SDK)."""
-        return anthropic.transform_schema(self.output_model)
+        """Schéma JSON attendu de l'agent (schema.json du paquet de tâche)."""
+        return strict_json_schema(self.output_model)
 
     @cached_property
     def schema_sha256(self) -> str:

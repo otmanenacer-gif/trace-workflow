@@ -1,11 +1,12 @@
-"""Lanceur de TEST : exécute app.py tel quel, mais avec un LLM SIMULÉ.
+"""Lanceur de TEST : exécute app.py tel quel, mais avec des agents SIMULÉS.
 
     streamlit run tests/e2e/fake_llm_app.py
 
-Aucun appel réel, aucun token consommé : la clé et le modèle sont factices et
-le transport HTTP est remplacé par tests/fake_llm.FakeTransport. Sert au test
-navigateur (tests/e2e/browser_check.py) et à une démonstration locale du
-parcours complet sans clé API. Ne jamais utiliser pour de vraies analyses.
+Aucun appel réseau, aucune clé : les étapes 3 à 6 passent par le workflow Claude Code de TRACE
+(core/claude_code_workflow.py), mais chaque tâche écrite est aussitôt « jouée » par tests/fake_llm.FakeAgents,
+qui écrit response.json là où un sous-agent Claude Code l'écrirait ; TRACE la valide ensuite comme d'habitude.
+Sert au test navigateur (tests/e2e/browser_check.py) et à une démonstration locale du parcours complet.
+Ne jamais utiliser pour de vraies analyses.
 
 Pour l'entretien synthétique (tests/synthetic_interviews.py), les réponses
 simulées sont celles de la section 18, avec UNE citation volontairement
@@ -40,21 +41,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-os.environ["ANTHROPIC_API_KEY"] = "sk-ant-fake-browser-test"  # factice : jamais envoyée
-os.environ["ANTHROPIC_MODEL"] = "fake-model"
-# Les scénarios du navigateur cliquent sur les anciens lanceurs des étapes 3 à 6 (par API, ici simulée) : ils
-# doivent être demandés explicitement, ces étapes passant par défaut par le workflow Claude Code (TRACE_WORKFLOW.md).
-os.environ["TRACE_STAGE3_BACKEND"] = "anthropic"
-os.environ["TRACE_STAGE4_BACKEND"] = "anthropic"
-os.environ["TRACE_STAGE5_BACKEND"] = "anthropic"
-os.environ["TRACE_STAGE6_BACKEND"] = "anthropic"
-# Garde-fou : si un rechargement à chaud (fichier source modifié pendant le test, voir app.py) réimporte
-# core.llm_client, le transport réel réapparaît ; il viserait alors une adresse locale fermée et échouerait
-# sans jamais joindre l'API.
-os.environ["ANTHROPIC_BASE_URL"] = "http://127.0.0.1:9"
-
-import core.llm_client as llm_client  # noqa: E402
 from core import config  # noqa: E402
+from core.claude_code_workflow import WorkflowClient  # noqa: E402
 from tests import synthetic_interviews as si  # noqa: E402
 from tests import synthetic_long_interview as long_interview  # noqa: E402
 from tests import synthetic_stage37 as stage37  # noqa: E402
@@ -65,7 +53,7 @@ from tests import synthetic_stage5 as stage5  # noqa: E402
 from tests import synthetic_stage5_long as stage5_long  # noqa: E402
 from tests import synthetic_stage6 as stage6  # noqa: E402
 from tests.fake_llm import (ACCOUNTABILITY, AUDITOR, COMPARATOR, INTERACTION, LONG_DISTANCE, PRACTICE,  # noqa: E402
-                            TRAJECTORY, FakeTransport, text_response)
+                            TRAJECTORY, FakeAgents, answering_workflow, text_response)
 
 if os.environ.get("TRACE_E2E_CACHE_DIR"):
     config.CACHE_DIR = Path(os.environ["TRACE_E2E_CACHE_DIR"])
@@ -136,11 +124,10 @@ def _practices(params):
     if _is_stage37(params):
         return stage37.practice_reader(params)
     if _is_stage35(params):
-        return text_response(si.STAGE35_PRACTICES, input_tokens=2100, output_tokens=1200)
+        return text_response(si.STAGE35_PRACTICES)
     if _is_synthetic(params):
-        return text_response(si.with_fabricated_quote(si.GOOD_PRACTICES, "practices"), input_tokens=2210,
-                             output_tokens=1480)
-    return text_response({"practices": [], "extraction_notes": None}, input_tokens=300, output_tokens=20)
+        return text_response(si.with_fabricated_quote(si.GOOD_PRACTICES, "practices"))
+    return text_response({"practices": [], "extraction_notes": None})
 
 
 def _is_long(params: dict) -> bool:
@@ -161,10 +148,10 @@ def _signals(params):
     if _is_long(params):
         return long_interview.simulated_chunk_reader(params)
     if _is_stage35(params):
-        return text_response(si.STAGE35_SIGNALS, input_tokens=2200, output_tokens=900)
+        return text_response(si.STAGE35_SIGNALS)
     if _is_synthetic(params):
-        return text_response(si.GOOD_SIGNALS, input_tokens=2370, output_tokens=1730)
-    return text_response({"signals": [], "reading_notes": None}, input_tokens=300, output_tokens=20)
+        return text_response(si.GOOD_SIGNALS)
+    return text_response({"signals": [], "reading_notes": None})
 
 
 def _audit(params):
@@ -173,8 +160,8 @@ def _audit(params):
     if _is_stage4(params):
         return _STAGE4_REFERENCE[AUDITOR](params)
     if _is_stage35(params):
-        return text_response(si.STAGE35_AUDIT, input_tokens=600, output_tokens=150)
-    return text_response({"assessments": [], "audit_notes": None}, input_tokens=300, output_tokens=20)
+        return text_response(si.STAGE35_AUDIT)
+    return text_response({"assessments": [], "audit_notes": None})
 
 
 def _long_distance(params):
@@ -223,9 +210,9 @@ def _trajectory(params):
     return _GENERIC_STAGE5(params)
 
 
-llm_client.AnthropicTransport = lambda settings: FakeTransport(
+WorkflowClient.complete_json = answering_workflow(FakeAgents(
     {PRACTICE: _practices, INTERACTION: _signals, AUDITOR: _audit, LONG_DISTANCE: _long_distance,
      ACCOUNTABILITY: _accountability, TRAJECTORY: _trajectory,
-     COMPARATOR: stage6.scripted_comparator(stage6.GOOD_PLAN)})
+     COMPARATOR: stage6.scripted_comparator(stage6.GOOD_PLAN)}))
 
 runpy.run_path(str(ROOT / "app.py"), run_name="__main__")

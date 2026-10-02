@@ -1,10 +1,12 @@
-"""Garde-fous communs : AUCUN test ne peut appeler la vraie API Anthropic.
+"""Garde-fous communs : AUCUN test ne peut joindre le réseau ni dépendre de l'environnement local.
 
-- les variables ANTHROPIC_* / TRACE_* de l'environnement sont retirées ;
+- les variables TRACE_* lues par TRACE sont retirées de l'environnement ;
 - le fichier .env local n'est jamais chargé ;
-- le transport HTTP réel est remplacé par une classe qui échoue ;
-- toute connexion réseau TCP est refusée ;
+- toute connexion réseau TCP (IPv4 / IPv6) est refusée immédiatement ;
 - le cache d'analyse pointe vers un dossier temporaire.
+
+Les agents sont simulés (tests/fake_llm.FakeAgents) ou joués par des réponses écrites dans les paquets de tâche
+du workflow (core/claude_code_workflow.py) : aucun SDK de modèle, aucune clé.
 """
 
 import socket
@@ -12,24 +14,12 @@ import socket
 import pytest
 
 import core.llm_client as llm_client
-from core import claude_code_workflow, config
+from core import config
 
-_ENV_VARS = (
-    "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_MODEL", "ANTHROPIC_PROFILE",
-    llm_client.ENV_MAX_CONCURRENCY, llm_client.ENV_TIMEOUT, llm_client.ENV_MAX_RETRIES,
-    llm_client.ENV_MAX_TOKENS, llm_client.ENV_EFFORT, llm_client.ENV_TEMPERATURE,
-    llm_client.ENV_INTERACTION_CHUNK_TOKENS, llm_client.ENV_PRACTICE_CHUNK_TOKENS,
-    claude_code_workflow.ENV_STAGE3_BACKEND, claude_code_workflow.ENV_STAGE4_BACKEND,
-    claude_code_workflow.ENV_STAGE5_BACKEND, claude_code_workflow.ENV_STAGE6_BACKEND,
-)
+_ENV_VARS = (llm_client.ENV_INTERACTION_CHUNK_TOKENS, llm_client.ENV_PRACTICE_CHUNK_TOKENS)
 
 _real_connect = socket.socket.connect
 _real_connect_ex = socket.socket.connect_ex
-
-
-class RealTransportForbidden:
-    def __init__(self, *args, **kwargs):
-        raise AssertionError("Transport Anthropic réel utilisé dans un test : interdit.")
 
 
 def _guard(real):
@@ -41,14 +31,10 @@ def _guard(real):
 
 
 @pytest.fixture(autouse=True)
-def no_real_llm(monkeypatch, tmp_path):
+def no_network(monkeypatch, tmp_path):
     for name in _ENV_VARS:
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(config, "load_env_file", lambda path=None: [])
     monkeypatch.setattr(config, "CACHE_DIR", tmp_path / "analysis_cache")
-    monkeypatch.setattr(llm_client, "AnthropicTransport", RealTransportForbidden)
     monkeypatch.setattr(socket.socket, "connect", _guard(_real_connect))
     monkeypatch.setattr(socket.socket, "connect_ex", _guard(_real_connect_ex))
-    # Réessais sans attente réelle
-    monkeypatch.setattr(llm_client, "BACKOFF_BASE_SECONDS", 0.0)
-    monkeypatch.setattr(llm_client, "RETRY_AFTER_MAX_SECONDS", 0.0)

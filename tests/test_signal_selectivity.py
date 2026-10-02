@@ -1,6 +1,6 @@
 """Étape 3.7 — Interaction Signal Reader : règle de pertinence, micro-marqueurs, lecture à longue distance.
 
-LLM simulé uniquement : ces tests vérifient les consignes envoyées au modèle et la couche
+agents simulés uniquement : ces tests vérifient les consignes envoyées au modèle et la couche
 DÉTERMINISTE (core/signal_selectivity.py), pas la qualité d'un vrai modèle.
 """
 
@@ -15,7 +15,7 @@ from core.analysis import analyze_run
 from core.analysis_cache import AnalysisCache
 from tests import synthetic_interviews as si
 from tests import synthetic_stage37 as S
-from tests.fake_llm import (AUDITOR, INTERACTION, LONG_DISTANCE, PRACTICE, FakeTransport, fake_settings,
+from tests.fake_llm import (AUDITOR, INTERACTION, LONG_DISTANCE, PRACTICE, FakeAgents, fake_settings,
                             text_response)
 
 EMPTY_AUDIT = {"assessments": [], "audit_notes": None}
@@ -169,9 +169,9 @@ def long_run(tmp_path):
 
 
 def run_reader(tmp_path, run, interaction):
-    transport = FakeTransport({PRACTICE: S.practice_reader, INTERACTION: interaction,
+    transport = FakeAgents({PRACTICE: S.practice_reader, INTERACTION: interaction,
                                LONG_DISTANCE: S.long_distance_reader, AUDITOR: lambda p: text_response(EMPTY_AUDIT)})
-    run = analyze_run(run, settings=fake_settings(), transport=transport, cache=AnalysisCache(tmp_path / "cache"))
+    run = analyze_run(run, settings=fake_settings(), client=transport, cache=AnalysisCache(tmp_path / "cache"))
     directory = Path(run["files"][0]["analysis"]["analysis_dir"])
     return run, transport, json.loads((directory / "interaction_signals.json").read_text(encoding="utf-8"))
 
@@ -217,9 +217,9 @@ def test_selective_reader_keeps_the_significant_phenomena(tmp_path, long_run):
 
 def test_short_interview_selectivity_leaves_legitimate_signals_untouched(tmp_path):
     run = si.make_ingested_run(tmp_path)
-    transport = FakeTransport({PRACTICE: lambda p: text_response(si.GOOD_PRACTICES),
+    transport = FakeAgents({PRACTICE: lambda p: text_response(si.GOOD_PRACTICES),
                                INTERACTION: lambda p: text_response(si.GOOD_SIGNALS)})
-    run = analyze_run(run, settings=fake_settings(), transport=transport, cache=AnalysisCache(tmp_path / "cache"))
+    run = analyze_run(run, settings=fake_settings(), client=transport, cache=AnalysisCache(tmp_path / "cache"))
     directory = Path(run["files"][0]["analysis"]["analysis_dir"])
     doc = json.loads((directory / "interaction_signals.json").read_text(encoding="utf-8"))
     # « un peu » (à côté de « scrupules »), « Euh… » (avant « Enfin non »), « juste » : chacun sur un tour qui porte

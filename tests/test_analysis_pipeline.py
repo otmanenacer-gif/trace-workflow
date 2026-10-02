@@ -8,7 +8,6 @@ import shutil
 import subprocess
 from pathlib import Path
 
-import anthropic
 import pytest
 
 from agents import interaction_signal_reader, practice_extractor
@@ -16,9 +15,9 @@ from agents.base import build_agent_input, serialize_agent_input
 from core import config
 from core.analysis import AGENTS, analyze_run
 from core.analysis_cache import AnalysisCache
-from core.llm_client import LLMError, LLMSettings
+from core.llm_client import LLMSettings
 from tests import synthetic_interviews as si
-from tests.fake_llm import INTERACTION, PRACTICE, FakeTransport, fake_settings, status_error, text_response
+from tests.fake_llm import INTERACTION, PRACTICE, FakeAgents, fake_settings, agent_error, text_response
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -29,8 +28,8 @@ def good():
 
 def run_with(tmp_path, responders, files=None, **settings):
     run = si.make_ingested_run(tmp_path, files)
-    transport = FakeTransport(responders)
-    run = analyze_run(run, settings=fake_settings(**settings), transport=transport,
+    transport = FakeAgents(responders)
+    run = analyze_run(run, settings=fake_settings(**settings), client=transport,
                       cache=AnalysisCache(tmp_path / "cache"))
     return run, transport
 
@@ -50,7 +49,7 @@ def test_agents_receive_same_transcript_but_separate_contexts(tmp_path):
     # consignes et schémas propres à chaque agent
     assert practice_call["system"][0]["text"] == practice_extractor.SPEC.system_prompt
     assert signal_call["system"][0]["text"] == interaction_signal_reader.SPEC.system_prompt
-    assert practice_call["output_config"] != signal_call["output_config"]
+    assert practice_call["output_schema"] != signal_call["output_schema"]
     # un seul message : aucune sortie d'un agent n'est transmise à l'autre
     assert len(practice_call["messages"]) == len(signal_call["messages"]) == 1
     practice_request = json.dumps(practice_call, ensure_ascii=False)
@@ -76,17 +75,17 @@ def test_agents_run_in_parallel(tmp_path):
 
     run, transport = run_with(tmp_path, {PRACTICE: responder(PRACTICE, si.GOOD_PRACTICES),
                                          INTERACTION: responder(INTERACTION, si.GOOD_SIGNALS)})
-    assert transport.max_active == 2
+    assert len(transport.calls) == 2  # chacun attendait le démarrage de l'autre : exécution en parallèle
     statuses = {name: a["status"] for name, a in run["files"][0]["analysis"]["agents"].items()}
     assert statuses == {"practice_extractor": "SUCCESS", "interaction_signal_reader": "SUCCESS"}
 
 
 def test_practice_failure_does_not_affect_interaction_reader(tmp_path):
-    responders = {PRACTICE: status_error(anthropic.BadRequestError, 400), INTERACTION: text_response(si.GOOD_SIGNALS)}
+    responders = {PRACTICE: agent_error(), INTERACTION: text_response(si.GOOD_SIGNALS)}
     run, _ = run_with(tmp_path, responders)
     agents = run["files"][0]["analysis"]["agents"]
     assert agents["practice_extractor"]["status"] == "FAILED"
-    assert agents["practice_extractor"]["error"]["code"] == "BAD_REQUEST"
+    assert agents["practice_extractor"]["error"]["code"] == "SCHEMA_VALIDATION"
     assert agents["interaction_signal_reader"]["status"] == "SUCCESS"
     out = analysis_dir(run)
     assert not (out / "practice_extractor.json").exists()
@@ -104,17 +103,17 @@ def test_interaction_failure_does_not_affect_practice_extractor(tmp_path):
     assert agents["practice_extractor"]["status"] == "SUCCESS"
     assert agents["interaction_signal_reader"]["status"] == "FAILED"
     assert agents["interaction_signal_reader"]["error"]["code"] == "INVALID_JSON"
-    assert agents["interaction_signal_reader"]["billed_this_run"] is True  # tokens consommés malgré l'échec
+    assert agents["interaction_signal_reader"]["billed_this_run"] is False  # aucun coût, même en échec
     assert (analysis_dir(run) / "practice_extractor.json").exists()
 
 
 def test_failure_after_success_removes_stale_output_of_that_agent_only(tmp_path):
     run = si.make_ingested_run(tmp_path)
     cache = AnalysisCache(tmp_path / "cache")
-    analyze_run(run, settings=fake_settings(), transport=FakeTransport(good()), cache=cache)
-    failing = FakeTransport({PRACTICE: status_error(anthropic.InternalServerError, 500),
+    analyze_run(run, settings=fake_settings(), client=FakeAgents(good()), cache=cache)
+    failing = FakeAgents({PRACTICE: agent_error(),
                              INTERACTION: text_response(si.GOOD_SIGNALS)})
-    run = analyze_run(run, settings=fake_settings(max_retries=0), transport=failing, cache=cache, force=True)
+    run = analyze_run(run, settings=fake_settings(), client=failing, cache=cache, force=True)
     out = analysis_dir(run)
     assert not (out / "practice_extractor.json").exists() and (out / "interaction_signals.json").exists()
 
@@ -129,7 +128,7 @@ def test_several_interviews_one_fails_others_continue(tmp_path):
     def practice(params):
         content = params["messages"][0]["content"]
         if "CHLOE_T0001" in content:
-            return status_error(anthropic.AuthenticationError, 401)
+            return agent_error()
         return text_response({"practices": [], "extraction_notes": None})
 
     run, transport = run_with(tmp_path, {PRACTICE: practice, INTERACTION: lambda p: text_response(
@@ -149,27 +148,12 @@ def test_several_interviews_one_fails_others_continue(tmp_path):
     assert run["pipeline"][config.PRACTICE_STEP] == "terminé (2/3 entretien(s), 1 échec(s))"
 
 
-def test_concurrency_limit_applies_across_interviews(tmp_path):
-    files = [si.other_interview(f"E{i}.txt", "Oui, parfois.") for i in range(4)]
-
-    async def slow(_params):
-        await asyncio.sleep(0.01)
-        return text_response({"practices": [], "extraction_notes": None})
-
-    async def slow_signals(_params):
-        await asyncio.sleep(0.01)
-        return text_response({"signals": [], "reading_notes": None})
-
-    _, transport = run_with(tmp_path, {PRACTICE: slow, INTERACTION: slow_signals}, files=files, max_concurrency=2)
-    assert len(transport.calls) == 8 and transport.max_active == 2
-
-
 def test_selected_interview_only_and_failed_ingestion_skipped(tmp_path):
     files = [(si.FILENAME, si.TEXT.encode("utf-8")), ("Vide.txt", b""), si.other_interview("Bob.txt", "Oui.")]
     run = si.make_ingested_run(tmp_path, files)
     assert run["files"][1]["ingestion"]["status"] == "FAIL"
-    transport = FakeTransport(good())
-    run = analyze_run(run, ["ENTRETIEN_SYNTHETIQUE", "VIDE"], settings=fake_settings(), transport=transport,
+    transport = FakeAgents(good())
+    run = analyze_run(run, ["ENTRETIEN_SYNTHETIQUE", "VIDE"], settings=fake_settings(), client=transport,
                       cache=AnalysisCache(tmp_path / "cache"))
     assert "analysis" in run["files"][0] and "analysis" not in run["files"][1] and "analysis" not in run["files"][2]
     assert len(transport.calls) == 2
@@ -184,7 +168,7 @@ def test_ingestion_outputs_are_never_modified(tmp_path):
         return {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in interview_dir.iterdir() if p.is_file()}
 
     before = digest()
-    analyze_run(run, settings=fake_settings(), transport=FakeTransport(good()), cache=AnalysisCache(tmp_path / "c"))
+    analyze_run(run, settings=fake_settings(), client=FakeAgents(good()), cache=AnalysisCache(tmp_path / "c"))
     assert digest() == before
     produced = sorted(p.name for p in (interview_dir / "analysis").iterdir())
     assert produced == ["evidence_validation.json", "interaction_manifest.json", "interaction_signals.json",
@@ -200,25 +184,27 @@ def test_metadata_tracks_analysis_and_other_steps_stay_inactive(tmp_path):
     for step in config.PIPELINE_STEPS[3:]:
         assert saved["pipeline"][step] == "inactive"
     usage = saved["last_analysis"]["usage"]
-    assert usage["api_calls"] == 2 and usage["input_tokens"] == 2400 and usage["output_tokens"] == 600
+    assert usage["api_calls"] == 0 and usage["input_tokens"] == 0 and usage["output_tokens"] == 0  # legacy, neutres
+    assert saved["last_analysis"]["max_concurrency"] is None
 
 
 def test_status_callback_reports_progression(tmp_path):
     events = []
     run = si.make_ingested_run(tmp_path)
-    analyze_run(run, settings=fake_settings(), transport=FakeTransport(good()), cache=AnalysisCache(tmp_path / "c"),
+    analyze_run(run, settings=fake_settings(), client=FakeAgents(good()), cache=AnalysisCache(tmp_path / "c"),
                 on_status=lambda iid, agent, status: events.append((agent, status)))
     for spec in AGENTS:
         assert [s for a, s in events if a == spec.name] == ["PENDING", "RUNNING", "SUCCESS"]
 
 
-def test_analysis_is_refused_without_configuration(tmp_path):
+def test_analysis_needs_an_injected_agent_client_but_no_key(tmp_path):
     run = si.make_ingested_run(tmp_path)
-    for settings in (LLMSettings.from_env({}), LLMSettings.from_env({"ANTHROPIC_API_KEY": "sk-ant-x"})):
-        with pytest.raises(LLMError) as info:
-            analyze_run(run, settings=settings, transport=FakeTransport(good()))
-        assert info.value.code == "NOT_CONFIGURED"
+    with pytest.raises(TypeError):
+        analyze_run(run, settings=LLMSettings.from_env({}))
     assert not (Path(run["files"][0]["ingestion"]["output_dir"]) / "analysis").exists()
+    run = analyze_run(run, settings=LLMSettings.from_env({}), client=FakeAgents(good()),
+                      cache=AnalysisCache(tmp_path / "cache"))
+    assert run["files"][0]["analysis"]["agents"]["practice_extractor"]["status"] == "SUCCESS"
 
 
 # --- Représentation compacte envoyée aux agents ------------------------------------------

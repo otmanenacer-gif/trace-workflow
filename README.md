@@ -3,7 +3,10 @@
 **Analyse ethnométhodologique des usages étudiants des IAG**
 
 Outil expérimental d'analyse qualitative assistée par IA, destiné à analyser
-des entretiens semi-directifs. **Version actuelle :**
+des entretiens semi-directifs. **TRACE est un workflow multi-agents exécuté dans Claude Code** : le Python de
+TRACE fait tout le travail déterministe (ingestion, préparation, validation, sorties) ; les agents sémantiques
+sont joués par Claude Code à partir des prompts du dépôt. **Aucun appel à une API de modèle**, aucun SDK, aucune
+clé, aucun coût d'API. **Version actuelle :**
 
 1. ingestion **déterministe** des entretiens (sans IA) ;
 2. **étape 3** — **exécutée dans Claude Code, sans aucun appel API** (workflow multi-agents,
@@ -13,7 +16,7 @@ des entretiens semi-directifs. **Version actuelle :**
    (comment il ou elle le raconte). Aucune synthèse, aucune analyse théorique à ce stade ;
 3. **étape 3.5** — *Speaker Attribution Auditor* : avant les deux agents,
    signale les tours dont le locuteur semble mal attribué (règles
-   déterministes, puis au plus un appel LLM par entretien, aucun s'il n'y a
+   déterministes, puis au plus une tâche d'agent par entretien, aucune s'il n'y a
    pas de tour suspect). La transcription n'est **jamais** modifiée ;
 4. **étape 4** — *épisodes d'accountability* : à partir des sorties de l'étape 3
    (jamais de l'entretien entier), un programme déterministe propose des
@@ -45,16 +48,17 @@ des entretiens semi-directifs. **Version actuelle :**
 python -m venv .venv
 source .venv/bin/activate        # Windows : .venv\Scripts\activate
 pip install -r requirements.txt
-cp .env.example .env             # facultatif : clé API et modèle pour l'étape 3
+cp .env.example .env             # facultatif : tailles des blocs des entretiens longs
 ```
 
-Sans `ANTHROPIC_API_KEY` ni `ANTHROPIC_MODEL`, l'application fonctionne
-normalement pour l'ingestion et pour les étapes 3 à 6 (workflow Claude Code, aucune clé nécessaire).
+`requirements.txt` suffit (Streamlit, pypdf, python-docx, Pydantic, pytest) : aucun SDK de modèle, aucune clé ni
+variable obligatoire.
 
 ## Étapes 3 à 6 dans Claude Code (sans API)
 
 Procédure complète : [`TRACE_WORKFLOW.md`](TRACE_WORKFLOW.md). Ouvrir Claude Code dans le dépôt et demander
-par exemple « Exécute TRACE sur `chemin/entretien.docx` jusqu'à l'étape 5 ». Claude Code lance les parties
+par exemple « Exécute TRACE sur `entretien.docx` jusqu'à l'étape 5 », puis « Exécute TRACE Stage 6 sur les runs
+`<run A>` et `<run B>` ». Claude Code lance les parties
 déterministes de TRACE, joue chaque agent dans un sous-agent (`.claude/agents/trace-agent.md`) à partir de son
 prompt (`prompts/*.md`, source de vérité), fait valider chaque réponse par les validateurs existants, puis
 TRACE enregistre les sorties habituelles des étapes 3 à 6 :
@@ -75,9 +79,8 @@ python scripts/trace_workflow.py status <run>
 
 Dans Streamlit, les sections « Analyse IA — Étape 3 », « Étape 4 », « Étape 5 » et « Étape 6 » préparent et reprennent le même workflow
 (boutons « Préparer / reprendre l'étape … », 0 appel API : tâches en attente, réponses à corriger, résultats,
-téléchargements), et « Ouvrir un run existant » affiche un run préparé dans Claude Code. Les anciens modes par API
-ne sont utilisés que si `TRACE_STAGE3_BACKEND` … `TRACE_STAGE6_BACKEND` = `anthropic` (conservés pour les
-anciens tests pendant la migration ; jamais un repli automatique).
+téléchargements), et « Ouvrir un run existant » affiche un run préparé dans Claude Code. Il n'existe aucun autre
+moteur : une tâche sans réponse reste en attente de Claude Code, jamais confiée à une API.
 
 ## Lancer l'application
 
@@ -97,10 +100,10 @@ Tests ciblés :
 python -m pytest tests/test_document_extractor.py     # extraction TXT / DOCX / PDF
 python -m pytest tests/test_transcript_structurer.py  # tours de parole
 python -m pytest tests/test_ingestion.py              # couverture, robustesse, runs
-python -m pytest tests/test_llm_client.py             # client LLM : config, réessais, réponses invalides
+python -m pytest tests/test_llm_client.py             # réponses d'agent : JSON, schéma, erreurs ; schémas stricts ; aucun SDK
 python -m pytest tests/test_evidence_validator.py     # validation des citations
 python -m pytest tests/test_analysis_cache.py         # cache des analyses
-python -m pytest tests/test_analysis_pipeline.py      # indépendance, parallélisme, échecs isolés
+python -m pytest tests/test_analysis_pipeline.py      # indépendance, agents en parallèle, échecs isolés
 python -m pytest tests/test_app_stage3.py             # interface de l'étape 3 (AppTest)
 python -m pytest tests/test_speaker_attribution_auditor.py  # étape 3.5 : audit des locuteurs
 python -m pytest tests/test_interpretation_guard.py   # étape 3.5 : « réparation » en contexte
@@ -120,7 +123,7 @@ python -m pytest tests/test_stage4_1.py               # étape 4.1 : proximité,
 python -m pytest tests/test_trajectory_candidates.py  # étape 5 : préparation déterministe, ancrages temporels
 python -m pytest tests/test_trajectory_validator.py   # étape 5 : validateur (requalifications, vocabulaire)
 python -m pytest tests/test_stage5_sociological.py    # étape 5 : cas A à H (temporalité, contexte, exception…)
-python -m pytest tests/test_stage5_pipeline.py        # étape 5 : blocages, cache, coût, échecs
+python -m pytest tests/test_stage5_pipeline.py        # étape 5 : blocages, cache, une tâche par entretien, échecs
 python -m pytest tests/test_stage5_long.py            # étape 5 : entretien long « OTMANE-like »
 python -m pytest tests/test_stage4_restore.py         # restauration de sorties de l'étape 4 téléchargées
 python -m pytest tests/test_app_stage5.py             # étape 5 : interface (AppTest)
@@ -139,11 +142,11 @@ python scripts/stage6_payload_report.py              # étape 6 : tailles de la 
 
 Les tests n'utilisent que des documents **synthétiques** générés à la volée
 (`tests/synthetic_docs.py`, `tests/synthetic_interviews.py`, `tests/synthetic_stage4.py`…) : aucun vrai
-entretien n'est versionné. **Aucun test n'appelle l'API Anthropic** : le LLM
-est simulé et `tests/conftest.py` interdit le transport réel et toute
-connexion réseau.
+entretien n'est versionné. **Aucun test n'appelle une API ni le réseau** : les agents sont simulés
+(`tests/fake_llm.FakeAgents`, ou réponses écrites dans les paquets de tâche du workflow) et `tests/conftest.py`
+fait échouer immédiatement toute connexion réseau.
 
-Test navigateur (Playwright + Chromium, LLM simulé, lancé à la main ;
+Test navigateur (Playwright + Chromium, agents simulés joués à travers le workflow, lancé à la main ;
 nécessite `pip install playwright` et un Chromium, hors `requirements.txt`) :
 
 ```bash
@@ -151,19 +154,10 @@ python tests/e2e/browser_check.py               # scénarios A à P
 python tests/e2e/browser_check.py --only-stage6  # étape 6 seulement (N à P)
 ```
 
-Démonstration locale du parcours complet des étapes 3 et 4 **sans clé ni appel
-réel** (LLM simulé) : `streamlit run tests/e2e/fake_llm_app.py` (pour l'étape 4,
-importer l'entretien synthétique `Entretien_etape_4.txt`, écrit par
-`tests/synthetic_stage4.py`, ou laisser le test navigateur le faire).
-
-Test **réel** de l'étape 3 sur l'entretien synthétique (2 appels API,
-**consomme des tokens**, exige une option explicite) ; `--stage35` utilise
-l'entretien synthétique de l'étape 3.5 (3 appels : audit des locuteurs + 2 agents) :
-
-```bash
-python scripts/smoke_test_stage3.py --confirm-api-cost
-python scripts/smoke_test_stage3.py --confirm-api-cost --stage35
-```
+Démonstration locale du parcours complet des étapes 3 à 6 **sans clé ni appel** (agents simulés, chaque tâche
+du workflow jouée aussitôt) : `streamlit run tests/e2e/fake_llm_app.py` (pour l'étape 4, importer l'entretien
+synthétique `Entretien_etape_4.txt`, écrit par `tests/synthetic_stage4.py`, ou laisser le test navigateur le
+faire).
 
 ## Fonctionnement
 
@@ -177,27 +171,28 @@ python scripts/smoke_test_stage3.py --confirm-api-cost --stage35
 
 5. **Étape 3 (facultative, sur action explicite)** : dans la section
    « Analyse IA — Étape 3 », choisir « Test — un entretien » ou « Corpus
-   complet » (confirmation supplémentaire), puis cliquer sur « Lancer les deux
-   analyses IA ». Le bouton indique le nombre d'appels API payants prévus
-   (2 par entretien absent du cache, plus 1 d'audit des locuteurs seulement si
-   des tours suspects sont détectés). L'interface affiche ensuite les statuts
+   complet », puis cliquer sur « Préparer / reprendre l'étape 3 (workflow Claude Code, 0 appel API) ». TRACE
+   écrit les tâches d'agent (une d'audit des locuteurs seulement si des tours suspects sont détectés, puis une
+   par agent ou par bloc) et affiche l'instruction à donner à Claude Code ; une fois les réponses écrites, un
+   nouveau clic les valide et enregistre les sorties. L'interface affiche alors les statuts
    de l'audit et des deux agents, le nombre de tours suspects et à vérifier, de
-   pratiques, de signaux et de citations invalides, les tokens consommés, un
+   pratiques, de signaux et de citations invalides, un
    aperçu, les avertissements de locuteur (« Ces suggestions ne modifient pas
-   la transcription originale. ») et les téléchargements JSON.
+   la transcription originale. ») et les téléchargements JSON. Une étape déjà terminée et à jour n'est pas rejouée.
 
 6. **Étape 4 (facultative, sur action explicite, après l'étape 3)** : dans la
    section « Étape 4 — Épisodes d'accountability », choisir un entretien (ou
-   tous), lire l'estimation (candidats déterministes, au plus 1 appel par
-   entretien, résultats en cache, entretiens bloqués), puis cliquer sur
-   « Construire les épisodes d'accountability ». L'interface affiche le statut
+   tous), puis cliquer sur « Préparer / reprendre l'étape 4 (workflow Claude Code, 0 appel API) » (candidats
+   déterministes, une tâche d'agent par bloc de candidats, entretiens bloqués signalés). L'interface affiche le statut
    de l'étape 3, le nombre de candidats, d'épisodes d'accountability, de
    pratiques ordinaires (examinées et sans marqueur), d'incertains et
    d'avertissements, un aperçu des 3 premiers épisodes et les téléchargements
    `accountability_episodes.json` et `accountability_episode_validation.json`.
 
-L'ingestion ne déclenche jamais d'appel IA. Les étapes du pipeline au-delà
-de la construction des épisodes d'accountability restent inactives.
+7. **Étapes 5 et 6** : mêmes boutons « Préparer / reprendre » dans les sections « Étape 5 » (par entretien) et
+   « Étape 6 » (sur un corpus de sorties de l'étape 5 importées ou reprises du run).
+
+L'ingestion ne déclenche jamais d'agent. Aucune étape n'appelle une API.
 
 Chaque run produit :
 
@@ -211,16 +206,18 @@ data/outputs/<run_id>/interviews/<interview_id>/
     ingestion_report.json                   rapport de qualité
     analysis/                               étape 3 (si lancée)
         speaker_attribution_audit.json      audit des locuteurs (étape 3.5) : tours suspects, suggestions
-        speaker_audit_manifest.json         version, empreintes, modèle, cache, tokens de l'audit
+        speaker_audit_manifest.json         version, empreintes, moteur, champs legacy (0 appel API)
         practice_extractor.json             pratiques, citations annotées
         interaction_signals.json            signaux interactionnels, citations annotées
-        practice_manifest.json              agent, versions, empreintes, modèle, cache, tokens
+        practice_manifest.json              agent, versions, empreintes, moteur, champs legacy (0 appel API)
         interaction_manifest.json
         evidence_validation.json            validation déterministe des citations
         accountability_episodes.json        étape 4 : candidats, épisodes, pratiques sans marqueur
-        accountability_episode_manifest.json  étape 4 : version, empreintes des sources, modèle, cache, tokens
+        accountability_episode_manifest.json  étape 4 : version, empreintes des sources, moteur, champs legacy
         accountability_episode_validation.json  étape 4 : validation déterministe des épisodes
-data/cache/analysis/<agent>/<clé>.json      cache global des réponses validées
+data/outputs/<run_id>/workflow/stage<N>/    paquets de tâche du workflow Claude Code (task.json, response.json…)
+data/cache/analysis/<agent>/<clé>.json      cache des réponses validées (AnalysisCache ; le workflow relit
+                                            toujours response.json et ne s'en sert pas)
 ```
 
 ## Couche d'ingestion
@@ -299,7 +296,7 @@ pour l'audit des locuteurs, [`docs/speaker_attribution_audit.md`](docs/speaker_a
 - **Indépendance** : chaque agent reçoit ses propres consignes, son propre
   schéma et le même entretien compact ; jamais la sortie de l'autre.
 - **Speaker Attribution Auditor** (étape 3.5) : règles déterministes puis, s'il
-  y a des tours suspects, UN appel sur un extrait (candidats + voisins) ; ne
+  y a des tours suspects, UNE tâche d'agent sur un extrait (candidats + voisins) ; ne
   modifie jamais la transcription ; les tours douteux sont signalés aux deux
   agents par un `speaker_warning`, le locuteur officiel restant inchangé.
 - **Practice Extractor** : descriptif et « aveugle » à la théorie ; reprend
@@ -316,7 +313,7 @@ pour l'audit des locuteurs, [`docs/speaker_attribution_audit.md`](docs/speaker_a
   d'état psychologique. Un entretien long est lu en blocs qui se chevauchent,
   plus une lecture légère des passages éloignés, puis fusionné sans LLM
   (étape 3.6, [`docs/interaction_chunking.md`](docs/interaction_chunking.md)) ;
-  un bloc tronqué rend l'analyse `PARTIAL`, jamais présentée comme complète.
+  un bloc en échec (réponse non conforme) rend l'analyse `PARTIAL`, jamais présentée comme complète.
   Étape 3.7 : seuls les phénomènes **pertinents pour le récit des pratiques**
   sont relevés (pas d'inventaire de « euh », « juste », « un peu »…) ; une
   couche déterministe complète les `turn_ids` et écarte, en les conservant à
@@ -328,20 +325,18 @@ pour l'audit des locuteurs, [`docs/speaker_attribution_audit.md`](docs/speaker_a
   entretien, que les intervalles sont ordonnés. Rien n'est corrigé : les
   objets douteux sont marqués `needs_review`.
 - **Sécurité** : la transcription est une donnée, jamais une instruction ;
-  elle est encadrée et échappée ; la sortie est contrainte par un schéma JSON
-  puis revalidée.
+  elle est encadrée et échappée ; la réponse de l'agent doit respecter un schéma JSON
+  strict, puis elle est revalidée (Pydantic, validateurs déterministes).
 - **Garde-fou** : vocabulaire interprétatif signalé dans les champs rédigés ;
   « réparation » est examinée en contexte (la réparation d'un lave-vaisselle
   n'est pas signalée, une « réparation discursive » l'est).
-- **Cache** : une analyse n'est repayée que si le fichier, le transcript, le
-  prompt, la version de l'agent, le schéma, le modèle ou les paramètres
-  changent ; modifier un agent ou l'auditeur ne relance que lui.
-- **Coût** : tokens d'entrée / sortie et nombre d'appels affichés ; aucun
-  montant inventé.
-- **Configuration** : `ANTHROPIC_API_KEY` et `ANTHROPIC_MODEL` (environnement
-  ou `.env`) ; `TRACE_MAX_CONCURRENCY` (défaut 2) limite les appels simultanés ;
-  `TRACE_INTERACTION_CHUNK_TOKENS` (défaut 5 000) et `TRACE_PRACTICE_CHUNK_TOKENS`
-  (défaut 4 000) fixent la taille d'un bloc de chaque agent.
+- **Garde contre les réexécutions** : une étape terminée et calculée sur les sorties actuelles de l'étape
+  précédente n'est pas rejouée ; un paquet de tâche est identifié par l'empreinte de son contenu (prompt,
+  message, schéma) : modifier un agent ou l'auditeur ne produit de nouvelles tâches que pour lui.
+- **Coût** : aucun — 0 appel API. Les champs `api_calls`, `usage` (tokens) et `billed_this_run` des manifests
+  sont conservés pour la compatibilité des formats et valent toujours 0 / `null` / `false`.
+- **Configuration** : aucune variable obligatoire ; `TRACE_INTERACTION_CHUNK_TOKENS` (défaut 5 000) et
+  `TRACE_PRACTICE_CHUNK_TOKENS` (défaut 4 000) fixent la taille d'un bloc de chaque agent.
 
 ## Étape 4 — épisodes d'accountability
 
@@ -366,13 +361,12 @@ Documentation complète : [`docs/stage4_accountability_episodes.md`](docs/stage4
 - **Validateur déterministe** : identifiants, citations mot pour mot, voix de
   l'enquêté·e, opérations, pratiques ordinaires « étoffées », fusions abusives,
   avertissements de locuteur propagés, vocabulaire psychologisant interdit.
-- **Étape 3 incomplète** : FAILED → étape 4 `BLOCKED` (aucun appel) ; PARTIAL →
+- **Étape 3 incomplète** : FAILED → étape 4 `BLOCKED` (aucune tâche) ; PARTIAL →
   étape 4 `PARTIAL`, `analysis_complete: false`.
-- **Coût et cache** : 0 appel sans candidat, sinon 1 par entretien ; cache propre à
-  l'étape 4 (modifier l'étape 4 ne relance qu'elle). Requête normalisée (chaque
-  pratique, signal, citation et tour une seule fois, identifiants abrégés) ; seuil
-  d'un appel unique : 24 000 tokens estimés ou 60 candidats, au-delà découpage par
-  composantes entières de candidats.
+- **Tâches** : aucune sans candidat, sinon 1 par entretien (0 appel API) ; modifier l'étape 4 ne relance
+  qu'elle. Requête normalisée (chaque pratique, signal, citation et tour une seule fois, identifiants
+  abrégés) ; seuil d'une tâche unique : 24 000 tokens estimés ou 60 candidats, au-delà découpage par
+  composantes entières de candidats (une tâche par bloc).
 - **Étape 4.1** : proximité mesurée dans le tour (≤ 200 caractères entre citations) ;
   fusion seulement entre candidats reliés explicitement (sinon `DISCONNECTED_MERGE`,
   épisode rejeté et non utilisable) ; affects et intentions jamais employés comme
@@ -399,7 +393,8 @@ Documentation complète : [`docs/stage5_trajectory.md`](docs/stage5_trajectory.m
 - **Validateur** (`core/trajectory_validator.py`) : appuis utilisables, tours de l'enquêté·e, ancrages exacts,
   exception = règle + cas, propagation des épisodes à revoir (une affirmation qui ne repose que sur eux est à
   revoir), vocabulaire psychologisant ou de récit de conversion, mot de l'enquêteur jamais attribué.
-- **Coût et cache** : 0 appel sans matériau suffisant, sinon 1 par entretien ; cache propre à l'étape 5.
+- **Tâches** : aucune sans matériau suffisant, sinon 1 par entretien (0 appel API) ; une étape 5 terminée et
+  à jour n'est pas rejouée.
 - **Sorties** : `student_trajectory.json`, `student_trajectory_validation.json`, `student_trajectory_manifest.json`.
 
 ## Étape 6 — comparaison inter-entretiens
@@ -420,8 +415,8 @@ Documentation complète : [`docs/stage6_cross_interview.md`](docs/stage6_cross_i
   positions `explicit_presence` / `explicit_refusal` / `contrary_case` / `not_observed`, éléments à revoir
   secondaires (jamais une régularité forte), cas négatifs toujours conservés, régularité sur un seul entretien
   requalifiée, pas de typologie, de causalité ni de généralisation au-delà du N observé.
-- **Coût et cache** : 1 appel par corpus (pas de MAP → REDUCE : non justifié par la mesure) ; même corpus → 0 appel ;
-  ajouter ou modifier un entretien n'invalide que l'étape 6.
+- **Tâches** : 1 par corpus (pas de MAP → REDUCE : non justifié par la mesure), 0 appel API ; un corpus déjà
+  analysé à l'identique n'est pas rejoué ; ajouter ou modifier un entretien n'invalide que l'étape 6.
 - **Sorties** (`data/outputs/cross_interview/<corpus_id>/analysis/`) : `cross_interview_comparison.json`,
   `cross_interview_validation.json`, `cross_interview_manifest.json`.
 
@@ -436,11 +431,11 @@ restauré depuis fichiers — 0 appel API ». L'étape 5 peut alors être lancé
 
 ## Restaurer une étape 3 déjà calculée
 
-**Le stockage local de l'application n'est pas durable.** Les runs (`data/outputs/`) et le cache TRACE
-(`data/cache/`) vivent sur le disque de la machine qui exécute Streamlit ; sur Streamlit Cloud, un
-redéploiement (fusion d'une PR, redémarrage) les efface. Un entretien réimporté crée alors un nouveau run
-sans sortie de l'étape 3 : l'interface annonce 0 résultat en cache, propose de repayer tous les appels de
-l'étape 3, et l'étape 4 demande de la relancer. **Téléchargez donc toujours les JSON de l'étape 3.**
+**Le stockage local de l'application n'est pas durable.** Les runs (`data/outputs/`) vivent sur le disque de la
+machine qui exécute Streamlit ; sur Streamlit Cloud, un redéploiement (fusion d'une PR, redémarrage) les
+efface. Un entretien réimporté crée alors un nouveau run sans sortie de l'étape 3 : il faudrait refaire jouer
+toutes les tâches de l'étape 3, et l'étape 4 demande de la relancer. **Téléchargez donc toujours les JSON de
+l'étape 3.**
 
 Pour les réutiliser sans aucun appel API : réimporter l'entretien et lancer l'ingestion, puis, dans la
 section « Étape 4 », ouvrir « Restaurer des résultats Stage 3 existants », choisir l'entretien et importer
@@ -465,8 +460,8 @@ Une fois validés, les fichiers sont recopiés **octet pour octet** dans `analys
 restauration (`stage3_restore_manifest.json` : nom importé, SHA-256 et taille de chaque fichier) ; les
 sorties périmées de l'étape 4 sont retirées. Aucune étape 3, aucun audit des locuteurs, aucun appel :
 l'interface affiche « Stage 3 restauré depuis fichiers — 0 appel API » et l'étape 4 lit ces fichiers comme
-des sorties normales. Le cache TRACE de l'étape 3, lui, n'est pas reconstitué : relancer l'étape 3 sur
-cet entretien referait ses appels.
+des sorties normales. Les paquets de tâche de l'étape 3, eux, ne sont pas reconstitués : relancer l'étape 3
+sur cet entretien (`--force`) referait ses tâches.
 
 ## Architecture
 
@@ -479,7 +474,7 @@ core/document_extractor.py     extraction du texte brut (TXT, DOCX, PDF)
 core/transcript_structurer.py  découpage en tours de parole (règles explicites)
 core/ingestion_validator.py    contrôle de couverture, statistiques, rapport de qualité
 core/ingestion.py              orchestration par fichier et par run
-core/llm_client.py             client LLM (SDK Anthropic) : config, réessais, sortie JSON validée
+core/llm_client.py             réponse d'un agent : JSON validé par Pydantic, erreurs (AWAITING_AGENT…), paramètres
 core/claude_code_workflow.py   étapes 3 à 6 sans API : paquets de tâche, client sans réseau, passages gardés, contrôle des réponses
 core/analysis.py               étape 3 : deux agents en parallèle, sorties, manifests, statuts
 core/analysis_cache.py         cache déterministe des analyses
@@ -516,7 +511,6 @@ prompts/trajectory_mapper.md   consignes du Trajectory Mapper (étape 5, v1.0)
 prompts/cross_interview_comparator.md  consignes du Cross-Interview Comparator (étape 6, v1.0)
 scripts/stage6_payload_report.py  mesure de la représentation de l'étape 6 (aucun appel)
 scripts/trace_workflow.py      commandes du workflow Claude Code (ingestion, étapes 3 à 6, contrôle, état)
-scripts/smoke_test_stage3.py   ancien test réel par API de l'étape 3 (payant, sur confirmation) ; hors workflow
 TRACE_WORKFLOW.md              orchestration du workflow multi-agents dans Claude Code
 CLAUDE.md                      consignes de Claude Code dans ce dépôt
 .claude/agents/trace-agent.md  sous-agent qui exécute UNE tâche d'agent
@@ -535,12 +529,13 @@ tests/                 tests automatiques (pytest), documents synthétiques uniq
 
 ## Sécurité
 
-- Aucun secret dans le dépôt : `.env` est ignoré par git. La clé est lue
-  uniquement dans `ANTHROPIC_API_KEY` et n'est jamais affichée ni journalisée.
+- Aucun secret : TRACE n'utilise ni clé ni API ; `.env` (réglages facultatifs) est ignoré par git.
+- Aucun accès réseau pendant une analyse : les agents sont joués par Claude Code, TRACE lit leurs réponses
+  dans les paquets de tâche.
 - Les données d'entretien (`data/inputs/**`, `data/outputs/**`), le cache
   d'analyse (`data/cache/**`) et les journaux (`logs/**`) ne sont pas versionnés.
-- Les journaux ne contiennent ni transcript ni citation : identifiants,
-  statuts, tokens et durées seulement.
+- Les journaux ne contiennent ni transcript ni citation : identifiants et
+  statuts seulement.
 
 ## Limites connues de l'ingestion
 

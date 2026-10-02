@@ -19,7 +19,7 @@ chacun des deux agents en plusieurs blocs de tours qui se chevauchent (un appel
 par bloc, cache par bloc) ; l'Interaction Signal Reader ajoute une lecture légère
 à longue distance. Les sorties sont fusionnées de façon déterministe en UN
 practice_extractor.json et UN interaction_signals.json (voir core/practice_chunking.py
-et core/interaction_chunking.py). Un bloc en échec (réponse tronquée…) rend
+et core/interaction_chunking.py). Un bloc en échec (réponse non conforme…) rend
 l'analyse PARTIAL, sans effacer les blocs réussis. Un échec d'un agent n'efface
 pas la sortie de l'autre ; un entretien en échec ne bloque pas les autres.
 
@@ -52,7 +52,7 @@ from core import config, evidence_validator, interaction_chunking, interpretatio
 from core import signal_selectivity
 from core import speaker_attribution_auditor as speaker_audit
 from core.analysis_cache import AnalysisCache, compute_cache_key, write_json_atomic
-from core.llm_client import LLMClient, LLMError, LLMSettings, Transport
+from core.llm_client import LLMError, LLMSettings
 from core.run_manager import save_metadata
 from core.schemas import STATUS_FAIL
 
@@ -67,7 +67,7 @@ STATUS_SUCCESS_WITH_WARNINGS = "SUCCESS_WITH_WARNINGS"
 STATUS_FAILED = "FAILED"
 STATUS_CACHED = "CACHED"
 STATUS_PARTIAL = "PARTIAL"      # entretien long : au moins un bloc (ou la lecture à longue distance) en échec
-STATUS_TRUNCATED = "TRUNCATED"  # statut d'un bloc dont la réponse a atteint la limite de sortie
+STATUS_TRUNCATED = "TRUNCATED"  # legacy : bloc tronqué (anciennes sorties par API), plus produit par le workflow
 ANALYSIS_STATUSES = (STATUS_PENDING, STATUS_RUNNING, STATUS_SUCCESS, STATUS_SUCCESS_WITH_WARNINGS,
                      STATUS_FAILED, STATUS_CACHED, STATUS_PARTIAL)
 DONE_STATUSES = (STATUS_SUCCESS, STATUS_SUCCESS_WITH_WARNINGS, STATUS_CACHED)
@@ -378,7 +378,7 @@ def _manifest_skeleton(spec: AgentSpec, prepared: PreparedInterview, settings: L
     }
 
 
-async def run_agent(spec: AgentSpec, prepared: PreparedInterview, client: LLMClient, cache: AnalysisCache,
+async def run_agent(spec: AgentSpec, prepared: PreparedInterview, client, cache: AnalysisCache,
                     settings: LLMSettings, force: bool = False, on_status: StatusCallback | None = None,
                     extra: dict | None = None, postprocess: PostProcess | None = None) -> dict:
     """Exécute UN agent sur UN entretien en UN appel. Ne lève pas d'exception : renvoie le manifest.
@@ -413,7 +413,7 @@ async def run_agent(spec: AgentSpec, prepared: PreparedInterview, client: LLMCli
             )
             output = result.data.model_dump(mode="json")
             cache.store(key_fields, output, _call_record(result))
-            manifest.update(created_at=_now(), api_calls=result.attempts, billed_this_run=result.attempts > 0,
+            manifest.update(created_at=_now(), api_calls=result.attempts, billed_this_run=False,
                             usage=result.usage,
                             duration_seconds=result.duration_seconds, response_model=result.response_model,
                             request_id=result.request_id, stop_reason=result.stop_reason)
@@ -449,7 +449,7 @@ async def run_agent(spec: AgentSpec, prepared: PreparedInterview, client: LLMCli
                         has_warnings=evidence_validator.has_problems(report), **manifest_extra)
     except LLMError as error:
         manifest.update(status=STATUS_FAILED, error=error.to_dict(), api_calls=error.attempts,
-                        usage=error.usage, billed_this_run=bool(error.usage and error.usage.get("input_tokens")),
+                        usage=error.usage, billed_this_run=False,
                         duration_seconds=error.duration_seconds, request_id=error.request_id)
     except Exception as exc:  # noqa: BLE001 — isolé à cet agent, sans contenu d'entretien
         logger.error("Analyse %s : erreur inattendue %s\n%s", label, type(exc).__name__,
@@ -481,7 +481,7 @@ def _chunking_summary(spec: AgentSpec, chunks: list, settings: LLMSettings, tran
     }
 
 
-async def run_chunkable_agent(spec: AgentSpec, prepared: PreparedInterview, client: LLMClient,
+async def run_chunkable_agent(spec: AgentSpec, prepared: PreparedInterview, client,
                               cache: AnalysisCache, settings: LLMSettings, force: bool = False,
                               on_status: StatusCallback | None = None) -> dict:
     """Un des deux agents : un appel pour un entretien court (comportement inchangé), des blocs sinon."""
@@ -497,7 +497,7 @@ async def run_chunkable_agent(spec: AgentSpec, prepared: PreparedInterview, clie
     return await run_chunked_agent(spec, prepared, chunks, client, cache, settings, force, on_status)
 
 
-async def run_interaction_reader(spec: AgentSpec, prepared: PreparedInterview, client: LLMClient,
+async def run_interaction_reader(spec: AgentSpec, prepared: PreparedInterview, client,
                                  cache: AnalysisCache, settings: LLMSettings, force: bool = False,
                                  on_status: StatusCallback | None = None) -> dict:
     """Interaction Signal Reader : un appel pour un entretien court, des blocs sinon."""
@@ -510,7 +510,7 @@ def _call_record(result) -> dict:
             "request_id": result.request_id, "stop_reason": result.stop_reason}
 
 
-async def _cached_call(spec: AgentSpec, user_message: str, client: LLMClient, cache: AnalysisCache,
+async def _cached_call(spec: AgentSpec, user_message: str, client, cache: AnalysisCache,
                        settings: LLMSettings, force: bool, label: str) -> dict:
     """UN appel (bloc ou lecture à longue distance), repris du cache s'il existe. Ne lève pas d'exception."""
     key_fields = chunk_cache_key_fields(spec, user_message, settings)
@@ -533,14 +533,12 @@ async def _cached_call(spec: AgentSpec, user_message: str, client: LLMClient, ca
         output = result.data.model_dump(mode="json")
         cache.store(key_fields, output, _call_record(result))
         record.update(status=STATUS_SUCCESS, output=output, created_at=_now(), api_calls=result.attempts,
-                      billed_this_run=result.attempts > 0, usage=result.usage, duration_seconds=result.duration_seconds,
+                      billed_this_run=False, usage=result.usage, duration_seconds=result.duration_seconds,
                       response_model=result.response_model, request_id=result.request_id,
                       stop_reason=result.stop_reason)
     except LLMError as error:
-        record.update(status=STATUS_TRUNCATED if error.code == "TRUNCATED" else STATUS_FAILED, error=error.to_dict(),
-                      api_calls=error.attempts, usage=error.usage, duration_seconds=error.duration_seconds,
-                      billed_this_run=bool(error.usage and error.usage.get("input_tokens")),
-                      request_id=error.request_id, stop_reason="max_tokens" if error.code == "TRUNCATED" else None)
+        record.update(status=STATUS_FAILED, error=error.to_dict(), api_calls=error.attempts, usage=error.usage,
+                      duration_seconds=error.duration_seconds, billed_this_run=False, request_id=error.request_id)
     except Exception as exc:  # noqa: BLE001 — isolé à ce bloc, sans contenu d'entretien
         logger.error("Analyse %s : erreur inattendue %s\n%s", label, type(exc).__name__,
                      "".join(traceback.format_tb(exc.__traceback__)))
@@ -563,7 +561,7 @@ def _public_record(record: dict) -> dict:
     return {k: v for k, v in record.items() if k != "output"}
 
 
-async def _long_distance_pass(prepared: PreparedInterview, chunks: list, succeeded: list, client: LLMClient,
+async def _long_distance_pass(prepared: PreparedInterview, chunks: list, succeeded: list, client,
                               cache: AnalysisCache, settings: LLMSettings, force: bool, label: str) -> tuple:
     """Interaction Reader : lecture à longue distance, si tous les blocs ont réussi. → (bilan, appel, signaux)."""
     transcript, warnings = prepared.transcript, prepared.speaker_warnings
@@ -595,7 +593,7 @@ async def _long_distance_pass(prepared: PreparedInterview, chunks: list, succeed
     return long_distance, record, kept
 
 
-async def run_chunked_agent(spec: AgentSpec, prepared: PreparedInterview, chunks: list, client: LLMClient,
+async def run_chunked_agent(spec: AgentSpec, prepared: PreparedInterview, chunks: list, client,
                             cache: AnalysisCache, settings: LLMSettings, force: bool = False,
                             on_status: StatusCallback | None = None) -> dict:
     """Un des deux agents sur un entretien LONG. Ne lève pas d'exception : renvoie le manifest.
@@ -611,7 +609,6 @@ async def run_chunked_agent(spec: AgentSpec, prepared: PreparedInterview, chunks
     interaction = spec.name == INTERACTION.name
     noun = "signals" if interaction else "practices"
     notes_key = "reading_notes" if interaction else "extraction_notes"
-    size_variable = "TRACE_INTERACTION_CHUNK_TOKENS" if interaction else "TRACE_PRACTICE_CHUNK_TOKENS"
     transcript = prepared.transcript
     warnings = prepared.speaker_warnings
     chunking = _chunking_summary(spec, chunks, settings, transcript)
@@ -692,8 +689,9 @@ async def run_chunked_agent(spec: AgentSpec, prepared: PreparedInterview, chunks
                     parts.append(f"lecture à longue distance : {ld_record['error']['message']}")
                 error = {"code": "PARTIAL_ANALYSIS", "status_code": None, "request_id": None, "message": (
                     f"Analyse INCOMPLÈTE : {len(succeeded)}/{len(chunks)} bloc(s) réussi(s). " + " ; ".join(parts)
-                    + ". Les blocs réussis sont conservés (et en cache) : relancez l'analyse pour ne refaire que "
-                    f"les appels manquants. Si un bloc reste tronqué, réduisez {size_variable}.")}
+                    + ". Les blocs réussis sont conservés : corrigez la réponse de l'agent des blocs en échec "
+                    "(workflow Claude Code, TRACE_WORKFLOW.md) puis rejouez l'étape, qui ne refait que les blocs "
+                    "manquants.")}
             notes = [f"Bloc {chunk.index} : {rec['output'][notes_key]}" for chunk, rec in succeeded
                      if rec["output"].get(notes_key)]
             if ld_record is not None and ld_record["status"] in CALL_OK and ld_record["output"].get("reading_notes"):
@@ -737,7 +735,7 @@ async def run_chunked_agent(spec: AgentSpec, prepared: PreparedInterview, chunks
     return {"manifest": manifest, "validation": report}
 
 
-async def run_chunked_interaction(spec: AgentSpec, prepared: PreparedInterview, chunks: list, client: LLMClient,
+async def run_chunked_interaction(spec: AgentSpec, prepared: PreparedInterview, chunks: list, client,
                                   cache: AnalysisCache, settings: LLMSettings, force: bool = False,
                                   on_status: StatusCallback | None = None) -> dict:
     """Interaction Signal Reader sur un entretien LONG (voir `run_chunked_agent`)."""
@@ -753,7 +751,7 @@ def _file_sha256(path: Path) -> str | None:
         return None
 
 
-async def run_speaker_audit(prepared: PreparedInterview, client: LLMClient, cache: AnalysisCache,
+async def run_speaker_audit(prepared: PreparedInterview, client, cache: AnalysisCache,
                             settings: LLMSettings, force: bool = False,
                             on_status: StatusCallback | None = None) -> dict:
     """Audite l'attribution des locuteurs d'UN entretien. Ne lève pas d'exception.
@@ -831,14 +829,14 @@ async def run_speaker_audit(prepared: PreparedInterview, client: LLMClient, cach
                         "stop_reason": result.stop_reason}
                 cache.store(key_fields, output, call)
                 manifest.update(llm_called=True, created_at=_now(), api_calls=result.attempts,
-                                billed_this_run=result.attempts > 0,
+                                billed_this_run=False,
                                 usage=result.usage, duration_seconds=result.duration_seconds,
                                 response_model=result.response_model, request_id=result.request_id,
                                 stop_reason=result.stop_reason)
         except LLMError as error:
             manifest.update(status=STATUS_FAILED, error=error.to_dict(), api_calls=error.attempts,
                             llm_called=bool(error.attempts), usage=error.usage,
-                            billed_this_run=bool(error.usage and error.usage.get("input_tokens")),
+                            billed_this_run=False,
                             duration_seconds=error.duration_seconds, request_id=error.request_id)
         except Exception as exc:  # noqa: BLE001 — isolé à l'audit, sans contenu d'entretien
             logger.error("Audit %s : erreur inattendue %s\n%s", label, type(exc).__name__,
@@ -932,7 +930,7 @@ def _audit_summary(manifest: dict) -> dict:
     return {k: manifest.get(k) for k in keys}
 
 
-async def analyze_interview(prepared: PreparedInterview, client: LLMClient, cache: AnalysisCache,
+async def analyze_interview(prepared: PreparedInterview, client, cache: AnalysisCache,
                             settings: LLMSettings, force: bool = False,
                             on_status: StatusCallback | None = None) -> dict:
     """Audit des locuteurs, puis les deux agents EN PARALLÈLE sur un entretien, puis evidence_validation.json.
@@ -975,18 +973,15 @@ async def analyze_interview(prepared: PreparedInterview, client: LLMClient, cach
     }
 
 
-async def analyze_interviews(prepared_list: list[PreparedInterview], settings: LLMSettings,
-                             transport: Transport | None = None, cache: AnalysisCache | None = None,
-                             force: bool = False, on_status: StatusCallback | None = None,
-                             client=None) -> list[dict]:
-    """Analyse plusieurs entretiens ; la concurrence des appels API est bornée par le client.
+async def analyze_interviews(prepared_list: list[PreparedInterview], settings: LLMSettings, *, client,
+                             cache: AnalysisCache | None = None, force: bool = False,
+                             on_status: StatusCallback | None = None) -> list[dict]:
+    """Analyse plusieurs entretiens.
 
-    `client` : client déjà construit, de même interface que LLMClient (`complete_json`, `aclose`) ; le
-    workflow Claude Code (core/claude_code_workflow.py) y passe un client SANS appel réseau. Sinon, un
-    LLMClient (API Anthropic) est construit à partir de `settings` et `transport`.
+    `client` : client des agents (`complete_json`, `aclose`), injecté par le workflow Claude Code
+    (core/claude_code_workflow.WorkflowClient, AUCUN appel réseau) ou par les tests (agents simulés).
     """
     cache = cache or AnalysisCache()
-    client = client if client is not None else LLMClient(settings, transport=transport)
     try:
         for prepared in prepared_list:
             for spec in (AUDITOR, *AGENTS):
@@ -1042,24 +1037,22 @@ def _step_state(metadata: dict, agent: str) -> str:
     return state + (f", {failed} échec(s))" if failed else ")")
 
 
-def analyze_run(metadata: dict, interview_ids: list[str] | None = None, *, settings: LLMSettings | None = None,
-                transport: Transport | None = None, cache: AnalysisCache | None = None, force: bool = False,
-                on_status: StatusCallback | None = None, client=None) -> dict:
+def analyze_run(metadata: dict, interview_ids: list[str] | None = None, *, client,
+                settings: LLMSettings | None = None, cache: AnalysisCache | None = None, force: bool = False,
+                on_status: StatusCallback | None = None) -> dict:
     """Analyse les entretiens choisis d'un run ingéré et met à jour metadata.json.
 
-    `interview_ids=None` : tous les entretiens analysables. Sans `client`, lève LLMError
-    (NOT_CONFIGURED) si la clé ou le modèle manque ; aucune analyse n'est alors lancée.
-    Avec `client` (workflow Claude Code, sans API), aucune clé n'est demandée.
+    `interview_ids=None` : tous les entretiens analysables. `client` : client des agents, injecté par le
+    workflow Claude Code (aucune clé, aucun appel API).
     """
     settings = settings or LLMSettings.from_env()
-    if client is None and not settings.enabled:
-        raise LLMError("NOT_CONFIGURED", ", ".join(settings.missing))
     files = eligible_files(metadata)
     if interview_ids is not None:
         wanted = set(interview_ids)
         files = [f for f in files if f["ingestion"]["interview_id"] in wanted]
     prepared = [prepare_interview(f["ingestion"]) for f in files]
-    summaries = _run_coroutine(analyze_interviews(prepared, settings, transport, cache, force, on_status, client))
+    summaries = _run_coroutine(analyze_interviews(prepared, settings, client=client, cache=cache, force=force,
+                                                   on_status=on_status))
 
     by_id = {s["interview_id"]: s for s in summaries}
     for info in files:
@@ -1071,7 +1064,7 @@ def analyze_run(metadata: dict, interview_ids: list[str] | None = None, *, setti
         "model": settings.model,
         "interview_ids": [p.interview_id for p in prepared],
         "forced": force,
-        "max_concurrency": settings.max_concurrency,
+        "max_concurrency": None,  # legacy (anciens appels API simultanés) : sans objet dans le workflow
         "usage": summarize_usage(summaries),
     }
     save_metadata(metadata, Path(metadata["output_dir"]))

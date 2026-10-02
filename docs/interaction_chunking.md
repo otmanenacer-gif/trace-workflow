@@ -1,5 +1,11 @@
 # Étape 3.6 — Interaction Signal Reader sur les entretiens longs
 
+> **Exécution** : les agents sont joués par Claude Code (workflow multi-agents,
+> [`TRACE_WORKFLOW.md`](../TRACE_WORKFLOW.md)), sans aucun appel à une API de modèle. Dans ce document, un
+> « appel » désigne une **tâche d'agent** du workflow ; les mentions de tokens facturés, de cache de l'API ou
+> de `TRACE_LLM_MAX_TOKENS` décrivent la conception d'origine (exécution par API, retirée) : les champs
+> correspondants des manifests sont conservés et valent toujours 0 / `null`.
+
 > Étape 3.7 : le Practice Extractor est découpé à son tour (même découpage, taille
 > 4 000, chevauchement de 8 tours) ; l'Interaction Reader applique une règle de
 > pertinence (consignes 1.3) et une couche déterministe de sélectivité avant la

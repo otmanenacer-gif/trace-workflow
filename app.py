@@ -68,7 +68,7 @@ from core import accountability, analysis, config, stage3_restore, stage4_restor
 from core import cross_interview, cross_interview_corpus  # noqa: E402
 from core import claude_code_workflow as workflow  # noqa: E402
 from core.ingestion import ingest_run  # noqa: E402
-from core.llm_client import LLMError, LLMSettings  # noqa: E402
+from core.llm_client import LLMSettings  # noqa: E402
 from core.run_manager import TraceError, get_extension, init_run, list_runs, load_metadata  # noqa: E402
 from core.run_manager import load_problematique, save_problematique  # noqa: E402
 
@@ -134,11 +134,9 @@ def format_count(value: int | None) -> str:
     return f"{value or 0:,}".replace(",", "\u202f")
 
 
-def render_pipeline(run: dict | None, llm_enabled: bool) -> None:
-    """Affiche les étapes : structuration, puis les deux agents de l'étape 3 ; le reste est inactif."""
+def render_pipeline(run: dict | None) -> None:
+    """Affiche les étapes : ingestion, puis les étapes IA (workflow Claude Code, aucun appel API)."""
     ai_steps = (config.PRACTICE_STEP, config.INTERACTION_STEP, config.ACCOUNTABILITY_STEP, config.TRAJECTORY_STEP)
-    workflow_steps = {config.PRACTICE_STEP: "3", config.INTERACTION_STEP: "3", config.ACCOUNTABILITY_STEP: "4",
-                      config.TRAJECTORY_STEP: "5"}
     for index, step in enumerate(config.PIPELINE_STEPS, start=1):
         if step == config.INGESTION_STEP:
             state = run["pipeline"][step] if run else "prête"
@@ -152,24 +150,16 @@ def render_pipeline(run: dict | None, llm_enabled: bool) -> None:
                          if (last.get("error") or {}).get("code") == workflow.AWAITING_AGENT else last["status"])
                 st.markdown(f"{'🟠' if warn else '🟢'} **{index}. {step}** (IA) — {label} "
                             f"({last['corpus_n_usable']}/{last['corpus_n_total']} entretien(s) exploitable(s))")
-            elif workflow.stage6_backend() == workflow.BACKEND_CLAUDE_CODE:
+            else:
                 st.markdown(f"🔵 **{index}. {step}** (IA) — prête, workflow Claude Code (0 appel API), sur import "
                             "des sorties de l'étape 5")
-            elif llm_enabled:
-                st.markdown(f"🔵 **{index}. {step}** (IA) — prête, sur import des sorties de l'étape 5")
-            else:
-                st.markdown(f"⚪ **{index}. {step}** (IA) — _désactivée (clé API ou modèle absent)_")
         elif step in ai_steps:
             state = run["pipeline"].get(step, "inactive") if run else "inactive"
             if state != "inactive":
                 warn = "échec" in state or "incomplet" in state or "bloqué" in state
                 st.markdown(f"{'🟠' if warn else '🟢'} **{index}. {step}** (IA) — {state}")
-            elif step in workflow_steps and workflow.stage_backend(workflow_steps[step]) == workflow.BACKEND_CLAUDE_CODE:
-                st.markdown(f"🔵 **{index}. {step}** (IA) — prête, workflow Claude Code (0 appel API)")
-            elif llm_enabled:
-                st.markdown(f"🔵 **{index}. {step}** (IA) — prête, sur action explicite")
             else:
-                st.markdown(f"⚪ **{index}. {step}** (IA) — _désactivée (clé API ou modèle absent)_")
+                st.markdown(f"🔵 **{index}. {step}** (IA) — prête, workflow Claude Code (0 appel API)")
         else:
             st.markdown(f"⚪ **{index}. {step}** — _inactif_")
 
@@ -177,102 +167,6 @@ def render_pipeline(run: dict | None, llm_enabled: bool) -> None:
 def read_analysis_file(summary: dict, filename: str) -> str | None:
     path = Path(summary["analysis_dir"]) / filename
     return path.read_text(encoding="utf-8") if path.is_file() else None
-
-
-def render_analysis_launcher(run: dict, eligible: list[dict], settings: LLMSettings) -> None:
-    """Choix du mode, estimation des appels, confirmation, puis lancement explicite."""
-    if st.session_state.pop("ai_reset", False):
-        # Après chaque lancement : « forcer » et la confirmation du corpus doivent être redonnés explicitement.
-        st.session_state.ai_force = False
-        st.session_state.ai_confirm_corpus = False
-    flash = st.session_state.pop("ai_flash", None)  # message de fin d'analyse, conservé après st.rerun()
-    if flash:
-        (st.warning if flash[0] == "warning" else st.success)(flash[1])
-    st.markdown(
-        f"Clé API : **détectée** (jamais affichée) · Modèle : `{settings.model}` · "
-        f"Appels simultanés au plus : **{settings.max_concurrency}**"
-    )
-    mode = st.radio("Mode", [MODE_TEST, MODE_CORPUS], key="ai_mode", horizontal=True)
-    ids = [f["ingestion"]["interview_id"] for f in eligible]
-    selected = [st.selectbox("Entretien à analyser", ids, key="ai_interview")] if mode == MODE_TEST else ids
-    force = st.checkbox(
-        "Forcer une nouvelle analyse (ignore le cache et refait les appels)", key="ai_force",
-        help="Inutile en usage courant : une analyse identique (même entretien, prompt, version, schéma, modèle) est reprise du cache.",
-    )
-    try:
-        plan = analysis.plan_analysis(run, selected, settings, force=force)
-    except (OSError, ValueError, KeyError) as exc:
-        st.error(f"Transcriptions structurées illisibles : {exc}")
-        return
-    at_most = "" if plan["exact"] else "au plus "
-    chunk_plans = analysis.plan_interaction_chunking(run, selected, settings)
-    long_plans = [p for p in chunk_plans if p["chunking_used"]]
-    practice_plans = analysis.plan_practice_chunking(run, selected, settings)
-    long_practice = [p for p in practice_plans if p["chunking_used"]]
-    st.info(
-        "Cette action effectue **2 appels LLM par entretien non présent dans le cache** (les deux agents), "
-        "précédés d'**au plus 1 appel d'audit des locuteurs** par entretien, uniquement si des tours à "
-        "l'attribution douteuse sont détectés (sinon aucun). "
-        + ("Un entretien long est lu par chacun des deux agents en plusieurs blocs (un appel par bloc) ; "
-           "l'Interaction Reader ajoute une lecture légère à longue distance. " if long_plans or long_practice else "")
-        + f"Pour cette sélection : **{at_most}{plan['calls']} appel(s) API** prévu(s), "
-        f"{plan['cached']} résultat(s) déjà en cache (sans coût). "
-        f"Présélection déterministe des locuteurs : {plan['candidate_turns']} tour(s) suspect(s), "
-        f"{plan['audit_calls']} appel(s) d'audit."
-    )
-    st.caption(
-        f"Practice Extractor : au plus **{sum(p['max_calls'] for p in practice_plans)} appel(s)** · "
-        f"Interaction Reader : au plus **{sum(p['max_calls'] for p in chunk_plans)} appel(s)** "
-        "pour cette sélection (estimation maximale, avant prise en compte du cache)."
-    )
-    for p in long_practice:
-        st.info(f"Practice Extractor — {p['interview_id']} : entretien long : analyse en **{p['chunk_count']} blocs** "
-                f"(chevauchement inclus), soit au plus **{p['max_calls']} appels** Practice Extractor.")
-    for p in long_plans:
-        st.info(f"Interaction Reader — {p['interview_id']} : entretien long : analyse en **{p['chunk_count']} blocs** "
-                f"(chevauchement inclus), puis 1 lecture à longue distance, soit au plus "
-                f"**{p['max_calls']} appels** Interaction Reader.")
-    confirmed = True
-    if mode == MODE_CORPUS:
-        confirmed = st.checkbox("Je confirme lancer l'analyse IA sur tout le corpus.", key="ai_confirm_corpus")
-    clicked = st.button(
-        f"Lancer les deux analyses IA ({at_most}{plan['calls']} appel(s) API payant(s))",
-        type="primary", key="ai_launch", disabled=not confirmed,
-    )
-    if not clicked:
-        return
-
-    status_area = st.empty()
-    states: dict[tuple[str, str], str] = {}
-
-    def on_status(interview_id: str, agent: str, status: str) -> None:
-        states[(interview_id, agent)] = status
-        status_area.table([
-            {"Entretien": iid,
-             **{spec.label: f"{AI_STATUS_ICONS.get(states.get((iid, name)), '')} {states.get((iid, name), '')}"
-                for name, spec in ((AUDITOR.name, AUDITOR), *AI_AGENTS.items())}}
-            for iid in dict.fromkeys(i for i, _ in states)
-        ])
-
-    with st.spinner("Analyse IA en cours (audit des locuteurs, puis deux agents en parallèle par entretien)…"):
-        try:
-            st.session_state.last_run = analysis.analyze_run(
-                run, selected, settings=settings, force=force, on_status=on_status)
-        except LLMError as exc:
-            st.error(exc.user_message)
-            return
-        except (OSError, ValueError, KeyError) as exc:
-            logging.error("Analyse IA interrompue : %s", type(exc).__name__)
-            st.error(f"Analyse IA interrompue ({type(exc).__name__}) : vérifiez les fichiers du run.")
-            return
-    usage = st.session_state.last_run["last_analysis"]["usage"]
-    if usage["failed"] or usage.get("partial"):
-        st.session_state.ai_flash = ("warning", f"Analyse IA terminée avec {usage['failed']} échec(s) et "
-                                     f"{usage.get('partial', 0)} analyse(s) incomplète(s) : voir le détail ci-dessous.")
-    else:
-        st.session_state.ai_flash = ("success", "Analyse IA terminée.")
-    st.session_state.ai_reset = True
-    st.rerun()  # l'estimation des appels (cache) et le pipeline reflètent immédiatement le nouvel état
 
 
 def chunk_label(agent: dict) -> str:
@@ -301,7 +195,7 @@ def render_chunking(agent: dict, label: str = "Interaction Reader") -> None:
         line += f" · lecture à longue distance : {chunking.get('long_distance_status') or 'n/a'}"
         line += f" · anomalies de validation : {agent.get('validation_issue_count') or 0}"
     st.markdown(line)
-    if chunking.get("truncated_chunks"):
+    if chunking.get("truncated_chunks"):  # anciennes sorties (par API) uniquement : le workflow n'en produit pas
         st.error(f"{label} — Bloc(s) tronqué(s) (limite de sortie atteinte) : "
                  + ", ".join(str(c) for c in chunking["truncated_chunks"])
                  + ". Le résultat est INCOMPLET ; relancez l'analyse pour ne refaire que les blocs manquants.")
@@ -341,7 +235,8 @@ def render_analysis_results(run: dict) -> None:
                      f"{format_count(usage['cache_creation_input_tokens'])} écrits")
         line += f" — {usage['cached_results']} résultat(s) repris du cache TRACE"
         st.markdown(line)
-        st.caption("Tokens rapportés par l'API. Aucun montant n'est calculé : le prix du modèle n'est pas connu localement de façon fiable.")
+        st.caption("Appels API et tokens : champs hérités des anciennes exécutions par API, toujours à 0 avec le "
+                   "workflow Claude Code (aucun appel API, aucun coût).")
 
     rows = []
     for f in analyzed:
@@ -361,7 +256,7 @@ def render_analysis_results(run: dict) -> None:
             "Pratiques": practice.get("item_count") or 0,
             "Signaux": signals.get("item_count") or 0,
             "Citations invalides": f["analysis"]["invalid_evidence_count"],
-            "Tokens facturés (entrée / sortie)": " / ".join(
+            "Tokens API (hérité, toujours 0)": " / ".join(
                 format_count(sum(u.get(k) or 0 for u in billed)) for k in ("input_tokens", "output_tokens")),
             "Avertissements": "oui" if any(a.get("has_warnings") for a in agents.values()) else "non",
             "Anomalies validation": sum(a.get("validation_issue_count") or 0 for a in agents.values()),
@@ -533,68 +428,12 @@ def render_analysis_section(run: dict) -> None:
         st.warning(problem)
     if not eligible:
         st.info("Aucun entretien analysable (ingestion en échec ou sans tour de parole).")
-    elif workflow.stage3_backend() == workflow.BACKEND_CLAUDE_CODE:
-        render_stage3_workflow(run, eligible)
-    elif not settings.enabled:
-        st.warning(settings.disabled_reason())
     else:
-        render_analysis_launcher(run, eligible, settings)
+        render_stage3_workflow(run, eligible)
     render_analysis_results(st.session_state.get("last_run") or run)
 
 
 # --- Étape 4 — épisodes d'accountability ----------------------------------------------------------
-
-def render_stage4_launcher(run: dict, analyzed: list[dict], settings: LLMSettings) -> None:
-    """Choix des entretiens, estimation des appels (0 ou 1 par entretien), lancement explicite."""
-    if st.session_state.pop("acc_reset", False):
-        st.session_state.acc_force = False
-    flash = st.session_state.pop("acc_flash", None)
-    if flash:
-        (st.warning if flash[0] == "warning" else st.success)(flash[1])
-    ids = [f["ingestion"]["interview_id"] for f in analyzed]
-    choice = st.selectbox("Entretien(s) pour l'étape 4", ids + ([ACC_ALL] if len(ids) > 1 else []), key="acc_interview")
-    selected = ids if choice == ACC_ALL else [choice]
-    force = st.checkbox("Forcer une nouvelle construction des épisodes (ignore le cache de l'étape 4)", key="acc_force")
-    try:
-        plan = accountability.plan_stage4(run, selected, settings, force=force)
-    except (OSError, ValueError, KeyError) as exc:
-        st.error(f"Sorties de l'étape 3 illisibles : {exc}")
-        return
-    st.dataframe([{"Entretien": row["interview_id"], "Statut étape 3": row["stage3_status"],
-                   "Candidats": row["candidate_count"],
-                   "Appel prévu": "en cache" if row["cached"] else row["call"],
-                   "Tokens estimés (entrée)": row["estimated_input_tokens"]} for row in plan["per_interview"]],
-                 hide_index=True)
-    st.info(
-        f"Candidats d'épisodes (déterministes, sans IA) : **{plan['candidates']}**. "
-        "Au plus **1 appel LLM par entretien** (aucun s'il n'y a pas de candidat). "
-        f"Pour cette sélection : **{plan['calls']} appel(s) API** prévu(s), {plan['cached']} résultat(s) en cache, "
-        f"{plan['blocked']} entretien(s) bloqué(s) (étape 3 en échec ou absente)"
-        + (f", {plan['partial']} entretien(s) à l'étape 3 incomplète (résultat PARTIAL)" if plan["partial"] else "") + "."
-    )
-    clicked = st.button(f"Construire les épisodes d'accountability ({plan['calls']} appel(s) API payant(s))",
-                        type="primary", key="acc_launch")
-    if not clicked:
-        return
-    with st.spinner("Étape 4 en cours (candidats déterministes, Accountability Episode Builder, validation)…"):
-        try:
-            st.session_state.last_run = accountability.analyze_run_stage4(run, selected, settings=settings, force=force)
-        except LLMError as exc:
-            st.error(exc.user_message)
-            return
-        except (OSError, ValueError, KeyError) as exc:
-            logging.error("Étape 4 interrompue : %s", type(exc).__name__)
-            st.error(f"Étape 4 interrompue ({type(exc).__name__}) : vérifiez les fichiers du run.")
-            return
-    usage = st.session_state.last_run["last_accountability"]["usage"]
-    if usage["failed"] or usage["partial"] or usage["blocked"]:
-        st.session_state.acc_flash = ("warning", f"Étape 4 terminée : {usage['failed']} échec(s), {usage['partial']} "
-                                      f"incomplète(s), {usage['blocked']} bloquée(s) — voir le détail ci-dessous.")
-    else:
-        st.session_state.acc_flash = ("success", "Étape 4 terminée.")
-    st.session_state.acc_reset = True
-    st.rerun()
-
 
 def render_stage4_workflow(run: dict, analyzed: list[dict]) -> None:
     """Étape 4 sans API : TRACE prépare les tâches, Claude Code joue l'Accountability Episode Builder."""
@@ -761,13 +600,7 @@ def render_stage4_section(run: dict) -> None:
         st.info("Lancez d'abord l'étape 3, ou restaurez ses résultats depuis des fichiers déjà téléchargés : "
                 "l'étape 4 en consomme les sorties.")
         return
-    settings = LLMSettings.from_env()
-    if workflow.stage4_backend() == workflow.BACKEND_CLAUDE_CODE:
-        render_stage4_workflow(run, analyzed)
-    elif not settings.enabled:
-        st.warning(settings.disabled_reason())
-    else:
-        render_stage4_launcher(run, analyzed, settings)
+    render_stage4_workflow(run, analyzed)
     render_stage4_results(st.session_state.get("last_run") or run)
 
 
@@ -824,60 +657,6 @@ def render_stage4_restore(run: dict) -> None:
                 return
             st.session_state.restore4_flash = f"{stage4_restore.RESTORED_NOTICE} ({interview_id})."
             st.rerun()
-
-
-def render_stage5_launcher(run: dict, available: list[dict], settings: LLMSettings) -> None:
-    """Choix des entretiens, estimation des appels (0 ou 1 par entretien), lancement explicite."""
-    if st.session_state.pop("traj_reset", False):
-        st.session_state.traj_force = False
-    flash = st.session_state.pop("traj_flash", None)
-    if flash:
-        (st.warning if flash[0] == "warning" else st.success)(flash[1])
-    ids = [f["ingestion"]["interview_id"] for f in available]
-    choice = st.selectbox("Entretien(s) pour l'étape 5", ids + ([ACC_ALL] if len(ids) > 1 else []), key="traj_interview")
-    selected = ids if choice == ACC_ALL else [choice]
-    force = st.checkbox("Forcer une nouvelle analyse de la configuration (ignore le cache de l'étape 5)", key="traj_force")
-    try:
-        plan = trajectory.plan_stage5(run, selected, settings, force=force)
-    except (OSError, ValueError, KeyError) as exc:
-        st.error(f"Sorties de l'étape 4 illisibles : {exc}")
-        return
-    st.dataframe([{"Entretien": row["interview_id"], "Statut étape 4": STAGE4_STATE_LABELS.get(row["stage4_status"]),
-                   "Étape 4 restaurée": "oui" if row["stage4_restored"] else "non",
-                   "Épisodes utilisables": row["usable_episode_count"],
-                   "Pratiques sans marqueur": row["unmarked_practice_count"],
-                   "Ancrages temporels": row["temporal_anchor_count"],
-                   "Appel prévu": "en cache" if row["cached"] else row["call"],
-                   "Tokens estimés (entrée)": row["estimated_input_tokens"]} for row in plan["per_interview"]],
-                 hide_index=True)
-    st.info(
-        "Au plus **1 appel LLM par entretien** (aucun si moins de deux éléments utilisables), sur une représentation "
-        "compacte préparée sans IA à partir des épisodes de l'étape 4 ; chaque entretien est analysé seul, sans "
-        f"comparaison. Pour cette sélection : **{plan['calls']} appel(s) API** prévu(s), {plan['cached']} résultat(s) "
-        f"en cache, {plan['blocked']} entretien(s) bloqué(s) (étape 4 absente, en échec ou périmée)"
-        + (f", {plan['partial']} entretien(s) à l'étape 4 incomplète (résultat PARTIAL)" if plan["partial"] else "") + ".")
-    clicked = st.button(f"Construire la configuration intra-entretien ({plan['calls']} appel(s) API payant(s))",
-                        type="primary", key="traj_launch")
-    if not clicked:
-        return
-    with st.spinner("Étape 5 en cours (préparation déterministe, Trajectory Mapper, validation)…"):
-        try:
-            st.session_state.last_run = trajectory.analyze_run_stage5(run, selected, settings=settings, force=force)
-        except LLMError as exc:
-            st.error(exc.user_message)
-            return
-        except (OSError, ValueError, KeyError) as exc:
-            logging.error("Étape 5 interrompue : %s", type(exc).__name__)
-            st.error(f"Étape 5 interrompue ({type(exc).__name__}) : vérifiez les fichiers du run.")
-            return
-    usage = st.session_state.last_run["last_trajectory"]["usage"]
-    if usage["failed"] or usage["partial"] or usage["blocked"]:
-        st.session_state.traj_flash = ("warning", f"Étape 5 terminée : {usage['failed']} échec(s), {usage['partial']} "
-                                       f"incomplète(s), {usage['blocked']} bloquée(s) — voir le détail ci-dessous.")
-    else:
-        st.session_state.traj_flash = ("success", "Étape 5 terminée.")
-    st.session_state.traj_reset = True
-    st.rerun()
 
 
 def _claim_row(claim: dict) -> dict:
@@ -1035,14 +814,8 @@ def render_stage5_section(run: dict) -> None:
     if not available:
         st.info("Lancez d'abord l'étape 4, ou restaurez ses résultats depuis des fichiers déjà téléchargés : l'étape 5 "
                 "en consomme les épisodes.")
-    elif workflow.stage5_backend() == workflow.BACKEND_CLAUDE_CODE:
-        render_stage5_workflow(run, available)
     else:
-        settings = LLMSettings.from_env()
-        if not settings.enabled:
-            st.warning(settings.disabled_reason())
-        else:
-            render_stage5_launcher(run, available, settings)
+        render_stage5_workflow(run, available)
     render_stage5_results(st.session_state.get("last_run") or run)
 
 
@@ -1103,41 +876,6 @@ def render_stage6_corpus(prepared) -> None:
     elif checked["mode"] == cross_interview_corpus.MODE_EXPLORATORY:
         st.warning("Deux entretiens exploitables seulement : la comparaison sera marquée EXPLORATOIRE (« présent dans "
                    "les deux entretiens disponibles », jamais une généralité).")
-
-
-def render_stage6_launcher(files: list[tuple[str, bytes]], prepared) -> None:
-    settings = LLMSettings.from_env()
-    if not settings.enabled:
-        st.warning(settings.disabled_reason())
-        return
-    force = st.checkbox("Forcer une nouvelle comparaison (ignore le cache de l'étape 6)", key="stage6_force")
-    plan = cross_interview.plan_stage6(prepared, settings, force=force)
-    ratio = plan["payload_chars"] / plan["raw_stage5_chars"] if plan["raw_stage5_chars"] else 0
-    st.info(
-        f"**1 appel LLM pour tout le corpus** (aucun s'il est bloqué ou en cache), sur une représentation compacte "
-        f"préparée sans IA à partir des seules sorties de l'étape 5 : **{plan['calls']} appel(s) API** prévu(s)"
-        + (" — résultat en cache" if plan["cached"] else "")
-        + f" · ≈ {format_count(plan['estimated_input_tokens'])} tokens estimés en entrée · représentation "
-          f"{format_count(plan['payload_chars'])} caractères ({ratio:.0%} des JSON de l'étape 5) · aucune étape 3, 4 "
-          "ou 5 relancée.")
-    if plan["over_single_call_threshold"]:
-        st.warning(f"Représentation au-delà du seuil d'un appel unique ({cross_interview.SINGLE_CALL_MAX_INPUT_TOKENS} "
-                   "tokens) : l'appel aura lieu, signalé (PAYLOAD_OVER_THRESHOLD).")
-    clicked = st.button(f"Lancer la comparaison inter-entretiens ({plan['calls']} appel(s) API payant(s))",
-                        type="primary", key="stage6_launch", disabled=plan["blocked"])
-    if not clicked:
-        return
-    with st.spinner("Étape 6 en cours (contrôle du corpus, préparation déterministe, Comparator, validation)…"):
-        try:
-            st.session_state.stage6_last = cross_interview.run_stage6(files, settings=settings, force=force)
-        except LLMError as exc:
-            st.error(exc.user_message)
-            return
-        except (OSError, ValueError, KeyError) as exc:
-            logging.error("Étape 6 interrompue : %s", type(exc).__name__)
-            st.error(f"Étape 6 interrompue ({type(exc).__name__}).")
-            return
-    st.rerun()
 
 
 def render_stage6_workflow(files: list[tuple[str, bytes]], prepared) -> None:
@@ -1308,10 +1046,7 @@ def render_stage6_section(run: dict | None) -> None:
         prepared = cross_interview.prepare_stage6(files)
         render_stage6_corpus(prepared)
         if not prepared.blocked:
-            if workflow.stage6_backend() == workflow.BACKEND_CLAUDE_CODE:
-                render_stage6_workflow(files, prepared)
-            else:
-                render_stage6_launcher(files, prepared)
+            render_stage6_workflow(files, prepared)
     render_stage6_results(st.session_state.get("stage6_last"), prepared.corpus_id if prepared else None)
 
 
@@ -1324,10 +1059,10 @@ st.markdown(
     "Outil **expérimental** d'analyse qualitative assistée par IA. "
     "L'ingestion des entretiens est **déterministe** et sans IA : "
     "extraction du texte, découpage en tours de parole et contrôle qualité. "
-    "L'étape 3 (deux agents IA descriptifs) ne s'exécute que sur **action explicite**, "
-    "après l'ingestion ; aucun appel API n'est effectué au chargement des fichiers."
+    "Les étapes 3 à 6 (agents IA descriptifs) forment un **workflow multi-agents exécuté dans Claude Code** "
+    "(voir TRACE_WORKFLOW.md) : TRACE prépare les tâches et valide les réponses des agents ; aucune clé ni aucun "
+    "appel API, rien n'est lancé au chargement des fichiers."
 )
-llm_settings = LLMSettings.from_env()
 
 # 3. Problématique de recherche
 st.header("Problématique de recherche")
@@ -1519,4 +1254,4 @@ render_stage6_section(st.session_state.get("last_run"))
 
 # Le pipeline est rempli en dernier : il reflète aussi une analyse IA lancée pendant cette exécution.
 with pipeline_area:
-    render_pipeline(st.session_state.get("last_run"), llm_settings.enabled)
+    render_pipeline(st.session_state.get("last_run"))

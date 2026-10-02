@@ -65,8 +65,7 @@ def component_builder(rules: dict[int, dict]):
                 "external_reference": rule["external"], "episode_summary": rule["summary"],
                 "confidence": rule["confidence"], "needs_review": rule["needs_review"], "evidence": evidence})
         output = {"episodes": episodes, "builder_notes": None}
-        return text_response(output, input_tokens=len(params["messages"][0]["content"]) // 3,
-                             output_tokens=60 + 260 * len(episodes))
+        return text_response(output)
     return respond
 
 
@@ -148,8 +147,7 @@ def mapper_output(params: dict, scripted: dict) -> dict:
 def scripted_mapper(scripted: dict):
     def respond(params: dict):
         output = mapper_output(params, scripted)
-        return text_response(output, input_tokens=len(params["messages"][0]["content"]) // 3,
-                             output_tokens=120 + 180 * (len(output["claims"]) + len(output["student_role_criteria"])))
+        return text_response(output)
     return respond
 
 
@@ -207,9 +205,9 @@ class Case:
         practices = {"practices": self.practices, "extraction_notes": None}
         signals = {"signals": self.signals, "reading_notes": None}
         audit = {"assessments": self.assessments, "audit_notes": None}
-        return {PRACTICE: lambda p: text_response(practices, input_tokens=1500, output_tokens=900),
-                INTERACTION: lambda p: text_response(signals, input_tokens=1600, output_tokens=600),
-                AUDITOR: lambda p: text_response(audit, input_tokens=400, output_tokens=80)}
+        return {PRACTICE: lambda p: text_response(practices),
+                INTERACTION: lambda p: text_response(signals),
+                AUDITOR: lambda p: text_response(audit)}
 
     def builder(self):
         return component_builder(self.rules)
@@ -601,17 +599,17 @@ def generic_plan() -> dict:
 # --- Pipeline simulé jusqu'à l'étape 4 (tests) -------------------------------------------------------------
 
 def run_to_stage4(tmp_path, files, stage3_responders: dict, builder):
-    """Ingestion, étape 3 et étape 4 (LLM simulés) dans un dossier temporaire. Renvoie (run, cache)."""
+    """Ingestion, étape 3 et étape 4 (agents simulés) dans un dossier temporaire. Renvoie (run, cache)."""
     from core import accountability
     from core.analysis import analyze_run
     from core.analysis_cache import AnalysisCache
-    from tests.fake_llm import ACCOUNTABILITY, FakeTransport, fake_settings
+    from tests.fake_llm import ACCOUNTABILITY, FakeAgents, fake_settings
     from tests.synthetic_interviews import make_ingested_run
 
     run = make_ingested_run(tmp_path, files)
     cache = AnalysisCache(tmp_path / "cache")
-    run = analyze_run(run, settings=fake_settings(), transport=FakeTransport(stage3_responders), cache=cache)
-    run = accountability.analyze_run_stage4(run, settings=fake_settings(), transport=FakeTransport(
+    run = analyze_run(run, settings=fake_settings(), client=FakeAgents(stage3_responders), cache=cache)
+    run = accountability.analyze_run_stage4(run, settings=fake_settings(), client=FakeAgents(
         {ACCOUNTABILITY: builder}), cache=cache)
     return run, cache
 
@@ -623,10 +621,10 @@ def case_to_stage4(tmp_path, case: Case):
 def run_stage5(run, cache, mapper, **kwargs):
     """Étape 5 seule (seul le Trajectory Mapper répond : tout autre appel lèverait une erreur)."""
     from core import trajectory
-    from tests.fake_llm import TRAJECTORY, FakeTransport, fake_settings
+    from tests.fake_llm import TRAJECTORY, FakeAgents, fake_settings
 
-    transport = FakeTransport({TRAJECTORY: mapper})
-    run = trajectory.analyze_run_stage5(run, settings=kwargs.pop("settings", fake_settings()), transport=transport,
+    transport = FakeAgents({TRAJECTORY: mapper})
+    run = trajectory.analyze_run_stage5(run, settings=kwargs.pop("settings", fake_settings()), client=transport,
                                         cache=cache, **kwargs)
     return run, transport
 

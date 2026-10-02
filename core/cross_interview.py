@@ -16,10 +16,10 @@ de l'import, puis analysis/).
 Seuil : moins de 2 entretiens exploitables → BLOCKED, aucun appel ; 2 → comparaison EXPLORATOIRE ; 3 et plus →
 comparaison normale.
 
-Coût : 1 appel pour tout le corpus (0 si bloqué ou repris du cache). Pas de découpage MAP → REDUCE : la
+Coût : 1 tâche d'agent pour tout le corpus (aucune si bloqué ou repris du cache), 0 appel API. Pas de découpage MAP → REDUCE : la
 représentation normalisée de 17 entretiens synthétiques fait ≈ 9 000 tokens estimés (≈ 22 000 si les 17 avaient
 la taille de l'entretien long « OTMANE-like »), sous le seuil d'un appel unique (24 000, celui de l'étape 5). Au-delà
-du seuil, l'appel unique a lieu quand même, signalé (`PAYLOAD_OVER_THRESHOLD`) ; max_tokens n'est jamais augmenté.
+du seuil, la tâche unique a lieu quand même, signalée (`PAYLOAD_OVER_THRESHOLD`), jamais découpée.
 
 Cache propre à l'étape 6 (data/cache/analysis/cross_interview_comparator/) : la clé couvre la requête exacte
 (donc chaque entretien du corpus et son contenu), l'agent, sa version, son prompt, son schéma, le modèle et les
@@ -46,7 +46,7 @@ from core import cross_interview_validator as validator
 from core.analysis import (STATUS_CACHED, STATUS_FAILED, STATUS_PENDING, STATUS_SUCCESS, STATUS_SUCCESS_WITH_WARNINGS,
                            _run_coroutine)
 from core.analysis_cache import AnalysisCache, compute_cache_key, write_json_atomic
-from core.llm_client import LLMClient, LLMError, LLMSettings, Transport
+from core.llm_client import LLMError, LLMSettings
 
 logger = logging.getLogger(__name__)
 
@@ -143,7 +143,7 @@ def plan_stage6(prepared: Stage6Input, settings: LLMSettings, cache: AnalysisCac
     return plan
 
 
-async def _call(prepared: Stage6Input, client: LLMClient | None, cache: AnalysisCache, settings: LLMSettings,
+async def _call(prepared: Stage6Input, client, cache: AnalysisCache, settings: LLMSettings,
                 force: bool) -> dict:
     """L'appel unique, repris du cache s'il existe. Ne lève pas d'exception : renvoie un bilan."""
     key_fields = cache_key_fields(prepared, settings)
@@ -162,8 +162,6 @@ async def _call(prepared: Stage6Input, client: LLMClient | None, cache: Analysis
                           response_model=call.get("response_model"), request_id=call.get("request_id"),
                           stop_reason=call.get("stop_reason"))
             return record
-        if client is None:
-            raise LLMError("NOT_CONFIGURED")
         result = await client.complete_json(system_prompt=SPEC.system_prompt,
                                             user_content=prepared.request["user_message"],
                                             output_schema=SPEC.output_schema, response_model=SPEC.output_model,
@@ -174,12 +172,12 @@ async def _call(prepared: Stage6Input, client: LLMClient | None, cache: Analysis
             "model_requested": result.model_requested, "response_model": result.response_model,
             "request_id": result.request_id, "stop_reason": result.stop_reason})
         record.update(status=STATUS_SUCCESS, output=output, created_at=_now(), api_calls=result.attempts,
-                      billed_this_run=result.attempts > 0, usage=result.usage, duration_seconds=result.duration_seconds,
+                      billed_this_run=False, usage=result.usage, duration_seconds=result.duration_seconds,
                       response_model=result.response_model, request_id=result.request_id,
                       stop_reason=result.stop_reason)
     except LLMError as error:
         record.update(status=STATUS_FAILED, error=error.to_dict(), api_calls=error.attempts, usage=error.usage,
-                      billed_this_run=bool(error.usage and error.usage.get("input_tokens")),
+                      billed_this_run=False,
                       duration_seconds=error.duration_seconds, request_id=error.request_id)
     except Exception as exc:  # noqa: BLE001 — sans contenu d'entretien
         logger.error("Étape 6 %s : erreur inattendue %s\n%s", label, type(exc).__name__,
@@ -204,7 +202,7 @@ def corpus_dir_for(prepared: Stage6Input, base_dir: Path | None = None) -> Path:
     return Path(base_dir or config.CROSS_INTERVIEW_DIR) / prepared.corpus_id
 
 
-async def run_stage6_corpus(prepared: Stage6Input, client: LLMClient | None, cache: AnalysisCache,
+async def run_stage6_corpus(prepared: Stage6Input, client, cache: AnalysisCache,
                             settings: LLMSettings, base_dir: Path | None = None, force: bool = False) -> dict:
     """Étape 6 sur un corpus. Ne lève pas d'exception : renvoie le manifest."""
     corpus_dir = corpus_dir_for(prepared, base_dir)
@@ -322,29 +320,23 @@ async def run_stage6_corpus(prepared: Stage6Input, client: LLMClient | None, cac
     return {**manifest, "corpus_dir": str(corpus_dir)}
 
 
-def run_stage6(uploads: list[tuple[str, bytes]], *, settings: LLMSettings | None = None,
-               transport: Transport | None = None, cache: AnalysisCache | None = None, force: bool = False,
-               base_dir: Path | None = None, client=None) -> dict:
+def run_stage6(uploads: list[tuple[str, bytes]], *, client, settings: LLMSettings | None = None,
+               cache: AnalysisCache | None = None, force: bool = False, base_dir: Path | None = None) -> dict:
     """Étape 6 sur les fichiers importés. Renvoie le manifest (+ corpus_dir).
 
-    Sans `client`, lève LLMError (NOT_CONFIGURED) si la clé ou le modèle manque alors qu'une comparaison est
-    possible. `client` : client déjà construit, de même interface que LLMClient ; le workflow Claude Code
-    (core/claude_code_workflow.py) y passe un client SANS appel réseau, et aucune clé n'est demandée.
+    `client` : client des agents (`complete_json`, `aclose`), injecté par le workflow Claude Code
+    (core/claude_code_workflow.WorkflowClient, AUCUN appel réseau) ou par les tests (agents simulés). Il n'est
+    pas sollicité si le corpus est bloqué.
     """
     settings = settings or LLMSettings.from_env()
     prepared = prepare_stage6(uploads)
-    if client is None and not prepared.blocked and not settings.enabled:
-        raise LLMError("NOT_CONFIGURED", ", ".join(settings.missing))
     cache = cache or AnalysisCache()
 
-    async def run(client=client):
-        if client is None and not prepared.blocked:
-            client = LLMClient(settings, transport=transport)
+    async def run():
         try:
             return await run_stage6_corpus(prepared, client, cache, settings, base_dir, force)
         finally:
-            if client is not None:
-                await client.aclose()
+            await client.aclose()
 
     return _run_coroutine(run())
 

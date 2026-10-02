@@ -1,12 +1,12 @@
-"""Tests de l'interface Streamlit pour l'étape 3 (AppTest : sans navigateur, LLM simulé)."""
+"""Interface Streamlit de l'étape 3 (AppTest : sans navigateur, agents simulés joués à travers le workflow)."""
 
 import pytest
 from streamlit.testing.v1 import AppTest
 
-import core.llm_client as llm_client
 from core import config
+from core.claude_code_workflow import WorkflowClient
 from tests import synthetic_interviews as si
-from tests.fake_llm import INTERACTION, PRACTICE, FakeTransport, text_response
+from tests.fake_llm import AUDITOR, INTERACTION, LONG_DISTANCE, PRACTICE, FakeAgents, answering_workflow, text_response
 
 APP = str(config.PROJECT_ROOT / "app.py")
 
@@ -21,107 +21,76 @@ def texts(elements):
     return " ".join(str(e.value) for e in elements)
 
 
+def simulate(monkeypatch, responders: dict) -> FakeAgents:
+    """Les agents répondent dans response.json dès qu'une tâche est écrite (comme un sous-agent Claude Code)."""
+    agents = FakeAgents(responders)
+    monkeypatch.setattr(WorkflowClient, "complete_json", answering_workflow(agents))
+    return agents
+
+
 @pytest.fixture
-def fake_api(monkeypatch):
-    """Clé et modèle factices + transport simulé : le parcours complet sans aucun appel réel."""
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-FAKE-KEY-000")
-    monkeypatch.setenv("ANTHROPIC_MODEL", "fake-model")
-    monkeypatch.setenv("TRACE_STAGE3_BACKEND", "anthropic")  # ancien mode de l'étape 3 par API (LLM simulé)
-    transport = FakeTransport({PRACTICE: lambda p: text_response(si.GOOD_PRACTICES),
-                               INTERACTION: lambda p: text_response(si.GOOD_SIGNALS)})
-    monkeypatch.setattr(llm_client, "AnthropicTransport", lambda settings: transport)
-    return transport
+def fake_agents(monkeypatch):
+    return simulate(monkeypatch, {PRACTICE: lambda p: text_response(si.GOOD_PRACTICES),
+                                  INTERACTION: lambda p: text_response(si.GOOD_SIGNALS)})
 
 
 def test_app_starts_without_api_key():
-    # Étapes 3 à 6 migrées vers le workflow Claude Code : sans clé, aucune étape IA n'est désactivée.
+    # Étapes 3 à 6 : workflow Claude Code, aucune clé ; aucune étape IA n'est désactivée.
     at = AppTest.from_file(APP, default_timeout=30).run()
     assert not at.exception
-    assert "désactivée (clé API ou modèle absent)" not in texts(at.markdown)
+    assert "désactivée" not in texts(at.markdown) and "ANTHROPIC" not in texts(at.markdown) + texts(at.warning)
     assert texts(at.markdown).count("prête, workflow Claude Code (0 appel API)") == 5  # étapes 2 à 6 du pipeline
+    assert "workflow multi-agents exécuté dans Claude Code" in texts(at.markdown)
 
 
-def test_ai_section_is_disabled_without_key(tmp_path, monkeypatch):
-    # Ancien mode de l'étape 3 par API, demandé explicitement : sans clé, il reste désactivé.
-    # (Par défaut, l'étape 3 passe par le workflow Claude Code : tests/test_claude_code_workflow.py.)
-    monkeypatch.setenv("TRACE_STAGE3_BACKEND", "anthropic")
+def test_no_analysis_without_explicit_click(tmp_path, fake_agents):
     at = app_with_run(si.make_ingested_run(tmp_path))
     assert not at.exception
-    assert "Analyse IA — Étape 3" in texts(at.header)
-    assert "Analyse IA désactivée" in texts(at.warning) and "ANTHROPIC_API_KEY" in texts(at.warning)
-    assert not [b for b in at.button if b.key == "ai_launch"]
+    assert fake_agents.calls == []
+    assert "Analyse IA — Étape 3" in texts(at.header) and "Workflow Claude Code" in texts(at.info)
+    assert not at.button(key="wf_stage3").disabled
+    assert not [b for b in at.button if b.key in ("ai_launch", "ai_force", "ai_confirm_corpus")]  # anciens lanceurs
 
 
-def test_no_analysis_without_explicit_click(tmp_path, fake_api):
+def test_test_mode_runs_both_agents_and_shows_results(tmp_path, fake_agents):
     at = app_with_run(si.make_ingested_run(tmp_path))
+    at.button(key="wf_stage3").click().run()
     assert not at.exception
-    assert fake_api.calls == []
-    assert "2 appels LLM par entretien non présent dans le cache" in texts(at.info)
-    launch = at.button(key="ai_launch")
-    assert "appel(s) API payant(s)" in launch.label and not launch.disabled
-    assert "sk-ant-test-FAKE-KEY-000" not in texts(at.markdown) + texts(at.info)
-
-
-def test_test_mode_runs_both_agents_and_shows_results(tmp_path, fake_api):
-    at = app_with_run(si.make_ingested_run(tmp_path))
-    at.button(key="ai_launch").click().run()
-    assert not at.exception
-    assert len(fake_api.calls) == 2
-    assert "Analyse IA terminée." in texts(at.success)
+    assert sorted(c["agent"] for c in fake_agents.calls) == [INTERACTION, PRACTICE]
+    assert "Étape 3 terminée (workflow Claude Code, 0 appel API)." in texts(at.success)
     table = at.table[-1].value
     assert list(table["Practice Extractor"]) == ["✅ SUCCESS"] and list(table["Interaction Reader"]) == ["✅ SUCCESS"]
     assert list(table["Pratiques"]) == [6] and list(table["Signaux"]) == [10]
     assert list(table["Citations invalides"]) == [0]
-    assert "2 appel(s) API — 2 400 tokens entrée — 600 tokens sortie" in texts(at.markdown)
+    assert "0 appel(s) API — 0 tokens entrée — 0 tokens sortie" in texts(at.markdown)
     labels = [b.label for b in at.get("download_button")]
     for name in ("practice_extractor.json", "interaction_signals.json", "evidence_validation.json"):
         assert f"Télécharger {name}" in labels
     assert "🟢 **2. Extraction des pratiques** (IA) — terminé (1/1 entretien(s))" in texts(at.markdown)
 
-    # Second clic : tout vient du cache, aucun nouvel appel
-    at.button(key="ai_launch").click().run()
-    assert len(fake_api.calls) == 2
-    assert list(at.table[-1].value["Practice Extractor"]) == ["♻️ CACHED"]
+    # Second clic : l'étape est complète et à jour, elle n'est pas rejouée
+    at.button(key="wf_stage3").click().run()
+    assert not at.exception and len(fake_agents.calls) == 2
+    assert "Étape 3 terminée (workflow Claude Code, 0 appel API)." in texts(at.success)
+    assert list(at.table[-1].value["Practice Extractor"]) == ["✅ SUCCESS"]
 
 
-def test_corpus_mode_requires_confirmation(tmp_path, fake_api):
+def test_corpus_mode_runs_every_interview(tmp_path, fake_agents):
     files = [(si.FILENAME, si.TEXT.encode("utf-8")), si.other_interview("Bob.txt", "Oui, pour traduire.")]
     at = app_with_run(si.make_ingested_run(tmp_path, files))
-    at.radio(key="ai_mode").set_value("Corpus complet").run()
-    assert at.button(key="ai_launch").disabled
-    assert "4 appel(s) API" in at.button(key="ai_launch").label
-    at.checkbox(key="ai_confirm_corpus").check().run()
-    assert not at.button(key="ai_launch").disabled
-    at.button(key="ai_launch").click().run()
-    assert not at.exception and len(fake_api.calls) == 4
-    # La confirmation ne vaut que pour un lancement
-    assert not at.checkbox(key="ai_confirm_corpus").value and at.button(key="ai_launch").disabled
-
-
-def test_force_option_is_reset_after_each_launch(tmp_path, fake_api):
-    at = app_with_run(si.make_ingested_run(tmp_path))
-    at.button(key="ai_launch").click().run()
-    at.checkbox(key="ai_force").check().run()
-    assert "(2 appel(s) API payant(s))" in at.button(key="ai_launch").label
-    at.button(key="ai_launch").click().run()
-    assert len(fake_api.calls) == 4 and not at.checkbox(key="ai_force").value
-    assert "(0 appel(s) API payant(s))" in at.button(key="ai_launch").label
+    at.radio(key="wf_mode").set_value("Corpus complet").run()
+    at.button(key="wf_stage3").click().run()
+    assert not at.exception and len(fake_agents.calls) == 4
+    assert len(at.table[-1].value) == 2
 
 
 def test_speaker_audit_is_shown_and_never_editable(tmp_path, monkeypatch):
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-FAKE-KEY-000")
-    monkeypatch.setenv("ANTHROPIC_MODEL", "fake-model")
-    monkeypatch.setenv("TRACE_STAGE3_BACKEND", "anthropic")  # ancien mode de l'étape 3 par API (LLM simulé)
-    from tests.fake_llm import AUDITOR
-    transport = FakeTransport({PRACTICE: lambda p: text_response({"practices": [], "extraction_notes": None}),
-                               INTERACTION: lambda p: text_response({"signals": [], "reading_notes": None}),
-                               AUDITOR: lambda p: text_response(si.AUDIT_ASSESSMENTS)})
-    monkeypatch.setattr(llm_client, "AnthropicTransport", lambda settings: transport)
+    agents = simulate(monkeypatch, {PRACTICE: lambda p: text_response({"practices": [], "extraction_notes": None}),
+                                    INTERACTION: lambda p: text_response({"signals": [], "reading_notes": None}),
+                                    AUDITOR: lambda p: text_response(si.AUDIT_ASSESSMENTS)})
     at = app_with_run(si.make_ingested_run(tmp_path, si.AUDIT_FILES))
-    assert "2 tour(s) suspect(s), 1 appel(s) d'audit" in texts(at.info)
-    assert "(au plus 3 appel(s) API payant(s))" in at.button(key="ai_launch").label
-    at.button(key="ai_launch").click().run()
-    assert not at.exception and len(transport.calls) == 3
+    at.button(key="wf_stage3").click().run()
+    assert not at.exception and len(agents.calls) == 3 and agents.calls[0]["agent"] == AUDITOR
     table = at.table[-1].value
     assert list(table["Audit locuteurs"]) == ["✅ SUCCESS"]
     assert list(table["Tours suspects"]) == [2] and list(table["Locuteurs à vérifier"]) == [2]
@@ -131,8 +100,6 @@ def test_speaker_audit_is_shown_and_never_editable(tmp_path, monkeypatch):
     assert "Télécharger speaker_attribution_audit.json" in [b.label for b in at.get("download_button")]
     # aucun champ de saisie ne permet de modifier la transcription (seule la problématique est éditable)
     assert not at.text_input and [t.key for t in at.text_area] == ["problematique"]
-    # relance : tout vient du cache, y compris l'audit
-    assert "(0 appel(s) API payant(s))" in at.button(key="ai_launch").label
 
 
 @pytest.fixture
@@ -171,87 +138,62 @@ def test_app_reloads_stale_analysis_module_after_hot_redeploy(restore_project_mo
 
 # --- Étape 3.6 : entretien long lu par blocs ----------------------------------------------------
 
-def long_interview_api(monkeypatch, interaction=None):
+def long_interview_agents(monkeypatch, interaction=None):
     from tests import synthetic_long_interview as L
-    from tests.fake_llm import LONG_DISTANCE
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-FAKE-KEY-000")
-    monkeypatch.setenv("ANTHROPIC_MODEL", "fake-model")
-    monkeypatch.setenv("TRACE_STAGE3_BACKEND", "anthropic")  # ancien mode de l'étape 3 par API (LLM simulé)
-    transport = FakeTransport({PRACTICE: lambda p: text_response({"practices": [], "extraction_notes": None}),
-                               INTERACTION: interaction or L.simulated_chunk_reader,
-                               LONG_DISTANCE: L.simulated_long_distance_reader})
-    monkeypatch.setattr(llm_client, "AnthropicTransport", lambda settings: transport)
-    return transport
+    return simulate(monkeypatch, {PRACTICE: lambda p: text_response({"practices": [], "extraction_notes": None}),
+                                  INTERACTION: interaction or L.simulated_chunk_reader,
+                                  LONG_DISTANCE: L.simulated_long_distance_reader})
 
 
-def test_long_interview_announces_blocks_then_shows_chunk_results(tmp_path, monkeypatch):
+def test_long_interview_shows_chunk_results(tmp_path, monkeypatch):
     from tests import synthetic_long_interview as L
-    transport = long_interview_api(monkeypatch)
+    agents = long_interview_agents(monkeypatch)
     at = app_with_run(si.make_ingested_run(tmp_path, L.long_files()))
-    assert not at.exception and transport.calls == []
-    assert ("Interaction Reader — ENTRETIEN_LONG : entretien long : analyse en **5 blocs** (chevauchement inclus)"
-            in texts(at.info))
-    assert "au plus **6 appels** Interaction Reader" in texts(at.info)
-    assert "Interaction Reader : au plus **6 appel(s)**" in texts(at.caption)
-    # étape 3.7 : le Practice Extractor lit aussi l'entretien long par blocs (6 blocs) : 6 + 6 appels au plus
-    assert "(au plus 12 appel(s) API payant(s))" in at.button(key="ai_launch").label
-    at.button(key="ai_launch").click().run()
-    assert not at.exception and len(transport.calls) == 12
+    assert not at.exception and agents.calls == []
+    at.button(key="wf_stage3").click().run()
+    # étape 3.7 : le Practice Extractor lit aussi l'entretien long par blocs (6 blocs) : 6 + 5 + 1 tâches
+    assert not at.exception and len(agents.calls) == 12
     table = at.table[-1].value
     assert list(table["Interaction Reader"]) == ["✅ SUCCESS"] and list(table["Blocs (Interaction)"]) == ["5/5"]
     assert "entretien long : analyse en 5 blocs (chevauchement inclus) · blocs réussis : **5/5**" in texts(at.markdown)
     assert "Télécharger interaction_signals.json" in [b.label for b in at.get("download_button")]
-    assert "(0 appel(s) API payant(s))" in at.button(key="ai_launch").label  # tout est en cache
 
 
-def test_truncated_block_is_shown_as_incomplete(tmp_path, monkeypatch):
+def test_failed_block_is_shown_as_incomplete_and_listed_for_correction(tmp_path, monkeypatch):
     from tests import synthetic_long_interview as L
 
-    def truncating(params):
+    def incomplete(params):
         if any(t["turn_id"] == L.ltid(200) for t in L.sent_turns(params)):
-            return text_response('{"signals": [', stop_reason="max_tokens")
+            return text_response('{"signals": [')  # réponse incomplète : JSON invalide
         return L.simulated_chunk_reader(params)
 
-    long_interview_api(monkeypatch, truncating)
+    long_interview_agents(monkeypatch, incomplete)
     at = app_with_run(si.make_ingested_run(tmp_path, L.long_files()))
-    at.button(key="ai_launch").click().run()
+    at.button(key="wf_stage3").click().run()
     assert not at.exception
+    assert "réponse à corriger" in list(next(t.value for t in at.table if "Tâche" in t.value.columns)["État"])
     table = at.table[-1].value
     assert list(table["Interaction Reader"]) == ["🟠 PARTIAL"] and list(table["Blocs (Interaction)"]) == ["4/5"]
-    assert "analyse(s) incomplète(s)" in texts(at.warning)
     errors = texts(at.error)
-    assert "Analyse INCOMPLÈTE : 4/5 bloc(s) réussi(s)" in errors and "Bloc(s) tronqué(s)" in errors
-    assert "(au plus 2 appel(s) API payant(s))" in at.button(key="ai_launch").label  # bloc 3 + longue distance
+    assert "Analyse INCOMPLÈTE : 4/5 bloc(s) réussi(s)" in errors and "JSON invalide" in errors
 
 
 # --- Étape 3.7 : Practice Extractor par blocs, sélectivité, anomalies de validation -----------------
 
-def stage37_api(monkeypatch, practice=None):
+def stage37_agents(monkeypatch, practice=None):
     from tests import synthetic_stage37 as S
-    from tests.fake_llm import AUDITOR, LONG_DISTANCE
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-FAKE-KEY-000")
-    monkeypatch.setenv("ANTHROPIC_MODEL", "fake-model")
-    monkeypatch.setenv("TRACE_STAGE3_BACKEND", "anthropic")  # ancien mode de l'étape 3 par API (LLM simulé)
-    transport = FakeTransport({PRACTICE: practice or S.practice_reader, INTERACTION: S.naive_reader,
-                               LONG_DISTANCE: S.long_distance_reader,
-                               AUDITOR: lambda p: text_response({"assessments": [], "audit_notes": None})})
-    monkeypatch.setattr(llm_client, "AnthropicTransport", lambda settings: transport)
-    return transport
+    return simulate(monkeypatch, {PRACTICE: practice or S.practice_reader, INTERACTION: S.naive_reader,
+                                  LONG_DISTANCE: S.long_distance_reader,
+                                  AUDITOR: lambda p: text_response({"assessments": [], "audit_notes": None})})
 
 
-def test_stage37_long_interview_announces_and_reports_both_chunked_agents(tmp_path, monkeypatch):
+def test_stage37_long_interview_reports_both_chunked_agents(tmp_path, monkeypatch):
     from tests import synthetic_stage37 as S
-    transport = stage37_api(monkeypatch)
+    agents = stage37_agents(monkeypatch)
     at = app_with_run(si.make_ingested_run(tmp_path, S.files()))
-    assert not at.exception and transport.calls == []
-    infos = texts(at.info)
-    assert f"Practice Extractor — {S.INTERVIEW_ID} : entretien long : analyse en **4 blocs**" in infos
-    assert "soit au plus **4 appels** Practice Extractor" in infos
-    assert f"Interaction Reader — {S.INTERVIEW_ID} : entretien long : analyse en **3 blocs**" in infos
-    assert "Practice Extractor : au plus **4 appel(s)** · Interaction Reader : au plus **4 appel(s)**" in texts(at.caption)
-    assert "(au plus 9 appel(s) API payant(s))" in at.button(key="ai_launch").label  # 1 audit + 4 + 3 + 1
-    at.button(key="ai_launch").click().run()
-    assert not at.exception and len(transport.calls) == 9
+    assert not at.exception and agents.calls == []
+    at.button(key="wf_stage3").click().run()
+    assert not at.exception and len(agents.calls) == 9  # 1 audit + 4 + 3 + 1
     table = at.table[-1].value
     assert list(table["Practice Extractor"]) == ["✅ SUCCESS"] and list(table["Interaction Reader"]) == ["✅ SUCCESS"]
     assert list(table["Blocs (Practice)"]) == ["4/4"] and list(table["Blocs (Interaction)"]) == ["3/3"]
@@ -266,25 +208,23 @@ def test_stage37_long_interview_announces_and_reports_both_chunked_agents(tmp_pa
     labels = [b.label for b in at.get("download_button")]
     for name in ("practice_extractor.json", "interaction_signals.json", "evidence_validation.json"):
         assert f"Télécharger {name}" in labels
-    assert "(0 appel(s) API payant(s))" in at.button(key="ai_launch").label  # relance : tout est en cache
-    at.button(key="ai_launch").click().run()
-    assert not at.exception and len(transport.calls) == 9
+    at.button(key="wf_stage3").click().run()  # relance : complète et à jour, non rejouée
+    assert not at.exception and len(agents.calls) == 9
 
 
-def test_stage37_truncated_practice_block_is_shown_as_incomplete(tmp_path, monkeypatch):
+def test_stage37_failed_practice_block_is_shown_as_incomplete(tmp_path, monkeypatch):
     from tests import synthetic_stage37 as S
     from tests.synthetic_long_interview import sent_turns
 
-    def truncating(params):
+    def incomplete(params):
         if any(t["turn_id"] == S.tid(140) for t in sent_turns(params)):
-            return text_response('{"practices": [', stop_reason="max_tokens")
+            return text_response('{"practices": [')
         return S.practice_reader(params)
 
-    stage37_api(monkeypatch, truncating)
+    stage37_agents(monkeypatch, incomplete)
     at = app_with_run(si.make_ingested_run(tmp_path, S.files()))
-    at.button(key="ai_launch").click().run()
+    at.button(key="wf_stage3").click().run()
     assert not at.exception
     table = at.table[-1].value
     assert list(table["Practice Extractor"]) == ["🟠 PARTIAL"] and list(table["Blocs (Practice)"]) == ["3/4"]
-    assert "Practice Extractor — Bloc(s) tronqué(s)" in texts(at.error)
-    assert "(1 appel(s) API payant(s))" in at.button(key="ai_launch").label  # seul le bloc tronqué est à refaire
+    assert "Analyse INCOMPLÈTE : 3/4 bloc(s) réussi(s)" in texts(at.error)

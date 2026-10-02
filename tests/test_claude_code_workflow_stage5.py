@@ -1,15 +1,14 @@
 """Étape 5 en workflow Claude Code : paquet unique, réponse d'agent, validation, requalifications, garde, étape 6.
 
-Aucun appel API : en plus des garde-fous de tests/conftest.py (transport réel interdit, réseau refusé, aucune
-clé), la construction d'un client d'API (LLMClient) est interdite pendant tout le workflow (`api_guard`). Les tests
-de comparaison exécutent ENSUITE l'ancien pipeline (LLM simulé) pour référence. Le Trajectory Mapper est simulé
+Aucun appel API : en plus des garde-fous de tests/conftest.py (réseau refusé, aucune clé), les agents
+simulés (FakeAgents) sont interdits pendant tout le workflow (`agents_guard`). Les tests
+de comparaison exécutent ENSUITE le pipeline avec agents simulés pour référence. Le Trajectory Mapper est simulé
 par les lecteurs scriptés existants (tests/synthetic_stage5.py), dont les réponses sont écrites dans response.json,
 là où un sous-agent Claude Code les écrirait.
 """
 
 import importlib.util
 import json
-from pathlib import Path
 
 import pytest
 from streamlit.testing.v1 import AppTest
@@ -24,7 +23,7 @@ from tests import synthetic_stage4 as S
 from tests import synthetic_stage5 as S5
 from tests.fake_llm import ACCOUNTABILITY, TRAJECTORY, text_response
 from tests.test_claude_code_workflow import APP, analysis_dir, answer, packet, texts
-from tests.test_claude_code_workflow_stage4 import api_guard, table  # noqa: F401
+from tests.test_claude_code_workflow_stage4 import agents_guard, table  # noqa: F401
 
 STAGE5_FILES = (config.STUDENT_TRAJECTORY_FILENAME, config.STUDENT_TRAJECTORY_VALIDATION_FILENAME,
                 config.STUDENT_TRAJECTORY_MANIFEST_FILENAME)
@@ -34,7 +33,7 @@ EARLIER_FILES = ("practice_extractor.json", "interaction_signals.json", config.E
 
 
 class Pipeline:
-    """Un entretien synthétique et ses agents simulés, pour le workflow ET pour l'ancien pipeline."""
+    """Un entretien synthétique et ses agents simulés, pour le workflow ET pour le pipeline de référence."""
 
     def __init__(self, interview_id, files, stage3, builder, mapper):
         self.interview_id, self.files, self.stage3, self.builder, self.mapper = (interview_id, files, stage3, builder,
@@ -53,17 +52,17 @@ class Pipeline:
     def case(cls, case, mode="good", mapper=None):
         return cls(case.interview_id, case.files, case.stage3_responders(), case.builder(), mapper or case.mapper(mode))
 
-    def api(self, tmp_path) -> dict:
-        """L'ancien pipeline (LLM simulé) jusqu'à l'étape 5, pour comparaison."""
+    def simulated(self, tmp_path) -> dict:
+        """Le pipeline avec agents simulés jusqu'à l'étape 5, pour comparaison."""
         run, cache = S5.run_to_stage4(tmp_path, self.files, self.stage3, self.builder)
         run, _ = S5.run_stage5(run, AnalysisCache(tmp_path / "cache5"), self.mapper)
         return run
 
 
 def altered(mapper, mutate):
-    """La même réponse simulée, modifiée de façon déterministe (identique pour le workflow et l'ancien pipeline)."""
+    """La même réponse simulée, modifiée de façon déterministe (identique pour le workflow et le pipeline de référence)."""
     def respond(params):
-        output = json.loads(mapper(params).content[0].text)
+        output = json.loads(mapper(params).text)
         mutate(output)
         return text_response(output)
     return respond
@@ -101,20 +100,20 @@ def comparable(document: dict) -> dict:
     return {k: v for k, v in document.items() if k not in ("generated_at", "model", "source_hashes", "cache_hit")}
 
 
-def both(tmp_path, pipeline: Pipeline, api_guard) -> tuple[dict, dict, dict]:
-    """(run du workflow, document du workflow, document de l'ancien pipeline), réponses identiques."""
+def both(tmp_path, pipeline: Pipeline, agents_guard) -> tuple[dict, dict, dict]:
+    """(run du workflow, document du workflow, document du pipeline de référence), réponses identiques."""
     run = finish(si.make_ingested_run(tmp_path / "workflow", pipeline.files), pipeline.agents)["metadata"]
-    api_guard["forbid"] = False  # référence : l'ancien pipeline, LLM simulé
-    api_run = pipeline.api(tmp_path / "api")
+    agents_guard["forbid"] = False  # référence : le pipeline avec agents simulés
+    sim_run = pipeline.simulated(tmp_path / "simulated")
     iid = pipeline.interview_id
     for name in (config.STUDENT_TRAJECTORY_VALIDATION_FILENAME,):
-        a, b = (load(r, name, iid) for r in (run, api_run))
+        a, b = (load(r, name, iid) for r in (run, sim_run))
         assert {k: v for k, v in a.items() if k != "validated_at"} == {k: v for k, v in b.items() if k != "validated_at"}
-    return run, load(run, config.STUDENT_TRAJECTORY_FILENAME, iid), load(api_run, config.STUDENT_TRAJECTORY_FILENAME, iid)
+    return run, load(run, config.STUDENT_TRAJECTORY_FILENAME, iid), load(sim_run, config.STUDENT_TRAJECTORY_FILENAME, iid)
 
 
 @pytest.fixture
-def reference(tmp_path, api_guard):
+def reference(tmp_path, agents_guard):
     """Entretien de référence : étapes 3 et 4 terminées par le workflow, première tâche de l'étape 5."""
     pipeline = Pipeline.reference()
     return until(si.make_ingested_run(tmp_path, S.FILES), pipeline.agents, "5"), pipeline
@@ -132,7 +131,7 @@ def test_stage5_runs_without_key_from_one_exact_packet(reference):
     prepared = trajectory.prepare_stage5(run["files"][0]["ingestion"])
     assert p["task"]["system_prompt"]["path"] == "prompts/trajectory_mapper.md"
     assert p["system_prompt"] == trajectory.SPEC.system_prompt  # le prompt du dépôt, inchangé
-    assert p["payload"] == prepared.request["user_message"]      # le message que recevait l'API
+    assert p["payload"] == prepared.request["user_message"]      # le message exact reçu par les agents simulés
     assert p["schema"] == trajectory.SPEC.output_schema
     [interview] = status["interviews"]
     assert interview["estimated_input_tokens"] == prepared.estimated_input_tokens < tc.SINGLE_CALL_MAX_INPUT_TOKENS
@@ -218,7 +217,7 @@ def test_invalid_json_and_schema_are_refused_until_corrected(reference):
     assert wf.run_until(first["metadata"], "5")["status"]["status"] == wf.STAGE_COMPLETE
 
 
-def test_invented_identifier_is_refused_by_check_and_rejected_by_the_validator(tmp_path, api_guard):
+def test_invented_identifier_is_refused_by_check_and_rejected_by_the_validator(tmp_path, agents_guard):
     def invent(output):
         output["claims"][0]["episode_ids"] = ["E999"]
     pipeline = Pipeline.reference(altered(S5.scripted_mapper(S5.REFERENCE_PLAN), invent))
@@ -232,7 +231,7 @@ def test_invented_identifier_is_refused_by_check_and_rejected_by_the_validator(t
     assert invented and not any(f"{S.INTERVIEW_ID}_E999" in c["support_ids"] for c in claims)
 
 
-def test_invalid_anchor_is_blocked_by_check_and_treated_as_before(tmp_path, api_guard):
+def test_invalid_anchor_is_blocked_by_check_and_treated_as_before(tmp_path, agents_guard):
     def break_anchor(output):
         claim = next(c for c in output["claims"] if c["temporal_anchors"])
         claim["temporal_anchors"][0]["text"] = "pendant les vacances de Noël"
@@ -241,36 +240,36 @@ def test_invalid_anchor_is_blocked_by_check_and_treated_as_before(tmp_path, api_
     answer(first["status"], pipeline.agents)
     report = wf.check_task(wf._resolve(first["status"]["pending"][0]["task_dir"]))
     assert not report["ok"] and any(line.startswith("ANCHOR_NOT_FOUND") for line in report["blocking"])
-    _, workflow_doc, api_doc = both(tmp_path, pipeline, api_guard)
-    assert comparable(workflow_doc) == comparable(api_doc)
+    _, workflow_doc, sim_doc = both(tmp_path, pipeline, agents_guard)
+    assert comparable(workflow_doc) == comparable(sim_doc)
     assert any("ANCHOR_NOT_FOUND" in c["review_reasons"] for c in workflow_doc["trajectory_claims"])
 
 
-# --- Mêmes sorties, requalifications et needs_review que l'ancien pipeline ----------------------------------
+# --- Mêmes sorties, requalifications et needs_review que le pipeline de référence ----------------------------------
 
-def test_same_outputs_as_the_api_pipeline_with_identical_responses(tmp_path, api_guard):
-    _, workflow_doc, api_doc = both(tmp_path, Pipeline.reference(), api_guard)
-    assert comparable(workflow_doc) == comparable(api_doc)
-    assert workflow_doc["status"] == api_doc["status"] == "SUCCESS"
+def test_same_outputs_as_the_simulated_agents_pipeline_with_identical_responses(tmp_path, agents_guard):
+    _, workflow_doc, sim_doc = both(tmp_path, Pipeline.reference(), agents_guard)
+    assert comparable(workflow_doc) == comparable(sim_doc)
+    assert workflow_doc["status"] == sim_doc["status"] == "SUCCESS"
 
 
-def test_requalifications_are_identical_to_the_api_pipeline(tmp_path, api_guard):
+def test_requalifications_are_identical_to_the_simulated_agents_pipeline(tmp_path, agents_guard):
     pipeline = Pipeline.case(S5.CONTEXT, "adversarial")
     first = until(si.make_ingested_run(tmp_path / "check", pipeline.files), pipeline.agents, "5")
     answer(first["status"], pipeline.agents)
     report = wf.check_task(wf._resolve(first["status"]["pending"][0]["task_dir"]))
     assert report["counts"]["requalified"] >= 1 and any("requalifiée" in line for line in report["info"])
-    _, workflow_doc, api_doc = both(tmp_path, pipeline, api_guard)
-    assert comparable(workflow_doc) == comparable(api_doc)
+    _, workflow_doc, sim_doc = both(tmp_path, pipeline, agents_guard)
+    assert comparable(workflow_doc) == comparable(sim_doc)
     requalified = [c for c in workflow_doc["trajectory_claims"] if "model_claim_type" in c]
     assert requalified and workflow_doc["requalified_claim_count"] == len(requalified)
     assert all(c["needs_review"] and any(r.endswith("_REQUALIFIED") for r in c["review_reasons"])
                for c in requalified)
 
 
-def test_needs_review_is_kept_as_in_the_api_pipeline(tmp_path, api_guard):
-    _, workflow_doc, api_doc = both(tmp_path, Pipeline.case(S5.REVIEW), api_guard)
-    assert comparable(workflow_doc) == comparable(api_doc)
+def test_needs_review_is_kept_as_in_the_simulated_agents_pipeline(tmp_path, agents_guard):
+    _, workflow_doc, sim_doc = both(tmp_path, Pipeline.case(S5.REVIEW), agents_guard)
+    assert comparable(workflow_doc) == comparable(sim_doc)
     assert any(c["needs_review"] and not c["model_needs_review"] for c in workflow_doc["trajectory_claims"])
 
 
@@ -297,14 +296,14 @@ def test_oversized_packet_stays_single_and_is_flagged(reference, monkeypatch):
 
 # --- Restauration (import des triplets) et étape 6 -----------------------------------------------------------
 
-def test_stage5_outputs_restore_and_are_recognized_by_stage6(tmp_path, api_guard):
+def test_stage5_outputs_restore_and_are_recognized_by_stage6(tmp_path, agents_guard):
     run = finish(si.make_ingested_run(tmp_path / "workflow", S.FILES), Pipeline.reference().agents)["metadata"]
     out = analysis_dir(run, S.INTERVIEW_ID)
     downloaded = [(f"{S.INTERVIEW_ID}_{name}", (out / name).read_bytes()) for name in STAGE5_FILES]
     assert sorted(d for _, d in downloaded) == sorted(d for _, d in corpus.run_stage5_uploads(run))
 
-    api_guard["forbid"] = False  # second entretien, ancien pipeline (LLM simulé) : un corpus de deux entretiens
-    other = Pipeline.case(S5.TEMPORAL).api(tmp_path / "other")
+    agents_guard["forbid"] = False  # second entretien, pipeline avec agents simulés : un corpus de deux entretiens
+    other = Pipeline.case(S5.TEMPORAL).simulated(tmp_path / "other")
     checked = corpus.check_corpus(downloaded + corpus.run_stage5_uploads(other))
     rows = {r["interview_id"]: r for r in checked["rows"]}
     assert rows[S.INTERVIEW_ID]["status"] == corpus.STATUS_USABLE and checked["n_usable"] == 2
@@ -315,7 +314,7 @@ def test_stage5_outputs_restore_and_are_recognized_by_stage6(tmp_path, api_guard
 
 # --- Commandes de Claude Code --------------------------------------------------------------------------------
 
-def test_cli_runs_trace_until_stage5_and_guards_completed_stages(tmp_path, monkeypatch, capsys, api_guard):
+def test_cli_runs_trace_until_stage5_and_guards_completed_stages(tmp_path, monkeypatch, capsys, agents_guard):
     monkeypatch.setattr(config, "INPUTS_DIR", tmp_path / "inputs")
     monkeypatch.setattr(config, "OUTPUTS_DIR", tmp_path / "outputs")
     spec = importlib.util.spec_from_file_location("trace_workflow_cli5",
@@ -358,7 +357,7 @@ def test_app_runs_stage5_through_the_workflow_without_key(reference):
     at.run()
     assert not at.exception
     assert "Analyse IA désactivée" not in texts(at.warning)
-    assert not [b for b in at.button if b.key == "traj_launch"]  # l'ancien lanceur par API n'est pas proposé
+    assert not [b for b in at.button if b.key == "traj_launch"]  # aucun ancien lanceur par API
     assert "⏳ EN ATTENTE (workflow Claude Code)" in list(table(at, "Étape 5")["Étape 5"])
     assert f"Exécute TRACE sur le run {first['metadata']['run_id']} jusqu'à l'étape 5" in " ".join(
         c.value for c in at.code)
@@ -384,7 +383,7 @@ def test_app_runs_stage5_through_the_workflow_without_key(reference):
     assert all(f"Télécharger {name}" in labels for name in STAGE5_FILES)
 
 
-def test_app_shows_stage5_ready_and_keeps_the_workflow_even_with_a_key(tmp_path, monkeypatch, api_guard):
+def test_app_shows_stage5_ready_and_keeps_the_workflow_even_with_a_key(tmp_path, monkeypatch, agents_guard):
     run = finish(si.make_ingested_run(tmp_path, S.FILES), Pipeline.reference().agents, "4")["metadata"]
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-FAKE-KEY-000")
     monkeypatch.setenv("ANTHROPIC_MODEL", "fake-model")

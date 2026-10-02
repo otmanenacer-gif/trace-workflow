@@ -1,5 +1,9 @@
 # Étape 3 — deux agents d'analyse indépendants
 
+> **Exécution** : les agents sont joués par Claude Code (workflow multi-agents, [`TRACE_WORKFLOW.md`](../TRACE_WORKFLOW.md)),
+> sans aucun appel à une API de modèle. Dans ce document, un « appel » désigne une **tâche d'agent** du workflow
+> (un paquet `task.json` → une réponse `response.json`).
+
 Cette étape ajoute le premier étage d'analyse par LLM. Deux agents lisent
 **le même entretien structuré**, **séparément** et **en parallèle**, après un
 audit de l'attribution des locuteurs (étape 3.5, voir
@@ -338,7 +342,9 @@ revérifiés à la lecture (une entrée corrompue ou incohérente est ignorée).
 - Étape 3.5 : les versions 1.2 des deux agents (consignes et schémas modifiés)
   ne réutilisent aucune entrée 1.1 ; l'audit a sa propre entrée
   (`data/cache/analysis/speaker_attribution_auditor/`).
-- La case « Forcer une nouvelle analyse » ignore le cache (inutile en usage courant).
+- Workflow Claude Code : ce cache n'est pas utilisé (`NoCache`) ; `response.json` fait foi et la garde
+  contre les réexécutions (étape complète et à jour non rejouée) joue son rôle ; `--force` (sur demande
+  explicite) rejoue une étape.
 
 Chaque exécution écrit un manifest par agent (`practice_manifest.json`,
 `interaction_manifest.json`) :
@@ -347,92 +353,74 @@ Chaque exécution écrit un manifest par agent (`practice_manifest.json`,
 {
   "agent": "practice_extractor", "agent_version": "1.2", "schema_version": "1.2",
   "prompt_sha256": "…", "schema_sha256": "…", "source_sha256": "…", "transcript_sha256": "…",
-  "model": "<ANTHROPIC_MODEL>", "request_params": {"effort": null, "temperature": null},
+  "model": "workflow_claude_code", "request_params": {"effort": null, "temperature": null},
   "cache_key": "…", "cache_hit": false, "status": "SUCCESS",
-  "created_at": "…", "run_at": "…", "api_calls": 1, "billed_this_run": true,
-  "usage": {"input_tokens": 18432, "output_tokens": 3210,
-            "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0},
-  "duration_seconds": 41.3, "response_model": "…", "request_id": "req_…", "stop_reason": "end_turn",
-  "speaker_warning_count": 0,
+  "created_at": "…", "run_at": "…", "api_calls": 0, "billed_this_run": false,
+  "usage": {"input_tokens": null, "output_tokens": null,
+            "cache_creation_input_tokens": null, "cache_read_input_tokens": null},
+  "duration_seconds": 0.0, "response_model": "claude_code", "request_id": "<identifiant de la tâche>",
+  "stop_reason": null, "speaker_warning_count": 0,
   "item_count": 6, "invalid_evidence_count": 0, "needs_review_count": 1, "error": null
 }
 ```
 
-## 9. Observabilité des tokens
+`api_calls`, `billed_this_run`, `usage`, `request_params`, `stop_reason` sont des champs **legacy** (anciennes
+exécutions par API) : conservés pour ne pas changer le format des sorties ni la relecture d'anciens fichiers,
+ils valent toujours 0 / `false` / `null` ; `request_id` porte l'identifiant de la tâche du workflow.
 
-Les tokens rapportés par l'API (`input_tokens`, `output_tokens`, tokens
-écrits / lus dans le cache de prompt de l'API) sont enregistrés par appel, avec
-le nombre de tentatives et la durée. Un appel en échec après réponse (JSON
-invalide, réponse tronquée…) reste compté : les tokens ont été consommés.
-L'interface affiche, pour la dernière exécution (audit des locuteurs compris) :
-« 2 appel(s) API — 18 432 tokens entrée — 3 210 tokens sortie — 0 résultat(s)
-repris du cache TRACE ». Avant le lancement, elle annonce le nombre d'appels
-prévus : 2 par entretien hors cache, plus 1 d'audit seulement si des tours
-suspects sont détectés (« au plus » tant que l'audit n'est pas en cache, car
-les avertissements qu'il produira font partie de l'entrée des agents). **Aucun montant** n'est calculé : le prix du modèle
-n'est pas connu localement de façon fiable.
+## 9. Coût
+
+Aucun : 0 appel API, 0 token facturé. L'interface affiche « 0 appel(s) API — 0 tokens entrée — 0 tokens
+sortie » pour la dernière exécution. Le nombre de tâches d'agent se lit dans l'état du workflow (« n/m
+tâche(s) avec une réponse conforme ») et dans `workflow/stage3/status.json`.
 
 ## 10. Statuts et erreurs
 
 `PENDING` → `RUNNING` → `SUCCESS` | `SUCCESS_WITH_WARNINGS` (au moins une
 anomalie `error`/`warning` de validation) | `FAILED` | `CACHED` | `PARTIAL`
-(Interaction Reader sur un entretien long : au moins un bloc en échec ou
-tronqué — `TRUNCATED` au niveau du bloc ; les blocs réussis sont conservés,
+(entretien long : au moins un bloc en échec ; les blocs réussis sont conservés,
 `analysis_complete: false`, voir [`interaction_chunking.md`](interaction_chunking.md)).
 
-Erreurs API traduites en messages clairs (`core/llm_client.py`) : clé refusée
-(401), accès refusé (403), modèle introuvable (404), requête refusée (400, avec
-le détail de l'API, clé masquée), limite de débit (429), erreur serveur (5xx),
-délai dépassé, réseau, refus du modèle, réponse tronquée, JSON invalide,
-schéma non respecté. Réessais : uniquement 408/409/429/5xx, délai et réseau,
-au plus `TRACE_LLM_MAX_RETRIES` fois (défaut 2), avec backoff exponentiel
-borné (2 s, 4 s… 30 s max, `retry-after` respecté jusqu'à 60 s). Jamais de
-boucle infinie ; une réponse invalide n'est jamais réessayée automatiquement
-(pour ne pas repayer). Les journaux ne contiennent ni clé, ni transcript, ni
-citation : identifiant d'entretien, agent, statut, tokens, durée.
+Erreurs d'agent (`core/llm_client.py`) : `AWAITING_AGENT` (réponse pas encore écrite : la tâche reste en
+attente), `EMPTY_RESPONSE`, `INVALID_JSON`, `SCHEMA_VALIDATION` (emplacements et types d'erreur seulement,
+jamais de contenu d'entretien). Une réponse invalide n'est jamais corrigée en silence : la tâche est listée
+« à corriger » et l'agent la reprend (`python scripts/trace_workflow.py check`, au plus 3 corrections). Aucun
+repli vers une API. Les journaux ne contiennent ni transcript ni citation : identifiant d'entretien, agent,
+statut.
 
-## 11. Configuration et premier appel réel
+## 11. Configuration et première exécution
 
-1. `cp .env.example .env` puis renseigner `ANTHROPIC_API_KEY` (clé de la
-   console Anthropic) et `ANTHROPIC_MODEL` (par exemple `claude-opus-5-5`).
-   Le modèle n'est écrit nulle part ailleurs.
-2. Optionnel : `TRACE_MAX_CONCURRENCY` (défaut 2), `TRACE_LLM_EFFORT`,
-   `TRACE_LLM_MAX_TOKENS`, `TRACE_LLM_TIMEOUT_SECONDS`, `TRACE_LLM_MAX_RETRIES`,
-   `TRACE_INTERACTION_CHUNK_TOKENS` (taille d'un bloc de l'Interaction Reader, défaut 5 000).
-   `TRACE_LLM_TEMPERATURE` n'est envoyé que s'il est renseigné : les modèles
-   récents refusent les paramètres d'échantillonnage (erreur 400). La
-   reproductibilité repose donc d'abord sur le cache (mêmes entrées → même
-   sortie enregistrée) et sur le versionnage des prompts et schémas.
-3. Test réel sur l'entretien **synthétique** (2 appels, consomme des tokens) :
-   `python scripts/smoke_test_stage3.py --confirm-api-cost`. Sans cette option,
-   le script n'appelle rien.
-4. Puis, dans l'interface : importer un entretien, lancer l'ingestion, choisir
-   « Test — un entretien » et cliquer sur « Lancer les deux analyses IA ».
+1. Aucune clé ni variable obligatoire. Facultatif (`.env` ou environnement) :
+   `TRACE_INTERACTION_CHUNK_TOKENS` (taille d'un bloc de l'Interaction Reader, défaut 5 000) et
+   `TRACE_PRACTICE_CHUNK_TOKENS` (Practice Extractor, défaut 4 000).
+2. Dans Claude Code, ouvert dans le dépôt : « Exécute TRACE sur `entretien.docx` jusqu'à l'étape 3 »
+   (procédure : [`TRACE_WORKFLOW.md`](../TRACE_WORKFLOW.md)).
+3. Ou dans l'interface : importer un entretien, lancer l'ingestion, choisir « Test — un entretien » et
+   cliquer sur « Préparer / reprendre l'étape 3 (workflow Claude Code, 0 appel API) », puis demander à Claude
+   Code d'exécuter les tâches en attente et cliquer de nouveau.
 
-Le repli automatique vers un autre modèle en cas de refus (paramètre
-`fallbacks` de l'API) n'est **pas** activé : il changerait silencieusement le
-modèle qui produit l'analyse, alors que le modèle fait partie de la clé de
-cache et du manifest. Un refus est signalé comme `FAILED` (`REFUSAL`).
+La reproductibilité repose sur le versionnage des prompts et des schémas, l'empreinte de chaque paquet de
+tâche et la conservation de chaque réponse (`response.json`).
 
 ## 12. Tests
 
-Aucun test automatique n'appelle l'API : `tests/conftest.py` retire les
-variables `ANTHROPIC_*`, n'ouvre pas `.env`, remplace le transport HTTP réel
-par une classe qui échoue, refuse toute connexion réseau TCP et redirige le
-cache vers un dossier temporaire. Le LLM est simulé par
-`tests/fake_llm.FakeTransport` ; l'entretien fictif et les réponses simulées
+Aucun test automatique n'appelle une API ni le réseau : `tests/conftest.py` retire les variables `TRACE_*`,
+n'ouvre pas `.env`, fait échouer toute connexion réseau TCP et redirige le cache vers un dossier temporaire.
+Les agents sont simulés par `tests/fake_llm.FakeAgents` (même interface et même validation que le client du
+workflow) ou par des réponses écrites dans les paquets de tâche ; l'entretien fictif et les réponses simulées
 sont dans `tests/synthetic_interviews.py`.
 
-- `tests/test_llm_client.py` — configuration, 429/5xx/délai, réessais bornés, réponses invalides, secret masqué
+- `tests/test_llm_client.py` — réponses invalides (JSON, schéma, vide), messages sans contenu d'entretien, paramètres, schémas stricts identiques à la référence, aucun SDK
 - `tests/test_practice_extractor.py`, `tests/test_interaction_signal_reader.py` — schémas, prompts, preuves
 - `tests/test_evidence_validator.py` — citations exactes / inventées / autre entretien / intervalle inversé
-- `tests/test_analysis_cache.py` — hit / prompt, version, modèle, paramètres ou transcript changés
+- `tests/test_analysis_cache.py` — hit / prompt, version, modèle ou transcript changés
 - `tests/test_analysis_pipeline.py` — indépendance, parallélisme, isolement des échecs, multi-entretiens
 - `tests/test_stage3_synthetic.py` — scénario qualitatif synthétique
-- `tests/test_speaker_attribution_auditor.py` — présélection, appel unique ou nul, cache, transcript inchangé, avertissements
+- `tests/test_speaker_attribution_auditor.py` — présélection, tâche unique ou nulle, cache, transcript inchangé, avertissements
 - `tests/test_interpretation_guard.py` — « réparation » ordinaire / interprétative
 - `tests/test_stage3_5_synthetic.py` — scénario global de l'étape 3.5
-- `tests/test_interaction_chunking.py` — étape 3.6 : entretien long (349 tours synthétiques), blocs, chevauchement, fusion, longue distance, bloc tronqué, cache par bloc, avertissements
+- `tests/test_interaction_chunking.py` — étape 3.6 : entretien long (349 tours synthétiques), blocs, chevauchement, fusion, longue distance, bloc en échec, cache par bloc, avertissements
+- `tests/test_claude_code_workflow.py` — étape 3 en workflow : paquets, réponses, validation, garde, restauration
 - `tests/test_app_stage3.py` — interface (Streamlit AppTest)
 - `tests/e2e/browser_check.py` — navigateur réel (Playwright), lancé à la main
 
@@ -448,15 +436,13 @@ sont dans `tests/synthetic_interviews.py`.
 - Les tests des non-usages et du type `metadiscursive_self_evaluation` utilisent
   des réponses **simulées** : ils vérifient le contrat (schéma, consignes,
   validation, non-fusion), pas la capacité d'un vrai modèle à appliquer les
-  consignes. Le test réel `scripts/smoke_test_stage3.py --confirm-api-cost
-  --stage35` (3 appels, payant) permet de le vérifier sur l'entretien synthétique.
+  consignes : seule la lecture des réponses produites par Claude Code sur des entretiens réels le permet.
 - Une citation exacte mais trop courte (« oui ») est valide techniquement
   sans être forcément probante.
 - Un entretien long est lu par l'Interaction Signal Reader en blocs qui se
   chevauchent (étape 3.6, [`interaction_chunking.md`](interaction_chunking.md)) ;
-  le Practice Extractor reste en un seul appel (au-delà de la limite de réponse,
-  il échouerait avec `TRUNCATED`).
+  le Practice Extractor aussi depuis l'étape 3.7 ([`stage3_7.md`](stage3_7.md)).
 - Les tours de locuteur `unknown` sont transmis tels quels : l'agent ne sait
   pas toujours qui parle.
-- Le cache de prompt de l'API ne s'active que si les consignes dépassent la
-  taille minimale du modèle : sinon, aucun gain (et aucun surcoût).
+- Aucune parallélisation n'est imposée par TRACE : l'orchestrateur Claude Code peut lancer les tâches d'un
+  même passage en parallèle (sous-agents), elles sont indépendantes.

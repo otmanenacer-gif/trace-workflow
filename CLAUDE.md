@@ -5,8 +5,8 @@
 - Les **étapes 3 à 6** passent par ce workflow : étapes 3 à 5 par run (`run <run> --until 5`), étape 6 par
   corpus de sorties de l'étape 5 (`stage6 <runs, dossiers ou fichiers>`, puis `stage6 --corpus <corpus_id>`). Une
   étape (ou un corpus) déjà complète n'est jamais rejouée. Pas d'étape 7 : s'arrêter après l'étape demandée.
-- Aucun appel à une API de modèle (Anthropic ou autre) ; ne jamais renseigner `TRACE_STAGE3_BACKEND` à
-  `TRACE_STAGE6_BACKEND` à `anthropic` ; ne jamais utiliser `--force` sans demande explicite.
+- TRACE est un workflow multi-agents exécuté dans Claude Code : aucun appel à une API de modèle (Anthropic ou
+  autre), aucun SDK, aucune clé ; n'en ajouter aucun. Ne jamais utiliser `--force` sans demande explicite.
 - Les prompts `prompts/*.md`, les schémas (`agents/`) et les validateurs (`core/`) font foi : ne jamais les modifier
   pour faire passer une réponse.
-- Tests : `python -m pytest` (aucun appel réseau, LLM simulé).
+- Tests : `python -m pytest` (aucun appel réseau, agents simulés).

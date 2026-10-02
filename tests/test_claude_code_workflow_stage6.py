@@ -1,7 +1,7 @@
 """Étape 6 en workflow Claude Code : corpus, paquet unique, validation, garde par identité du corpus, Streamlit.
 
-Aucun appel API : en plus des garde-fous de tests/conftest.py (transport réel interdit, réseau refusé, aucune
-clé), la construction d'un client d'API (LLMClient) est interdite pendant tout le workflow (`api_guard`). Les
+Aucun appel API : en plus des garde-fous de tests/conftest.py (réseau refusé, aucune clé), les agents
+simulés (FakeAgents) sont interdits pendant tout le workflow (`agents_guard`). Les
 triplets de l'étape 5 viennent des fixtures existantes (tests/synthetic_stage6.py, produits par le vrai
 orchestrateur de l'étape 5 avant que la garde ne soit levée) ; le Cross-Interview Comparator est simulé par
 `S6.scripted_comparator`, dont les réponses sont écrites dans response.json, là où un sous-agent les écrirait.
@@ -19,21 +19,21 @@ from core import claude_code_workflow as wf
 from core import cross_interview as X
 from core.analysis_cache import AnalysisCache
 from tests import synthetic_stage6 as S6
-from tests.fake_llm import COMPARATOR, FakeTransport, fake_settings
+from tests.fake_llm import COMPARATOR, FakeAgents, fake_settings
 from tests.test_claude_code_workflow import APP, answer, packet, texts
-from tests.test_claude_code_workflow_stage4 import api_guard, table  # noqa: F401
+from tests.test_claude_code_workflow_stage4 import agents_guard, table  # noqa: F401
 
 OUTPUT_NAMES = (config.CROSS_INTERVIEW_COMPARISON_FILENAME, config.CROSS_INTERVIEW_VALIDATION_FILENAME,
                 config.CROSS_INTERVIEW_MANIFEST_FILENAME)
 
 
 @pytest.fixture
-def stage5(api_guard):
-    """Triplets de l'étape 5 des fixtures existantes (ancien pipeline simulé), PUIS garde active."""
+def stage5(agents_guard):
+    """Triplets de l'étape 5 des fixtures existantes (pipeline de référence, agents simulés), PUIS garde active."""
     def build(ids) -> list[tuple[str, bytes]]:
-        api_guard["forbid"] = False
+        agents_guard["forbid"] = False
         uploads = S6.uploads(ids)
-        api_guard["forbid"] = True
+        agents_guard["forbid"] = True
         return uploads
     return build
 
@@ -60,16 +60,16 @@ def comparable(document: dict) -> dict:
     return {k: v for k, v in document.items() if k not in ("generated_at", "model", "cache_hit", "validated_at")}
 
 
-def same_as_api(tmp_path, uploads, result, api_guard, agents=None) -> dict:
-    """Mêmes fichiers, même réponse, ancien pipeline (LLM simulé) : mêmes sorties. Renvoie le document du workflow."""
-    api_guard["forbid"] = False
-    manifest = X.run_stage6(uploads, settings=fake_settings(), transport=FakeTransport(agents or comparator()),
-                            cache=AnalysisCache(tmp_path / "cache"), base_dir=tmp_path / "api")
-    api_guard["forbid"] = True
-    workflow_out, api_out = outputs(result), outputs({"corpus_dir": manifest["corpus_dir"]})
+def same_as_simulated(tmp_path, uploads, result, agents_guard, agents=None) -> dict:
+    """Mêmes fichiers, même réponse, pipeline avec agents simulés : mêmes sorties. Renvoie le document du workflow."""
+    agents_guard["forbid"] = False
+    manifest = X.run_stage6(uploads, settings=fake_settings(), client=FakeAgents(agents or comparator()),
+                            cache=AnalysisCache(tmp_path / "cache"), base_dir=tmp_path / "simulated")
+    agents_guard["forbid"] = True
+    workflow_out, sim_out = outputs(result), outputs({"corpus_dir": manifest["corpus_dir"]})
     assert manifest["corpus_id"] == result["status"]["corpus_id"]
     for name in OUTPUT_NAMES[:2]:
-        assert comparable(workflow_out[name]) == comparable(api_out[name]), name
+        assert comparable(workflow_out[name]) == comparable(sim_out[name]), name
     return workflow_out[config.CROSS_INTERVIEW_COMPARISON_FILENAME]
 
 
@@ -92,7 +92,7 @@ def test_stage6_runs_without_key_on_two_interviews_from_one_exact_packet(tmp_pat
     assert p["task"]["corpus_id"] == status["corpus_id"] and p["task"]["run_id"] is None
     assert p["task"]["system_prompt"]["path"] == "prompts/cross_interview_comparator.md"
     assert p["system_prompt"] == X.SPEC.system_prompt and p["schema"] == X.SPEC.output_schema
-    assert p["payload"] == prepared.request["user_message"]  # le message que recevait l'API
+    assert p["payload"] == prepared.request["user_message"]  # le message exact reçu par les agents simulés
     assert sorted(wf.read_inputs(corpus_dir)) == sorted(uploads)  # copie octet pour octet des fichiers importés
     assert first["manifest"]["error"]["code"] == wf.AWAITING_AGENT
     assert not (corpus_dir / config.ANALYSIS_SUBDIR / config.CROSS_INTERVIEW_COMPARISON_FILENAME).exists()
@@ -110,11 +110,11 @@ def test_stage6_runs_without_key_on_two_interviews_from_one_exact_packet(tmp_pat
     assert wf.stage6_state(prepared, corpus_dir)["status"] == wf.STAGE6_COMPLETE
 
 
-def test_corpus_of_seventeen_preserves_not_observed_negative_cases_and_review_as_the_api(tmp_path, stage5,
-                                                                                         api_guard):
+def test_corpus_of_seventeen_preserves_not_observed_negative_cases_and_review_as_with_simulated_agents(tmp_path, stage5,
+                                                                                         agents_guard):
     uploads = stage5(S6.IDS_17)
     done = finish(uploads, tmp_path / "workflow")
-    document = same_as_api(tmp_path, uploads, done, api_guard)
+    document = same_as_simulated(tmp_path, uploads, done, agents_guard)
     assert document["corpus_n_usable"] == 17 and document["mode"] == "comparative"
     effort = next(p for p in document["student_role_criterion_patterns"] if p["criterion_label"] == "effort")
     assert {"ENT_B", "ENT_D"} <= set(effort["positions"]["not_observed"])  # non observé, jamais « absent »
@@ -124,7 +124,7 @@ def test_corpus_of_seventeen_preserves_not_observed_negative_cases_and_review_as
     assert verification["needs_review"] is True and verification["confidence"] == "low"  # needs_review propagé
 
 
-def test_invalid_triplet_is_excluded_with_its_reason(tmp_path, stage5, api_guard):
+def test_invalid_triplet_is_excluded_with_its_reason(tmp_path, stage5, agents_guard):
     uploads = stage5([*S6.IDS_4, "ENT_X_INVALIDE"])
     first = wf.run_stage6(uploads, base_dir=tmp_path / "workflow")
     rows = {r["interview_id"]: r for r in first["status"]["rows"]}
@@ -133,7 +133,7 @@ def test_invalid_triplet_is_excluded_with_its_reason(tmp_path, stage5, api_guard
         wf._resolve(first["status"]["pending"][0]["task_dir"]))["payload"]
     answer(first["status"], comparator())
     done = wf.run_stage6(uploads, base_dir=tmp_path / "workflow")
-    document = same_as_api(tmp_path, uploads, done, api_guard)
+    document = same_as_simulated(tmp_path, uploads, done, agents_guard)
     assert [e["interview_id"] for e in document["excluded_interviews"]] == ["ENT_X_INVALIDE"]
 
 
@@ -161,7 +161,7 @@ def test_invalid_json_and_schema_are_refused_until_corrected(tmp_path, stage5):
     assert wf.run_stage6(uploads, base_dir=tmp_path)["status"]["status"] == wf.STAGE_COMPLETE
 
 
-def test_invented_identifier_is_refused_by_check_and_rejected_as_by_the_api(tmp_path, stage5, api_guard):
+def test_invented_identifier_is_refused_by_check_and_rejected_as_with_simulated_agents(tmp_path, stage5, agents_guard):
     def invent(output, material):
         output["cross_case_claims"][0]["support"][0]["claim_ids"] = ["TC999"]
         output["cross_case_claims"][0]["support"][0]["criterion_ids"] = []
@@ -172,11 +172,11 @@ def test_invented_identifier_is_refused_by_check_and_rejected_as_by_the_api(tmp_
     report = wf.check_task(wf._resolve(first["status"]["pending"][0]["task_dir"]))
     assert not report["ok"] and any(line.startswith("UNKNOWN_OBJECT_ID") for line in report["blocking"])
     done = wf.run_stage6(uploads, base_dir=tmp_path / "workflow")  # non corrigée : règle habituelle
-    document = same_as_api(tmp_path, uploads, done, api_guard, comparator(mutate=invent))
+    document = same_as_simulated(tmp_path, uploads, done, agents_guard, comparator(mutate=invent))
     assert "UNKNOWN_OBJECT_ID" in document["cross_case_claims"][0]["review_reasons"]
 
 
-def test_counts_are_recalculated_as_by_the_api(tmp_path, stage5, api_guard):
+def test_counts_are_recalculated_as_with_simulated_agents(tmp_path, stage5, agents_guard):
     def inflate(output, material):
         output["cross_case_claims"][0]["n_supporting_interviews"] = 99
         return output
@@ -186,7 +186,7 @@ def test_counts_are_recalculated_as_by_the_api(tmp_path, stage5, api_guard):
     report = wf.check_task(wf._resolve(first["status"]["pending"][0]["task_dir"]))
     assert report["ok"] and any(line.startswith("COUNT_MISMATCH") for line in report["warnings"])
     done = wf.run_stage6(uploads, base_dir=tmp_path / "workflow")
-    claim = same_as_api(tmp_path, uploads, done, api_guard, comparator(mutate=inflate))["cross_case_claims"][0]
+    claim = same_as_simulated(tmp_path, uploads, done, agents_guard, comparator(mutate=inflate))["cross_case_claims"][0]
     assert claim["model_n_supporting_interviews"] == 99
     assert claim["n_supporting_interviews"] == len(claim["interview_ids"]) < 99  # recalculé en entretiens distincts
 

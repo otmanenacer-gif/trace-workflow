@@ -4,9 +4,15 @@ TRACE s'exécute comme un workflow multi-agents classique **dans Claude Code**, 
 modèle (ni Anthropic, ni autre fournisseur), sans clé et sans coût d'API. Le Python de TRACE fait tout le travail
 déterministe ; les agents sémantiques sont joués par Claude Code, à partir des prompts du dépôt.
 
-**État de la migration : les étapes 3, 4, 5 et 6 passent par ce workflow.** Les étapes 3 à 5 portent sur les
+**Les étapes 3, 4, 5 et 6 passent toutes par ce workflow** : c'est le seul moteur de TRACE (aucun mode par API,
+aucun SDK de modèle dans `requirements.txt`, aucune clé à configurer). Les étapes 3 à 5 portent sur les
 entretiens d'un run ; l'étape 6 porte sur un **corpus** de sorties de l'étape 5 (plusieurs runs ou fichiers
 téléchargés). Il n'y a pas d'étape 7 : s'arrêter après l'étape 6.
+
+Exemples de demandes à Claude Code, ouvert dans ce dépôt :
+
+- « Exécute TRACE sur `entretien.docx` jusqu'à l'étape 5 » ;
+- puis « Exécute TRACE Stage 6 sur les runs `<run A>` et `<run B>` » (ou sur des dossiers de JSON de l'étape 5).
 
 ```
 Entretien (PDF / DOCX / TXT)
@@ -155,7 +161,7 @@ ou « Exécute TRACE sur le run `<run>` jusqu'à l'étape 5 », ou « Exécute l
 5. **Rendre compte** : `python scripts/trace_workflow.py status <run>` ; statuts des agents, nombre de
    pratiques et de signaux, d'épisodes, configuration de l'étape 5 (affirmations retenues, requalifiées, à
    revoir), avertissements (dont la taille du paquet de l'étape 5), emplacement des sorties, 0 appel API. Puis
-   **s'arrêter** (l'étape 6 n'est pas migrée).
+   **s'arrêter** (l'étape 6 se lance par une demande distincte, sur un corpus : ci-dessous).
 
 **Étape 6** (« Exécute TRACE Stage 6 sur ces sorties Stage 5 », « … sur les runs A et B », « … sur le corpus
 `<corpus_id>` ») :
@@ -209,9 +215,8 @@ le préciser dans le compte rendu.
 
 ## Règles
 
-- Aucun appel à une API de modèle : ni Anthropic, ni OpenAI, ni Gemini, ni Ollama, ni autre. Ne jamais
-  renseigner `TRACE_STAGE3_BACKEND`, `TRACE_STAGE4_BACKEND`, `TRACE_STAGE5_BACKEND` ni `TRACE_STAGE6_BACKEND` à
-  `anthropic` (anciens modes par API, conservés seulement pour les anciens tests).
+- Aucun appel à une API de modèle : ni Anthropic, ni OpenAI, ni Gemini, ni Ollama, ni autre. TRACE n'en contient
+  plus aucun (ni SDK, ni clé, ni sélecteur de moteur) ; ne pas en ajouter.
 - Ne jamais modifier : `prompts/`, `agents/`, les validateurs et préparateurs de `core/`, la transcription
   (`structured_transcript.json`), un `payload.txt`, un `schema.json`, un `task.json`.
 - Aucun repli : une tâche sans réponse reste en attente, une réponse invalide reste à corriger ; rien n'est
@@ -253,6 +258,12 @@ Les documents portent `"model": "workflow_claude_code"`, `api_calls: 0`, `billed
 `request_id`, l'identifiant de la tâche (traçabilité de chaque réponse ; étape 4 en plusieurs blocs : chaque
 bloc dans `chunks[]` du manifest).
 
+**Champs « legacy »** : `api_calls`, `billed_this_run`, `usage` (tokens), `request_id`, `stop_reason`,
+`request_params` (`effort`, `temperature`), `max_concurrency` (dans `metadata.json`) et `truncated_chunks`
+datent des anciennes exécutions par API. Ils sont conservés pour ne pas changer le format des sorties ni casser
+la relecture, la restauration (étapes 3 et 4) et l'import de l'étape 6 de sorties plus anciennes ; le workflow
+les renseigne toujours avec des valeurs neutres (0, `false`, `null`, liste vide).
+
 ## Afficher les résultats dans TRACE (Streamlit)
 
 - **Même machine** : `streamlit run app.py`, section « Corpus » → « Ouvrir un run existant », choisir le run :
@@ -266,7 +277,7 @@ bloc dans `chunks[]` du manifest).
   `analysis/` : ils sont revérifiés puis installés (0 appel API). Puis section « Étape 5 » → « Restaurer des
   résultats Stage 4 existants » avec `accountability_episodes.json` et `accountability_episode_validation.json`.
   Les sorties de l'étape 5 (les 3 fichiers `student_trajectory*.json`) s'importent dans la section « Étape 6 »
-  → « Constituer le corpus Stage 6 » : elles y sont reconnues et contrôlées comme celles de l'ancien pipeline.
+  → « Constituer le corpus Stage 6 » : elles y sont reconnues et contrôlées comme toute sortie de l'étape 5.
 - **Étape 6** : section « Étape 6 », importer les triplets (ou inclure ceux du run courant) : corpus importé,
   entretiens exploitables et exclus ; « Préparer / reprendre l'étape 6 (workflow Claude Code, 0 appel API) » :
   tâche en attente (et l'instruction à donner à Claude Code : « Exécute TRACE Stage 6 sur le corpus

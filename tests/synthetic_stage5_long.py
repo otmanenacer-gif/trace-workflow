@@ -235,24 +235,24 @@ AUDIT = {"assessments": [base_assessment(
 def practice_reader(params: dict):
     present = {t["turn_id"] for t in sent_turns(params)}
     items = [p for _, ps in sorted(PRACTICES.items()) for p in ps if _covered(p, present)]
-    return text_response({"practices": items, "extraction_notes": None}, input_tokens=4200, output_tokens=2400)
+    return text_response({"practices": items, "extraction_notes": None})
 
 
 def signal_reader(params: dict):
     present = {t["turn_id"] for t in sent_turns(params)}
     items = [s for _, ss in sorted(SIGNALS.items()) for s in ss if _covered(s, present)]
-    return text_response({"signals": items, "reading_notes": None}, input_tokens=4600, output_tokens=1800)
+    return text_response({"signals": items, "reading_notes": None})
 
 
 def long_distance_reader(params: dict):
     present = {t["turn_id"] for t in sent_turns(params)}
     items = [CONTRADICTION] if _covered(CONTRADICTION, present) else []
-    return text_response({"signals": items, "reading_notes": None}, input_tokens=1800, output_tokens=300)
+    return text_response({"signals": items, "reading_notes": None})
 
 
 def stage3_responders() -> dict:
     return {PRACTICE: practice_reader, INTERACTION: signal_reader, LONG_DISTANCE: long_distance_reader,
-            AUDITOR: lambda p: text_response(AUDIT, input_tokens=500, output_tokens=120)}
+            AUDITOR: lambda p: text_response(AUDIT)}
 
 
 # --- Étape 4 simulée ------------------------------------------------------------------------------------

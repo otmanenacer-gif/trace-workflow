@@ -1,6 +1,6 @@
 """Étape 3.6 — Interaction Signal Reader sur un entretien long : blocs, longue distance, fusion, cache.
 
-LLM simulé uniquement (tests/fake_llm.py) : aucun appel réel.
+agents simulés uniquement (tests/fake_llm.py) : aucun appel réel.
 """
 
 import json
@@ -15,7 +15,7 @@ from core.analysis_cache import AnalysisCache
 from core.llm_client import LLMSettings
 from tests import synthetic_interviews as si
 from tests import synthetic_long_interview as L
-from tests.fake_llm import (AUDITOR, INTERACTION, LONG_DISTANCE, PRACTICE, FakeTransport, fake_settings,
+from tests.fake_llm import (AUDITOR, INTERACTION, LONG_DISTANCE, PRACTICE, FakeAgents, fake_settings,
                             text_response)
 
 EMPTY_PRACTICES = {"practices": [], "extraction_notes": None}
@@ -33,7 +33,7 @@ def long_run(tmp_path):
 
 
 def analyze(tmp_path, run, transport, **settings):
-    return analyze_run(run, settings=fake_settings(**settings), transport=transport,
+    return analyze_run(run, settings=fake_settings(**settings), client=transport,
                        cache=AnalysisCache(tmp_path / "cache"))
 
 
@@ -102,7 +102,7 @@ def test_chunk_size_setting_is_read_from_environment():
 
 def test_short_interview_single_call_unchanged(tmp_path):
     run = si.make_ingested_run(tmp_path)
-    transport = FakeTransport({PRACTICE: lambda p: text_response(si.GOOD_PRACTICES),
+    transport = FakeAgents({PRACTICE: lambda p: text_response(si.GOOD_PRACTICES),
                                INTERACTION: lambda p: text_response(si.GOOD_SIGNALS)})
     run = analyze(tmp_path, run, transport)
     calls = transport.calls_for(INTERACTION)
@@ -124,14 +124,13 @@ def test_short_interview_single_call_unchanged(tmp_path):
 # --- B. Entretien long : plusieurs blocs, tous analysés, fusion -----------------------------
 
 def test_long_interview_all_chunks_analyzed_and_merged(tmp_path, long_run):
-    transport = FakeTransport(responders())
+    transport = FakeAgents(responders())
     run = analyze(tmp_path, long_run, transport)
     chunk_calls = transport.calls_for(INTERACTION)
     assert len(chunk_calls) == 5 and len(transport.calls_for(LONG_DISTANCE)) == 1
-    for call in chunk_calls:  # même agent : mêmes consignes, même schéma, limite de sortie inchangée
+    for call in chunk_calls:  # même agent : mêmes consignes, même schéma
         assert call["params"]["system"][0]["text"] == analysis.INTERACTION.system_prompt
-        assert call["params"]["output_config"]["format"]["schema"] == analysis.INTERACTION.output_schema
-        assert call["params"]["max_tokens"] == fake_settings().max_tokens
+        assert call["params"]["output_schema"] == analysis.INTERACTION.output_schema
         content = call["params"]["messages"][0]["content"]
         assert "EXTRAIT" in content and len(L.sent_turns(call["params"])) < L.TURN_COUNT
     out = outputs(run)
@@ -141,7 +140,8 @@ def test_long_interview_all_chunks_analyzed_and_merged(tmp_path, long_run):
     assert chunk_info["chunking_used"] is True and chunk_info["chunk_count"] == 5
     assert chunk_info["chunks_succeeded"] == 5 and chunk_info["failed_chunks"] == []
     assert chunk_info["overlap_turns"] == chunking.OVERLAP_TURNS and len(chunk_info["chunk_ranges"]) == 5
-    assert chunk_info["llm_calls_this_run"] == 6 == manifest["api_calls"]
+    assert chunk_info["llm_calls_this_run"] == 0 == manifest["api_calls"]  # aucun appel API
+    assert len(transport.calls_for(INTERACTION)) + len(transport.calls_for(LONG_DISTANCE)) == 6  # 5 blocs + 1
     # étape 3.7 : les « Euh… » isolés du lecteur simulé (surcodage) sont écartés APRÈS la fusion, jamais perdus
     set_aside = doc["selectivity"]["signals_set_aside"]
     assert chunk_info["signals_after_dedup"] == doc["item_count"] + set_aside == len(doc["signals"]) + set_aside
@@ -158,14 +158,14 @@ def test_long_interview_all_chunks_analyzed_and_merged(tmp_path, long_run):
     assert {s["set_aside_reason"] for s in hesitations} == {"ISOLATED_MICRO_MARKER"}
     usage = run["last_analysis"]["usage"]
     blocks = practice_blocks(run)
-    assert usage["api_calls"] == blocks + 6 and usage["output_tokens"] == 300 * blocks + 5 * 900 + 300
+    assert usage["api_calls"] == 0 and len(transport.calls) == blocks + 6  # aucun appel API
     assert run["pipeline"]["Analyse interactionnelle"] == "terminé (1/1 entretien(s))"
 
 
 # --- C. Chevauchement : même signal dans deux blocs → un seul ------------------------------
 
 def test_overlap_duplicate_is_merged_once(tmp_path, long_run):
-    run = analyze(tmp_path, long_run, FakeTransport(responders()))
+    run = analyze(tmp_path, long_run, FakeAgents(responders()))
     doc = outputs(run)["document"]
     info = doc["chunking"]
     assert info["signals_before_dedup"] - info["signals_after_dedup"] == info["duplicates_removed"] >= 2
@@ -228,7 +228,7 @@ def test_same_signal_in_one_chunk_or_outside_overlap_is_not_merged(long_run):
 # --- E. Contradiction entre deux passages éloignés ------------------------------------------
 
 def test_long_distance_contradiction_is_detected(tmp_path, long_run):
-    transport = FakeTransport(responders())
+    transport = FakeAgents(responders())
     run = analyze(tmp_path, long_run, transport)
     doc = outputs(run)["document"]
     contradictions = of_type(doc, "cross_turn_contradiction")
@@ -245,7 +245,7 @@ def test_long_distance_contradiction_is_detected(tmp_path, long_run):
     assert {L.ltid(L.EARLY_TURN), L.ltid(L.LATE_TURN)} <= {t["turn_id"] for t in sent}
     assert all(t["blocks"] for t in sent)
     assert call["system"][0]["text"] == analysis.LONG_DISTANCE.system_prompt
-    enum = call["output_config"]["format"]["schema"]["$defs"]["LongDistanceSignal"]["properties"]["signal_type"]["enum"]
+    enum = call["output_schema"]["$defs"]["LongDistanceSignal"]["properties"]["signal_type"]["enum"]
     assert set(enum) == {"cross_turn_contradiction", "significant_repetition", "vocabulary_shift"}
     info = doc["chunking"]["long_distance"]
     assert info["status"] == "SUCCESS" and info["signals_kept"] == 1
@@ -255,7 +255,7 @@ def test_long_distance_contradiction_is_detected(tmp_path, long_run):
 def test_long_distance_pass_keeps_only_cross_chunk_signals(tmp_path, long_run):
     local = dict(L.CONTRADICTION, turn_ids=[L.ltid(10), L.ltid(12)],
                  evidence=[{"turn_id": L.ltid(10), "quote": L.EARLY_QUOTE}, {"turn_id": L.ltid(12), "quote": "Euh…"}])
-    transport = FakeTransport(responders(long_distance=lambda p: text_response(
+    transport = FakeAgents(responders(long_distance=lambda p: text_response(
         {"signals": [L.CONTRADICTION, local], "reading_notes": None})))
     run = analyze(tmp_path, long_run, transport)
     doc = outputs(run)["document"]
@@ -278,43 +278,43 @@ def test_selection_respects_budget_and_skips_single_block(long_run):
     assert not chunking.select_long_distance_turns(one_block, chunking.plan_chunks(one_block, 5000), [])["needs_llm"]
 
 
-# --- F. Bloc tronqué : statut explicite, relance ciblée -------------------------------------
+# --- F. Bloc en échec (réponse incomplète, JSON invalide) : statut explicite, relance ciblée -------------------------------------
 
 def truncating_reader(turn_id):
     def respond(params):
         if any(t["turn_id"] == turn_id for t in L.sent_turns(params)):
-            return text_response('{"signals": [', stop_reason="max_tokens", output_tokens=32000)
+            return text_response('{"signals": [')
         return L.simulated_chunk_reader(params)
     return respond
 
 
-def test_truncated_chunk_makes_result_explicitly_partial_then_relaunch_redoes_only_it(tmp_path, long_run):
-    transport = FakeTransport(responders(interaction=truncating_reader(L.ltid(200))))  # bloc 3 seulement
+def test_failed_chunk_makes_result_explicitly_partial_then_relaunch_redoes_only_it(tmp_path, long_run):
+    transport = FakeAgents(responders(interaction=truncating_reader(L.ltid(200))))  # bloc 3 seulement
     run = analyze(tmp_path, long_run, transport)
     out = outputs(run)
     doc, manifest = out["document"], out["manifest"]
     assert doc["status"] == manifest["status"] == "PARTIAL"
     assert doc["analysis_complete"] is False and manifest["analysis_complete"] is False
     assert manifest["error"]["code"] == "PARTIAL_ANALYSIS" and "INCOMPLÈTE" in manifest["error"]["message"]
-    assert "4/5" in manifest["error"]["message"] and "tronquée" in manifest["error"]["message"]
+    assert "4/5" in manifest["error"]["message"] and "JSON invalide" in manifest["error"]["message"]
     info = manifest["chunking"]
-    assert info["truncated_chunks"] == [3] and info["failed_chunks"] == [3] and info["chunks_succeeded"] == 4
+    assert info["truncated_chunks"] == [] and info["failed_chunks"] == [3] and info["chunks_succeeded"] == 4
     chunk3 = info["chunks"][2]
-    assert chunk3["status"] == "TRUNCATED" and chunk3["stop_reason"] == "max_tokens"
+    assert chunk3["status"] == "FAILED" and chunk3["error"]["code"] == "INVALID_JSON"
     assert info["long_distance"]["status"] == "SKIPPED_INCOMPLETE" and transport.calls_for(LONG_DISTANCE) == []
     # les blocs réussis restent utilisables (signaux valides), le bloc 3 n'a rien produit
     assert doc["signals"] and all(e["validation"]["valid"] for s in doc["signals"] for e in s["evidence"])
     assert all(3 not in s["provenance"]["chunks"] or len(s["provenance"]["chunks"]) > 1 for s in doc["signals"])
     assert out["validation"]["agents"]["interaction_signal_reader"]["analysis_complete"] is False
     summary = run["files"][0]["analysis"]["agents"]["interaction_signal_reader"]
-    assert summary["analysis_complete"] is False and summary["chunking"]["truncated_chunks"] == [3]
+    assert summary["analysis_complete"] is False and summary["chunking"]["failed_chunks"] == [3]
     assert run["last_analysis"]["usage"]["partial"] == 1
     assert "incomplet" in run["pipeline"]["Analyse interactionnelle"]
 
     # relance : seuls le bloc 3 et la lecture à longue distance sont appelés
     plan = plan_analysis(run, [L.LONG_INTERVIEW_ID], fake_settings(), AnalysisCache(tmp_path / "cache"))
     assert plan["calls"] == 2 and plan["exact"] is False  # bloc 3 + longue distance (au plus)
-    again = FakeTransport(responders())
+    again = FakeAgents(responders())
     run = analyze(tmp_path, run, again)
     assert len(again.calls_for(INTERACTION)) == 1 and len(again.calls_for(LONG_DISTANCE)) == 1
     assert again.calls_for(PRACTICE) == []
@@ -325,11 +325,11 @@ def test_truncated_chunk_makes_result_explicitly_partial_then_relaunch_redoes_on
 
 
 def test_all_chunks_failing_is_a_failure_without_output(tmp_path, long_run):
-    transport = FakeTransport(responders(interaction=lambda p: text_response("x", stop_reason="max_tokens")))
+    transport = FakeAgents(responders(interaction=lambda p: text_response("x")))
     run = analyze(tmp_path, long_run, transport)
     directory = Path(run["files"][0]["analysis"]["analysis_dir"])
     manifest = json.loads((directory / "interaction_manifest.json").read_text())
-    assert manifest["status"] == "FAILED" and manifest["error"]["code"] == "TRUNCATED"
+    assert manifest["status"] == "FAILED" and manifest["error"]["code"] == "INVALID_JSON"
     assert not (directory / "interaction_signals.json").exists()
     assert run["files"][0]["analysis"]["agents"]["practice_extractor"]["status"] == "SUCCESS"
 
@@ -341,11 +341,11 @@ def test_identical_relaunch_makes_no_call(tmp_path, long_run):
     before = plan_analysis(long_run, [L.LONG_INTERVIEW_ID], fake_settings(), cache)
     blocks = practice_blocks(long_run)
     assert before["calls"] == blocks + 6 and before["exact"] is False
-    run = analyze(tmp_path, long_run, FakeTransport(responders()))
+    run = analyze(tmp_path, long_run, FakeAgents(responders()))
     first = outputs(run)["document"]
     assert plan_analysis(run, [L.LONG_INTERVIEW_ID], fake_settings(), cache) == {
         "interviews": 1, "calls": 0, "cached": blocks + 6, "audit_calls": 0, "candidate_turns": 0, "exact": True}
-    second = FakeTransport(responders())
+    second = FakeAgents(responders())
     run = analyze(tmp_path, run, second)
     assert second.calls == []
     out = outputs(run)
@@ -357,13 +357,13 @@ def test_identical_relaunch_makes_no_call(tmp_path, long_run):
 
 
 def test_only_the_changed_chunk_is_recomputed(tmp_path, long_run):
-    analyze(tmp_path, long_run, FakeTransport(responders()))
+    analyze(tmp_path, long_run, FakeAgents(responders()))
     text = L.long_text()
     assert text.count("Au semestre 170 ") == 1
     edited = text.replace("Au semestre 170 ", "Au semestre 170 bis ")  # tour T0340, dans le seul bloc 5
     assert edited != text
     run2 = si.make_ingested_run(tmp_path / "edited", [(L.LONG_FILENAME, edited.encode("utf-8"))])
-    transport = FakeTransport(responders())
+    transport = FakeAgents(responders())
     run2 = analyze(tmp_path, run2, transport)
     assert len(transport.calls_for(INTERACTION)) == 1
     assert L.ltid(340) in {t["turn_id"] for t in L.sent_turns(transport.calls_for(INTERACTION)[0]["params"])}
@@ -382,7 +382,7 @@ def test_plan_interaction_chunking_announces_blocks(tmp_path, long_run):
 # --- H. Citations : toutes valides après fusion ---------------------------------------------
 
 def test_all_citations_valid_after_merge(tmp_path, long_run):
-    run = analyze(tmp_path, long_run, FakeTransport(responders()))
+    run = analyze(tmp_path, long_run, FakeAgents(responders()))
     out = outputs(run)
     signals = out["document"]["signals"]
     assert signals and all(e["validation"]["valid"] for s in signals for e in s["evidence"])
@@ -401,7 +401,7 @@ def test_fabricated_quote_in_a_chunk_is_still_rejected(tmp_path, long_run):
         if output["signals"]:
             output["signals"][0]["evidence"][0]["quote"] = "Phrase inventée qui n'existe pas."
         return text_response(output)
-    run = analyze(tmp_path, long_run, FakeTransport(responders(interaction=reader)))
+    run = analyze(tmp_path, long_run, FakeAgents(responders(interaction=reader)))
     out = outputs(run)
     assert out["validation"]["agents"]["interaction_signal_reader"]["invalid_evidence_count"] >= 1
     assert out["manifest"]["status"] == "SUCCESS_WITH_WARNINGS"
@@ -411,7 +411,7 @@ def test_fabricated_quote_in_a_chunk_is_still_rejected(tmp_path, long_run):
 
 def test_speaker_warnings_are_routed_to_relevant_chunks_only(tmp_path):
     run = si.make_ingested_run(tmp_path, L.long_files(misattributed=True))
-    transport = FakeTransport(responders())
+    transport = FakeAgents(responders())
     run = analyze(tmp_path, run, transport)
     assert len(transport.calls_for(AUDITOR)) == 1
     warned = L.ltid(L.MISATTRIBUTED_TURN)

@@ -1,7 +1,7 @@
 """Étape 3 en workflow Claude Code : paquets de tâche, réponses d'agent, validation, sorties, restauration.
 
-Aucun appel API : en plus des garde-fous de tests/conftest.py (transport réel interdit, réseau refusé, aucune
-clé), la construction d'un client d'API (LLMClient) est interdite dans les tests du workflow. Les « agents »
+Aucun appel API : en plus des garde-fous de tests/conftest.py (réseau refusé, aucune clé), les agents simulés
+(FakeAgents) sont interdits pendant le workflow (`workflow_only`). Les « agents »
 sont simulés comme dans les autres tests : leurs réponses (tests/synthetic_*.py) sont écrites dans
 response.json, exactement là où un sous-agent Claude Code les écrirait.
 """
@@ -13,13 +13,12 @@ from pathlib import Path
 import pytest
 from streamlit.testing.v1 import AppTest
 
-import core.llm_client as llm_client
 from agents.base import render_user_message
 from core import accountability, analysis, config
 from core import claude_code_workflow as wf
 from core.stage3_restore import restore_stage3
 from tests import synthetic_interviews as si
-from tests.fake_llm import (AUDITOR, INTERACTION, LONG_DISTANCE, PRACTICE, FakeTransport, agent_of, fake_settings,
+from tests.fake_llm import (AUDITOR, AgentReply, INTERACTION, LONG_DISTANCE, PRACTICE, FakeAgents, agent_of, fake_settings,
                             text_response)
 
 APP = str(config.PROJECT_ROOT / "app.py")
@@ -29,10 +28,11 @@ EMPTY = {PRACTICE: {"practices": [], "extraction_notes": None}, INTERACTION: {"s
 
 
 @pytest.fixture
-def no_api_client(monkeypatch):
+def workflow_only(monkeypatch):
+    """Le workflow n'obtient ses réponses que de response.json : les agents simulés sont interdits."""
     def forbidden(*args, **kwargs):
-        raise AssertionError("Client d'API construit pendant le workflow Claude Code : interdit.")
-    monkeypatch.setattr(llm_client.LLMClient, "__init__", forbidden)
+        raise AssertionError("Agents simulés sollicités pendant le workflow Claude Code : interdit.")
+    monkeypatch.setattr(FakeAgents, "complete_json", forbidden)
 
 
 # --- Outils : jouer les agents comme un sous-agent Claude Code ---------------------------------------------
@@ -50,7 +50,7 @@ def params_of(task_dir: Path) -> dict:
     p = packet(task_dir)
     return {"system": [{"type": "text", "text": p["system_prompt"]}],
             "messages": [{"role": "user", "content": p["payload"]}],
-            "output_config": {"format": {"type": "json_schema", "schema": p["schema"]}}}
+            "output_schema": p["schema"]}
 
 
 def answer(status: dict, responders: dict) -> list[str]:
@@ -62,7 +62,7 @@ def answer(status: dict, responders: dict) -> list[str]:
         agent = agent_of(params)
         handler = responders[agent]
         result = handler(params) if callable(handler) else handler
-        text = result.content[0].text if hasattr(result, "content") else json.dumps(result, ensure_ascii=False)
+        text = result.text if isinstance(result, AgentReply) else json.dumps(result, ensure_ascii=False)
         (task_dir / wf.RESPONSE_FILENAME).write_text(text, encoding="utf-8")
         played.append(agent)
     return played
@@ -91,23 +91,23 @@ def read(run: dict, filename: str, interview_id: str = si.INTERVIEW_ID) -> dict:
 
 # --- Configuration ----------------------------------------------------------------------------------------
 
-def test_backend_defaults_to_claude_code_and_api_mode_is_only_explicit():
-    assert wf.stage3_backend({}) == wf.BACKEND_CLAUDE_CODE
-    assert wf.stage3_backend({"TRACE_STAGE3_BACKEND": "n'importe quoi"}) == wf.BACKEND_CLAUDE_CODE
-    assert wf.stage3_backend({"ANTHROPIC_API_KEY": "sk-ant-x", "ANTHROPIC_MODEL": "m"}) == wf.BACKEND_CLAUDE_CODE
-    assert wf.stage3_backend({"TRACE_STAGE3_BACKEND": "anthropic"}) == wf.BACKEND_ANTHROPIC
+def test_the_workflow_is_the_only_engine():
+    """Plus aucun sélecteur de moteur : ni TRACE_STAGE*_BACKEND, ni mode par API."""
+    for name in ("stage_backend", "stage3_backend", "stage6_backend", "BACKEND_ANTHROPIC", "ENV_STAGE3_BACKEND"):
+        assert not hasattr(wf, name), name
+    assert wf.BACKEND_CLAUDE_CODE == "claude_code"
 
 
 def test_workflow_settings_need_no_key_and_keep_chunk_sizes():
     settings = wf.workflow_settings({"ANTHROPIC_API_KEY": "sk-ant-x", "TRACE_PRACTICE_CHUNK_TOKENS": "3000"})
-    assert settings.api_key is None and settings.model == wf.WORKFLOW_MODEL
+    assert settings.model == wf.WORKFLOW_MODEL
     assert settings.request_params() == {"effort": None, "temperature": None}
     assert settings.practice_chunk_tokens == 3000
 
 
 # --- Entretien court : paquets, réponses, validation, sorties -----------------------------------------------
 
-def test_first_pass_writes_exact_task_packets_and_no_output(tmp_path, no_api_client):
+def test_first_pass_writes_exact_task_packets_and_no_output(tmp_path, workflow_only):
     run = si.make_ingested_run(tmp_path)
     result = wf.run_stage3(run)
     status, run = result["status"], result["metadata"]
@@ -130,7 +130,7 @@ def test_first_pass_writes_exact_task_packets_and_no_output(tmp_path, no_api_cli
     assert wf.read_status(Path(run["output_dir"]))["status"] == wf.STAGE3_AWAITING
 
 
-def test_answered_tasks_are_validated_and_saved_as_usual_stage3_outputs(tmp_path, no_api_client):
+def test_answered_tasks_are_validated_and_saved_as_usual_stage3_outputs(tmp_path, workflow_only):
     run = si.make_ingested_run(tmp_path)
     first = wf.run_stage3(run)
     assert sorted(answer(first["status"], GOOD)) == [INTERACTION, PRACTICE]
@@ -164,28 +164,28 @@ def test_answered_tasks_are_validated_and_saved_as_usual_stage3_outputs(tmp_path
     assert [t["task_id"] for t in forced["status"]["tasks"]] == [t["task_id"] for t in status["tasks"]]
 
 
-def test_workflow_outputs_equal_the_api_pipeline_outputs(tmp_path, monkeypatch):
+def test_workflow_outputs_equal_the_simulated_agents_pipeline_outputs(tmp_path, monkeypatch):
     """Même requête, même réponse → mêmes sorties : seul le moyen d'obtenir la réponse change."""
     run_wf = si.make_ingested_run(tmp_path / "workflow")
     first = wf.run_stage3(run_wf)
     answer(first["status"], GOOD)
     run_wf = wf.run_stage3(first["metadata"])["metadata"]
 
-    run_api = si.make_ingested_run(tmp_path / "api")
-    transport = FakeTransport({PRACTICE: lambda p: text_response(si.GOOD_PRACTICES),
+    run_sim = si.make_ingested_run(tmp_path / "simulated")
+    transport = FakeAgents({PRACTICE: lambda p: text_response(si.GOOD_PRACTICES),
                                INTERACTION: lambda p: text_response(si.GOOD_SIGNALS)})
-    run_api = analysis.analyze_run(run_api, settings=fake_settings(), transport=transport)
+    run_sim = analysis.analyze_run(run_sim, settings=fake_settings(), client=transport)
 
     payloads = {t["agent"]: packet(wf._resolve(t["task_dir"]))["payload"] for t in first["status"]["pending"]}
-    for call in transport.calls:  # le paquet contient exactement le message que recevait l'API
+    for call in transport.calls:  # le paquet contient exactement le message reçu par les agents simulés
         assert call["params"]["messages"][0]["content"] == payloads[call["agent"]]
     for filename, key in (("practice_extractor.json", "practices"), ("interaction_signals.json", "signals")):
-        assert read(run_wf, filename)[key] == read(run_api, filename)[key]
-    validation_wf, validation_api = (read(r, config.EVIDENCE_VALIDATION_FILENAME) for r in (run_wf, run_api))
-    assert validation_wf["agents"] == validation_api["agents"]
+        assert read(run_wf, filename)[key] == read(run_sim, filename)[key]
+    validation_wf, validation_sim = (read(r, config.EVIDENCE_VALIDATION_FILENAME) for r in (run_wf, run_sim))
+    assert validation_wf["agents"] == validation_sim["agents"]
 
 
-def test_schema_invalid_response_is_never_accepted_until_corrected(tmp_path, no_api_client):
+def test_schema_invalid_response_is_never_accepted_until_corrected(tmp_path, workflow_only):
     run = si.make_ingested_run(tmp_path)
     first = wf.run_stage3(run)
     practice_task = next(t for t in first["status"]["pending"] if t["agent"] == PRACTICE)
@@ -212,7 +212,7 @@ def test_schema_invalid_response_is_never_accepted_until_corrected(tmp_path, no_
     assert wf.run_stage3(second["metadata"])["status"]["status"] == wf.STAGE3_COMPLETE
 
 
-def test_check_blocks_a_fabricated_quote_and_the_pipeline_still_flags_it(tmp_path, no_api_client):
+def test_check_blocks_a_fabricated_quote_and_the_pipeline_still_flags_it(tmp_path, workflow_only):
     run = si.make_ingested_run(tmp_path)
     first = wf.run_stage3(run)
     answer(first["status"], {PRACTICE: si.with_fabricated_quote(si.GOOD_PRACTICES, "practices"),
@@ -241,7 +241,7 @@ def test_check_refuses_a_packet_whose_payload_was_modified(tmp_path):
 
 # --- Audit des locuteurs, puis agents avec les speaker_warning ----------------------------------------------
 
-def test_agents_wait_for_the_speaker_audit_and_receive_its_warnings(tmp_path, no_api_client):
+def test_agents_wait_for_the_speaker_audit_and_receive_its_warnings(tmp_path, workflow_only):
     run = si.make_ingested_run(tmp_path, si.AUDIT_FILES)
     first = wf.run_stage3(run)
     assert [t["agent"] for t in first["status"]["pending"]] == [AUDITOR]  # aucun paquet d'agent avant l'audit
@@ -268,7 +268,7 @@ def test_agents_wait_for_the_speaker_audit_and_receive_its_warnings(tmp_path, no
 
 # --- Entretien long : blocs, puis lecture à longue distance --------------------------------------------------
 
-def test_long_interview_reads_blocks_then_long_distance(tmp_path, no_api_client):
+def test_long_interview_reads_blocks_then_long_distance(tmp_path, workflow_only):
     from tests import synthetic_long_interview as L
     run = si.make_ingested_run(tmp_path, L.long_files())
     responders = {PRACTICE: EMPTY[PRACTICE], INTERACTION: L.simulated_chunk_reader,
@@ -287,7 +287,7 @@ def test_long_interview_reads_blocks_then_long_distance(tmp_path, no_api_client)
 
 # --- Restauration dans TRACE, consommation par l'étape 4 ----------------------------------------------------
 
-def test_workflow_outputs_restore_into_trace_and_feed_stage4(tmp_path, no_api_client):
+def test_workflow_outputs_restore_into_trace_and_feed_stage4(tmp_path, workflow_only):
     run = si.make_ingested_run(tmp_path / "workflow")
     first = wf.run_stage3(run)
     answer(first["status"], GOOD)
@@ -318,7 +318,7 @@ def cli(tmp_path, monkeypatch):
     return module
 
 
-def test_cli_runs_stage3_end_to_end(tmp_path, cli, capsys, no_api_client):
+def test_cli_runs_stage3_end_to_end(tmp_path, cli, capsys, workflow_only):
     source = tmp_path / si.FILENAME
     source.write_text(si.TEXT, encoding="utf-8")
     assert cli.main(["ingest", str(source)]) == 0
@@ -351,7 +351,7 @@ def texts(elements) -> str:
     return " ".join(str(e.value) for e in elements)
 
 
-def test_app_runs_stage3_through_the_workflow_without_key(tmp_path, no_api_client):
+def test_app_runs_stage3_through_the_workflow_without_key(tmp_path, workflow_only):
     at = AppTest.from_file(APP, default_timeout=30)
     at.session_state["last_run"] = si.make_ingested_run(tmp_path)
     at.run()
@@ -360,7 +360,7 @@ def test_app_runs_stage3_through_the_workflow_without_key(tmp_path, no_api_clien
     assert pipeline in texts(at.markdown)
     assert "Workflow Claude Code" in texts(at.info)
     assert "Analyse IA désactivée" not in texts(at.warning)
-    assert not [b for b in at.button if b.key == "ai_launch"]  # l'ancien lanceur par API n'est pas proposé
+    assert not [b for b in at.button if b.key == "ai_launch"]  # aucun ancien lanceur par API
 
     at.button(key="wf_stage3").click().run()
     assert not at.exception
@@ -380,7 +380,7 @@ def test_app_runs_stage3_through_the_workflow_without_key(tmp_path, no_api_clien
     assert "Télécharger practice_extractor.json" in labels
 
 
-def test_app_keeps_the_workflow_even_with_an_api_key(tmp_path, monkeypatch, no_api_client):
+def test_app_keeps_the_workflow_even_with_an_api_key(tmp_path, monkeypatch, workflow_only):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-FAKE-KEY-000")
     monkeypatch.setenv("ANTHROPIC_MODEL", "fake-model")
     at = AppTest.from_file(APP, default_timeout=30)
@@ -392,7 +392,7 @@ def test_app_keeps_the_workflow_even_with_an_api_key(tmp_path, monkeypatch, no_a
     assert not at.exception and at.session_state["last_run"]["stage3_workflow"]["api_calls"] == 0
 
 
-def test_app_opens_a_run_prepared_in_claude_code(tmp_path, monkeypatch, no_api_client):
+def test_app_opens_a_run_prepared_in_claude_code(tmp_path, monkeypatch, workflow_only):
     monkeypatch.setattr(config, "OUTPUTS_DIR", tmp_path / "outputs")
     run = si.make_ingested_run(tmp_path)
     first = wf.run_stage3(run)

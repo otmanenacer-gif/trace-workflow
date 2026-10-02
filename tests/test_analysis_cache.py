@@ -11,7 +11,7 @@ from agents import interaction_signal_reader, practice_extractor
 from core.analysis import analyze_run, plan_analysis
 from core.analysis_cache import KEY_FIELDS, AnalysisCache, compute_cache_key
 from tests import synthetic_interviews as si
-from tests.fake_llm import INTERACTION, PRACTICE, FakeTransport, fake_settings, text_response
+from tests.fake_llm import INTERACTION, PRACTICE, FakeAgents, fake_settings, text_response
 
 
 def responders():
@@ -25,8 +25,8 @@ def env(tmp_path):
 
 
 def analyze(env, settings=None, **kwargs):
-    transport = FakeTransport(responders())
-    run = analyze_run(env["run"], settings=settings or fake_settings(), transport=transport, cache=env["cache"],
+    transport = FakeAgents(responders())
+    run = analyze_run(env["run"], settings=settings or fake_settings(), client=transport, cache=env["cache"],
                       **kwargs)
     return run, transport
 
@@ -45,7 +45,7 @@ def test_identical_inputs_hit_the_cache(env):
     for spec in analysis.AGENTS:
         m = manifest(run, spec)
         assert m["cache_hit"] is True and m["status"] == "CACHED" and m["api_calls"] == 0
-        assert m["billed_this_run"] is False and m["usage"]["input_tokens"] == 1200  # coût d'origine, pour mémoire
+        assert m["billed_this_run"] is False  # champ legacy : jamais de coût
     usage = run["last_analysis"]["usage"]
     assert usage["api_calls"] == 0 and usage["input_tokens"] == 0 and usage["cached_results"] == 2
 
@@ -91,24 +91,17 @@ def test_model_change_triggers_new_calls(env):
     analyze(env)
     run, transport = analyze(env, settings=fake_settings(model="other-fake-model"))
     assert len(transport.calls) == 2
-    assert all(c["params"]["model"] == "other-fake-model" for c in transport.calls)
     assert manifest(run, practice_extractor.SPEC)["model"] == "other-fake-model"
-
-
-def test_generation_parameter_change_triggers_new_calls(env):
-    analyze(env)
-    _, transport = analyze(env, settings=fake_settings(effort="low"))
-    assert len(transport.calls) == 2
 
 
 def test_transcript_change_triggers_new_calls(tmp_path):
     cache = AnalysisCache(tmp_path / "cache")
     first = si.make_ingested_run(tmp_path / "a")
-    analyze_run(first, settings=fake_settings(), transport=FakeTransport(responders()), cache=cache)
+    analyze_run(first, settings=fake_settings(), client=FakeAgents(responders()), cache=cache)
     modified = si.TEXT.replace("c'est rapide", "c'est très rapide")
     second = si.make_ingested_run(tmp_path / "b", [(si.FILENAME, modified.encode("utf-8"))])
-    transport = FakeTransport(responders())
-    analyze_run(second, settings=fake_settings(), transport=transport, cache=cache)
+    transport = FakeAgents(responders())
+    analyze_run(second, settings=fake_settings(), client=transport, cache=cache)
     assert len(transport.calls) == 2
 
 
@@ -116,9 +109,9 @@ def test_same_file_in_a_new_run_reuses_the_cache(tmp_path):
     """Recharger la page puis réimporter le même fichier ne repaie pas les appels."""
     cache = AnalysisCache(tmp_path / "cache")
     analyze_run(si.make_ingested_run(tmp_path / "a"), settings=fake_settings(),
-                transport=FakeTransport(responders()), cache=cache)
-    transport = FakeTransport(responders())
-    analyze_run(si.make_ingested_run(tmp_path / "b"), settings=fake_settings(), transport=transport, cache=cache)
+                client=FakeAgents(responders()), cache=cache)
+    transport = FakeAgents(responders())
+    analyze_run(si.make_ingested_run(tmp_path / "b"), settings=fake_settings(), client=transport, cache=cache)
     assert transport.calls == []
 
 
@@ -130,8 +123,8 @@ def test_force_bypasses_the_cache(env):
 
 
 def test_failed_calls_are_not_cached(env):
-    failing = FakeTransport({PRACTICE: text_response("pas du JSON"), INTERACTION: text_response(si.GOOD_SIGNALS)})
-    analyze_run(env["run"], settings=fake_settings(), transport=failing, cache=env["cache"])
+    failing = FakeAgents({PRACTICE: text_response("pas du JSON"), INTERACTION: text_response(si.GOOD_SIGNALS)})
+    analyze_run(env["run"], settings=fake_settings(), client=failing, cache=env["cache"])
     _, transport = analyze(env)
     assert [c["agent"] for c in transport.calls] == [PRACTICE]
 

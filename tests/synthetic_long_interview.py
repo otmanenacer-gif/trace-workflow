@@ -117,7 +117,7 @@ def chunk_signals(params: dict) -> dict:
 
 
 def simulated_chunk_reader(params: dict):
-    return text_response(chunk_signals(params), input_tokens=4000, output_tokens=900)
+    return text_response(chunk_signals(params))
 
 
 CONTRADICTION = {
@@ -139,4 +139,4 @@ def long_distance_signals(params: dict) -> dict:
 
 
 def simulated_long_distance_reader(params: dict):
-    return text_response(long_distance_signals(params), input_tokens=1500, output_tokens=300)
+    return text_response(long_distance_signals(params))

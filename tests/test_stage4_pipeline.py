@@ -1,4 +1,4 @@
-"""Étape 4 — orchestration : entretien de référence, cache, étape 3 FAILED / PARTIAL, coût. LLM simulé."""
+"""Étape 4 — orchestration : entretien de référence, cache, étape 3 FAILED / PARTIAL, coût. agents simulés."""
 
 import dataclasses
 import hashlib
@@ -12,11 +12,11 @@ import pytest
 from core import accountability, config
 from core.analysis import analyze_run
 from core.analysis_cache import AnalysisCache
-from core.llm_client import LLMError, LLMSettings
+from core.llm_client import LLMSettings
 from tests import synthetic_interviews as si
 from tests import synthetic_stage4 as S
-from tests.fake_llm import (ACCOUNTABILITY, AUDITOR, INTERACTION, PRACTICE, FakeTransport, fake_settings,
-                            server_error, text_response)
+from tests.fake_llm import (ACCOUNTABILITY, AUDITOR, INTERACTION, PRACTICE, FakeAgents, fake_settings,
+                            agent_error, text_response)
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -24,14 +24,14 @@ ROOT = Path(__file__).resolve().parent.parent
 def stage3(tmp_path, files=S.FILES, responders=None):
     run = si.make_ingested_run(tmp_path, files)
     cache = AnalysisCache(tmp_path / "cache")
-    transport = FakeTransport(responders or S.stage3_responders())
-    run = analyze_run(run, settings=fake_settings(), transport=transport, cache=cache)
+    transport = FakeAgents(responders or S.stage3_responders())
+    run = analyze_run(run, settings=fake_settings(), client=transport, cache=cache)
     return run, cache, transport
 
 
 def stage4(run, cache, builder=S.REFERENCE_BUILDER, **kwargs):
-    transport = FakeTransport({ACCOUNTABILITY: builder})
-    run = accountability.analyze_run_stage4(run, settings=kwargs.pop("settings", fake_settings()), transport=transport,
+    transport = FakeAgents({ACCOUNTABILITY: builder})
+    run = accountability.analyze_run_stage4(run, settings=kwargs.pop("settings", fake_settings()), client=transport,
                                             cache=cache, **kwargs)
     return run, transport
 
@@ -113,10 +113,10 @@ def test_reference_interview_end_to_end(tmp_path):
     assert set(manifest["source_hashes"]) == {"source_sha256", "structured_transcript_sha256",
                                               "practice_extractor_sha256", "interaction_signals_sha256",
                                               "speaker_audit_sha256"}
-    assert manifest["api_calls"] == 1 and manifest["over_single_call_threshold"] is False
+    assert manifest["api_calls"] == 0 and manifest["llm_called"] is True and manifest["over_single_call_threshold"] is False
     assert validation["status"] == "SUCCESS" and validation["candidate_summary"]["candidate_count"] == 6
     assert run["pipeline"][config.ACCOUNTABILITY_STEP] == "terminé (1/1 entretien(s))"
-    assert run["last_accountability"]["usage"]["api_calls"] == 1
+    assert run["last_accountability"]["usage"]["api_calls"] == 0
 
 
 def test_llm_receives_only_candidates_never_the_whole_interview(tmp_path):
@@ -145,8 +145,8 @@ def test_identical_interview_is_served_from_cache_with_zero_call(tmp_path):
     assert doc["status"] == "CACHED" and doc["cache_hit"] is True and doc["accountability_episode_count"] == 4
     assert run["last_accountability"]["usage"]["api_calls"] == 0
     # Stage 3 relancée depuis son propre cache : aucun appel, et la clé de l'étape 4 ne change pas
-    t3 = FakeTransport(S.stage3_responders())
-    run = analyze_run(run, settings=fake_settings(), transport=t3, cache=cache)
+    t3 = FakeAgents(S.stage3_responders())
+    run = analyze_run(run, settings=fake_settings(), client=t3, cache=cache)
     assert t3.calls == []
     run, third = stage4(run, cache)
     assert third.calls == []
@@ -165,8 +165,8 @@ def test_stage4_version_or_prompt_change_invalidates_only_stage4(tmp_path, monke
     run, after_prompt = stage4(run, cache)
     assert len(after_prompt.calls) == 1
     # l'étape 3 reste entièrement en cache
-    t3 = FakeTransport(S.stage3_responders())
-    analyze_run(run, settings=fake_settings(), transport=t3, cache=cache)
+    t3 = FakeAgents(S.stage3_responders())
+    analyze_run(run, settings=fake_settings(), client=t3, cache=cache)
     assert t3.calls == []
     assert len(list((tmp_path / "cache" / "accountability_episode_builder").glob("*.json"))) == 3
 
@@ -194,7 +194,7 @@ def test_changed_stage3_output_changes_the_stage4_request(tmp_path):
 
 def test_stage3_failed_blocks_stage4_without_any_call(tmp_path):
     responders = S.stage3_responders()
-    responders[INTERACTION] = server_error(500)
+    responders[INTERACTION] = agent_error()
     run, cache, _ = stage3(tmp_path, responders=responders)
     assert run["files"][0]["analysis"]["agents"]["interaction_signal_reader"]["status"] == "FAILED"
     plan = accountability.plan_stage4(run, [S.INTERVIEW_ID], fake_settings(), cache)
@@ -254,9 +254,9 @@ def test_stage3_partial_gives_a_partial_stage4_never_complete(tmp_path):
 
 def test_llm_failure_is_isolated_and_leaves_no_episodes(tmp_path):
     run, cache, _ = stage3(tmp_path)
-    run, t4 = stage4(run, cache, builder=server_error(503))
+    run, t4 = stage4(run, cache, builder=agent_error())
     summary = run["files"][0]["accountability"]
-    assert summary["status"] == "FAILED" and summary["error"]["code"] == "SERVER_ERROR"
+    assert summary["status"] == "FAILED" and summary["error"]["code"] == "SCHEMA_VALIDATION"
     assert not (out_dir(run) / config.ACCOUNTABILITY_EPISODES_FILENAME).exists()
     assert load(run, config.ACCOUNTABILITY_VALIDATION_FILENAME)["available"] is False
     # réponse non conforme au schéma → échec également, jamais d'épisode inventé
@@ -311,7 +311,7 @@ def test_several_interviews_one_blocked_others_continue(tmp_path):
 
     ref, plain = S.stage3_responders(), S.plain_responders()
     responders = {PRACTICE: by_interview(ref[PRACTICE], plain[PRACTICE]),
-                  INTERACTION: by_interview(ref[INTERACTION], lambda p: server_error(500)),
+                  INTERACTION: by_interview(ref[INTERACTION], lambda p: agent_error()),
                   AUDITOR: ref[AUDITOR]}
     run, cache, _ = stage3(tmp_path, files=files, responders=responders)
     run, t4 = stage4(run, cache)
@@ -319,12 +319,15 @@ def test_several_interviews_one_blocked_others_continue(tmp_path):
     assert statuses == {S.INTERVIEW_ID: "SUCCESS", S.PLAIN_ID: "BLOCKED"} and len(t4.calls) == 1
 
 
-def test_stage4_is_refused_without_configuration(tmp_path):
+def test_stage4_needs_no_key_nor_configuration(tmp_path):
+    """Aucune clé ni configuration : seul le client des agents, injecté, est requis."""
     run, cache, _ = stage3(tmp_path)
-    with pytest.raises(LLMError) as info:
-        accountability.analyze_run_stage4(run, settings=LLMSettings.from_env({}), transport=FakeTransport({}))
-    assert info.value.code == "NOT_CONFIGURED"
+    with pytest.raises(TypeError):
+        accountability.analyze_run_stage4(run, settings=LLMSettings.from_env({}))
     assert not (out_dir(run) / config.ACCOUNTABILITY_MANIFEST_FILENAME).exists()
+    run = accountability.analyze_run_stage4(run, settings=LLMSettings.from_env({}), cache=cache,
+                                            client=FakeAgents({ACCOUNTABILITY: S.REFERENCE_BUILDER}))
+    assert run["files"][0]["accountability"]["status"] == "SUCCESS"
 
 
 # --- Hygiène ---------------------------------------------------------------------------------------
