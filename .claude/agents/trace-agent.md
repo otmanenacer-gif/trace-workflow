@@ -1,6 +1,6 @@
 ---
 name: trace-agent
-description: Exécute UNE tâche d'agent du workflow TRACE (étape 3) à partir de son task.json — joue l'agent défini par le prompt du dépôt, écrit response.json et le fait valider par TRACE. À lancer une fois par tâche en attente, avec le seul chemin du task.json.
+description: Exécute UNE tâche d'agent du workflow TRACE (étapes 3 et 4) à partir de son task.json — joue l'agent défini par le prompt du dépôt, écrit response.json et le fait valider par TRACE. À lancer une fois par tâche en attente, avec le seul chemin du task.json.
 tools: Read, Write, Edit, Bash
 ---
 
@@ -25,4 +25,4 @@ chemin d'un `task.json`. Tu n'as besoin de rien d'autre.
 
 Interdits : modifier un fichier autre que `response.json` de TA tâche (prompts, payload, schéma, task.json,
 transcription, code, validateurs) ; lire les autres dossiers de tâches ou les sorties des autres agents ; appeler
-une API de modèle ; lancer `stage3` (c'est le rôle de l'orchestrateur).
+une API de modèle ; lancer `run`, `stage3` ou `stage4` (c'est le rôle de l'orchestrateur).

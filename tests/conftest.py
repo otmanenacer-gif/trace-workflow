@@ -19,7 +19,7 @@ _ENV_VARS = (
     llm_client.ENV_MAX_CONCURRENCY, llm_client.ENV_TIMEOUT, llm_client.ENV_MAX_RETRIES,
     llm_client.ENV_MAX_TOKENS, llm_client.ENV_EFFORT, llm_client.ENV_TEMPERATURE,
     llm_client.ENV_INTERACTION_CHUNK_TOKENS, llm_client.ENV_PRACTICE_CHUNK_TOKENS,
-    claude_code_workflow.ENV_STAGE3_BACKEND,
+    claude_code_workflow.ENV_STAGE3_BACKEND, claude_code_workflow.ENV_STAGE4_BACKEND,
 )
 
 _real_connect = socket.socket.connect

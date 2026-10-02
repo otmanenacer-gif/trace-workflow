@@ -28,6 +28,7 @@ def fake_api(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-FAKE-KEY-000")
     monkeypatch.setenv("ANTHROPIC_MODEL", "fake-model")
     monkeypatch.setenv("TRACE_STAGE3_BACKEND", "anthropic")  # ancien mode de l'étape 3 par API (LLM simulé)
+    monkeypatch.setenv("TRACE_STAGE4_BACKEND", "anthropic")  # ancien mode de l'étape 4 par API (LLM simulé)
     transport = FakeTransport({**S4.stage3_responders(), ACCOUNTABILITY: S4.REFERENCE_BUILDER,
                                TRAJECTORY: S5.scripted_mapper(S5.REFERENCE_PLAN)})
     monkeypatch.setattr(llm_client, "AnthropicTransport", lambda settings: transport)

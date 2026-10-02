@@ -316,7 +316,7 @@ def test_cli_runs_stage3_end_to_end(tmp_path, cli, capsys, no_api_client):
     source = tmp_path / si.FILENAME
     source.write_text(si.TEXT, encoding="utf-8")
     assert cli.main(["ingest", str(source)]) == 0
-    assert "Étape suivante : python scripts/trace_workflow.py stage3 run_" in capsys.readouterr().out
+    assert "Étape suivante : python scripts/trace_workflow.py run run_" in capsys.readouterr().out
 
     assert cli.main(["stage3", "latest"]) == 3
     out = capsys.readouterr().out

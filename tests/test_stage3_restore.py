@@ -194,6 +194,7 @@ def test_older_agent_version_is_accepted_with_a_warning(tmp_path):
 def test_app_offers_restore_then_shows_restored_stage3_and_stage4(tmp_path, monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-FAKE-KEY-000")
     monkeypatch.setenv("ANTHROPIC_MODEL", "fake-model")
+    monkeypatch.setenv("TRACE_STAGE4_BACKEND", "anthropic")  # ancien mode de l'étape 4 par API (LLM simulé)
     transport = stage4_only_transport()
     monkeypatch.setattr(llm_client, "AnthropicTransport", lambda settings: transport)
     uploads = downloaded_stage3(tmp_path)

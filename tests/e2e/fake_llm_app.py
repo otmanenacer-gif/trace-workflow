@@ -42,9 +42,10 @@ sys.path.insert(0, str(ROOT))
 
 os.environ["ANTHROPIC_API_KEY"] = "sk-ant-fake-browser-test"  # factice : jamais envoyée
 os.environ["ANTHROPIC_MODEL"] = "fake-model"
-# Les scénarios du navigateur cliquent sur l'ancien lanceur de l'étape 3 (par API, ici simulée) : il doit être
-# demandé explicitement, l'étape 3 passant par défaut par le workflow Claude Code (TRACE_WORKFLOW.md).
+# Les scénarios du navigateur cliquent sur les anciens lanceurs des étapes 3 et 4 (par API, ici simulée) : ils
+# doivent être demandés explicitement, ces étapes passant par défaut par le workflow Claude Code (TRACE_WORKFLOW.md).
 os.environ["TRACE_STAGE3_BACKEND"] = "anthropic"
+os.environ["TRACE_STAGE4_BACKEND"] = "anthropic"
 # Garde-fou : si un rechargement à chaud (fichier source modifié pendant le test, voir app.py) réimporte
 # core.llm_client, le transport réel réapparaît ; il viserait alors une adresse locale fermée et échouerait
 # sans jamais joindre l'API.

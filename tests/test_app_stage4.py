@@ -21,6 +21,7 @@ def fake_api(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-FAKE-KEY-000")
     monkeypatch.setenv("ANTHROPIC_MODEL", "fake-model")
     monkeypatch.setenv("TRACE_STAGE3_BACKEND", "anthropic")  # ancien mode de l'étape 3 par API (LLM simulé)
+    monkeypatch.setenv("TRACE_STAGE4_BACKEND", "anthropic")  # ancien mode de l'étape 4 par API (LLM simulé)
     transport = FakeTransport({**S.stage3_responders(), ACCOUNTABILITY: S.REFERENCE_BUILDER})
     monkeypatch.setattr(llm_client, "AnthropicTransport", lambda settings: transport)
     return transport
@@ -81,6 +82,7 @@ def test_stage4_blocked_when_stage3_failed(tmp_path, monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-FAKE-KEY-000")
     monkeypatch.setenv("ANTHROPIC_MODEL", "fake-model")
     monkeypatch.setenv("TRACE_STAGE3_BACKEND", "anthropic")  # ancien mode de l'étape 3 par API (LLM simulé)
+    monkeypatch.setenv("TRACE_STAGE4_BACKEND", "anthropic")  # ancien mode de l'étape 4 par API (LLM simulé)
     responders = {**S.stage3_responders(), INTERACTION: server_error(500), ACCOUNTABILITY: S.REFERENCE_BUILDER}
     transport = FakeTransport(responders)
     monkeypatch.setattr(llm_client, "AnthropicTransport", lambda settings: transport)
