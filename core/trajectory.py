@@ -263,7 +263,7 @@ async def _call(prepared: Stage5Input, client: LLMClient | None, cache: Analysis
             "model_requested": result.model_requested, "response_model": result.response_model,
             "request_id": result.request_id, "stop_reason": result.stop_reason})
         record.update(status=STATUS_SUCCESS, output=output, created_at=_now(), api_calls=result.attempts,
-                      billed_this_run=True, usage=result.usage, duration_seconds=result.duration_seconds,
+                      billed_this_run=result.attempts > 0, usage=result.usage, duration_seconds=result.duration_seconds,
                       response_model=result.response_model, request_id=result.request_id,
                       stop_reason=result.stop_reason)
     except LLMError as error:
@@ -360,7 +360,9 @@ async def run_stage5_interview(prepared: Stage5Input, client: LLMClient | None, 
                                label, estimated)
             record = await _call(prepared, client, cache, settings, force, label)
             manifest.update(
-                cache_key=record["cache_key"], cache_hit=record["cache_hit"], llm_called=bool(record["api_calls"]),
+                # appel API, ou réponse d'agent du workflow Claude Code (0 appel API, statut SUCCESS)
+                cache_key=record["cache_key"], cache_hit=record["cache_hit"],
+                llm_called=bool(record["api_calls"]) or record["status"] == STATUS_SUCCESS,
                 api_calls=record["api_calls"] or 0, billed_this_run=record["billed_this_run"], usage=record["usage"],
                 duration_seconds=record["duration_seconds"], response_model=record["response_model"],
                 request_id=record["request_id"], stop_reason=record["stop_reason"],
@@ -453,9 +455,13 @@ def _summary(prepared: Stage5Input, manifest: dict) -> dict:
 
 async def run_stage5_interviews(prepared_list: list[Stage5Input], settings: LLMSettings,
                                 transport: Transport | None = None, cache: AnalysisCache | None = None,
-                                force: bool = False) -> list[dict]:
+                                force: bool = False, client=None) -> list[dict]:
+    """`client` : client déjà construit, de même interface que LLMClient ; le workflow Claude Code
+    (core/claude_code_workflow.py) y passe un client SANS appel réseau. Sinon, un LLMClient (API) est construit
+    seulement si un entretien a assez de matériau."""
     cache = cache or AnalysisCache()
-    client = LLMClient(settings, transport=transport) if any(p.needs_llm for p in prepared_list) else None
+    if client is None and any(p.needs_llm for p in prepared_list):
+        client = LLMClient(settings, transport=transport)
     try:
         manifests = await asyncio.gather(*(run_stage5_interview(p, client, cache, settings, force)
                                            for p in prepared_list))
@@ -498,20 +504,21 @@ def _step_state(metadata: dict) -> str:
 
 def analyze_run_stage5(metadata: dict, interview_ids: list[str] | None = None, *, settings: LLMSettings | None = None,
                        transport: Transport | None = None, cache: AnalysisCache | None = None,
-                       force: bool = False) -> dict:
+                       force: bool = False, client=None) -> dict:
     """Étape 5 sur les entretiens choisis d'un run (étape 4 déjà disponible). Met à jour metadata.json.
 
-    Lève LLMError (NOT_CONFIGURED) si la clé ou le modèle manque.
+    Sans `client`, lève LLMError (NOT_CONFIGURED) si la clé ou le modèle manque. Avec `client` (workflow
+    Claude Code, sans API), aucune clé n'est demandée.
     """
     settings = settings or LLMSettings.from_env()
-    if not settings.enabled:
+    if client is None and not settings.enabled:
         raise LLMError("NOT_CONFIGURED", ", ".join(settings.missing))
     files = eligible_files(metadata)
     if interview_ids is not None:
         wanted = set(interview_ids)
         files = [f for f in files if f["ingestion"]["interview_id"] in wanted]
     prepared = [prepare_stage5(f["ingestion"]) for f in files]
-    summaries = _run_coroutine(run_stage5_interviews(prepared, settings, transport, cache, force))
+    summaries = _run_coroutine(run_stage5_interviews(prepared, settings, transport, cache, force, client))
     by_id = {s["interview_id"]: s for s in summaries}
     for info in files:
         info["trajectory"] = by_id[info["ingestion"]["interview_id"]]

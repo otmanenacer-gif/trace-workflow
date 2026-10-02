@@ -1,21 +1,26 @@
 """Workflow Claude Code de TRACE — commandes déterministes (aucun appel API, aucune clé).
 
 Claude Code exécute ces commandes ; les agents sémantiques sont joués par Claude Code lui-même, à partir
-des prompts du dépôt (voir TRACE_WORKFLOW.md). Étapes 3 et 4 pour l'instant.
+des prompts du dépôt (voir TRACE_WORKFLOW.md). Étapes 3, 4 et 5 pour l'instant.
 
     python scripts/trace_workflow.py ingest FICHIER [FICHIER ...]   # crée un run et l'ingère (étapes 1-2)
-    python scripts/trace_workflow.py run RUN --until 4              # un passage jusqu'à l'étape 4 : étape 3 si
-                                                                    # elle n'est pas complète, puis étape 4
+    python scripts/trace_workflow.py run RUN --until 5              # un passage jusqu'à l'étape 5 : chaque étape
+                                                                    # seulement si elle n'est pas déjà complète
     python scripts/trace_workflow.py stage3 RUN [--interview ID]    # un passage de l'étape 3 : consomme les
                                                                     # réponses, écrit les tâches suivantes
     python scripts/trace_workflow.py stage4 RUN [--interview ID]    # un passage de l'étape 4
-    python scripts/trace_workflow.py tasks RUN [--stage 4]          # tâches en attente / à corriger
+    python scripts/trace_workflow.py stage5 RUN [--interview ID]    # un passage de l'étape 5
+    python scripts/trace_workflow.py tasks RUN [--stage 5]          # tâches en attente / à corriger
     python scripts/trace_workflow.py check DOSSIER_DE_TACHE         # valide response.json (validateurs existants)
     python scripts/trace_workflow.py status RUN                     # état du run
 
 RUN : identifiant du run (dossier data/outputs/<RUN>), chemin de son dossier, ou « latest ».
-Codes de sortie de `run`, `stage3`, `stage4` : 0 étape terminée, 3 tâches en attente, 4 réponses à corriger,
-5 échec, 6 étape bloquée (étape précédente en échec ou absente). `check` : 0 aucune anomalie bloquante, 1 sinon.
+Garde : une étape déjà complète et à jour n'est jamais rejouée (elle est signalée « déjà terminée — non
+rejouée ») ; `stage3`, `stage4` et `stage5` acceptent `--force` pour la rejouer EXPLICITEMENT (l'étape suivante
+devient alors « périmée » et sera rejouée par `run`).
+Codes de sortie de `run`, `stage3`, `stage4`, `stage5` : 0 étape terminée, 3 tâches en attente, 4 réponses à
+corriger, 5 échec, 6 étape bloquée (étape précédente en échec, absente ou périmée). `check` : 0 aucune anomalie
+bloquante, 1 sinon.
 """
 
 from __future__ import annotations
@@ -75,6 +80,8 @@ def print_status(status: dict, run: str, next_command: str | None = None) -> Non
         print(f"  {i['interview_id']} : {i['status']} — phase {i['phase']} — {agents}")
         if i.get("reason"):
             print(f"    {i['reason']}")
+        for warning in i.get("warnings") or []:
+            print(f"    AVERTISSEMENT : {warning}")
     _print_tasks(status, run, next_command)
 
 
@@ -93,7 +100,7 @@ def cmd_ingest(args) -> int:
         print(f"  {ingestion['interview_id']} : {ingestion['status']}, {ingestion['turn_count']} tour(s), "
               f"{ingestion['warning_count']} avertissement(s)")
     print(f"Dossier du run : {wf._display_path(Path(run['output_dir']))}")
-    print(f"Étape suivante : {wf.CLI} run {run['run_id']} --until 4   (ou stage3 {run['run_id']})")
+    print(f"Étape suivante : {wf.CLI} run {run['run_id']} --until 5   (ou --until 3 / --until 4)")
     return 0
 
 
@@ -109,14 +116,10 @@ def _report(result: dict, run_dir: Path, args, next_command: str | None = None) 
     return EXIT_CODES[status["status"]]
 
 
-def cmd_stage3(args) -> int:
+def cmd_stage(args) -> int:
     run_dir = resolve_run(args.run)
-    return _report(wf.run_stage3(load_metadata(run_dir), args.interview or None), run_dir, args)
-
-
-def cmd_stage4(args) -> int:
-    run_dir = resolve_run(args.run)
-    return _report(wf.run_stage4(load_metadata(run_dir), args.interview or None), run_dir, args)
+    result = wf.run_stage(args.stage, load_metadata(run_dir), args.interview or None, force=args.force)
+    return _report(result, run_dir, args)
 
 
 def cmd_run(args) -> int:
@@ -173,26 +176,25 @@ def cmd_status(args) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Workflow Claude Code de TRACE (étapes 3 et 4, sans appel API).")
+    parser = argparse.ArgumentParser(description="Workflow Claude Code de TRACE (étapes 3 à 5, sans appel API).")
     sub = parser.add_subparsers(dest="command", required=True)
     p = sub.add_parser("ingest", help="crée un run et ingère les entretiens (déterministe)")
     p.add_argument("files", nargs="+")
     p.add_argument("--problematique", default="")
     p.set_defaults(func=cmd_ingest)
-    p = sub.add_parser("stage3", help="rejoue l'étape 3 : consomme les réponses, écrit les tâches suivantes")
+    for stage in wf.STAGES:
+        p = sub.add_parser(f"stage{stage}", help=f"un passage de l'étape {stage} : consomme les réponses, écrit les "
+                                                 "tâches suivantes (étape déjà complète : non rejouée)")
+        p.add_argument("run")
+        p.add_argument("--interview", action="append", help="entretien à traiter (répétable ; défaut : tous)")
+        p.add_argument("--force", action="store_true",
+                       help="rejouer même si l'étape est déjà complète (rend l'étape suivante périmée)")
+        p.add_argument("--json", action="store_true")
+        p.set_defaults(func=cmd_stage, stage=stage)
+    p = sub.add_parser("run", help="un passage jusqu'à l'étape --until (chaque étape seulement si elle n'est pas "
+                                   "déjà complète)")
     p.add_argument("run")
-    p.add_argument("--interview", action="append", help="entretien à traiter (répétable ; défaut : tous)")
-    p.add_argument("--json", action="store_true")
-    p.set_defaults(func=cmd_stage3)
-    p = sub.add_parser("stage4", help="rejoue l'étape 4 : consomme les réponses, écrit les tâches suivantes")
-    p.add_argument("run")
-    p.add_argument("--interview", action="append", help="entretien à traiter (répétable ; défaut : tous)")
-    p.add_argument("--json", action="store_true")
-    p.set_defaults(func=cmd_stage4)
-    p = sub.add_parser("run", help="un passage jusqu'à l'étape --until (l'étape 3 seulement si elle n'est pas "
-                                   "complète, puis l'étape 4)")
-    p.add_argument("run")
-    p.add_argument("--until", choices=wf.STAGES, default="4")
+    p.add_argument("--until", choices=wf.STAGES, default="5")
     p.add_argument("--interview", action="append", help="entretien à traiter (répétable ; défaut : tous)")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_run)

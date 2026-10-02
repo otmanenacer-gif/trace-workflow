@@ -153,9 +153,15 @@ def test_answered_tasks_are_validated_and_saved_as_usual_stage3_outputs(tmp_path
     assert read(run, "interaction_signals.json")["item_count"] == 10
     assert read(run, config.EVIDENCE_VALIDATION_FILENAME)["total_invalid_evidence"] == 0
 
-    again = wf.run_stage3(run)  # rejouer : mêmes tâches, aucune nouvelle, rien à refaire
-    assert again["status"]["status"] == wf.STAGE3_COMPLETE
-    assert [t["task_id"] for t in again["status"]["tasks"]] == [t["task_id"] for t in status["tasks"]]
+    files = {name: (analysis_dir(run) / name).read_bytes() for name in ("practice_extractor.json",
+                                                                        "interaction_signals.json")}
+    again = wf.run_stage3(run)  # garde : étape complète et à jour, non rejouée, rien n'est réécrit
+    assert again["status"]["status"] == wf.STAGE3_COMPLETE and again["status"]["skipped"] == [si.INTERVIEW_ID]
+    assert again["status"]["interviews"][0]["phase"] == "déjà terminée — non rejouée" and not again["status"]["tasks"]
+    assert {name: (analysis_dir(run) / name).read_bytes() for name in files} == files
+    forced = wf.run_stage3(run, force=True)  # rejouer explicitement : mêmes tâches, aucune nouvelle
+    assert forced["status"]["status"] == wf.STAGE3_COMPLETE
+    assert [t["task_id"] for t in forced["status"]["tasks"]] == [t["task_id"] for t in status["tasks"]]
 
 
 def test_workflow_outputs_equal_the_api_pipeline_outputs(tmp_path, monkeypatch):

@@ -137,7 +137,8 @@ def format_count(value: int | None) -> str:
 def render_pipeline(run: dict | None, llm_enabled: bool) -> None:
     """Affiche les étapes : structuration, puis les deux agents de l'étape 3 ; le reste est inactif."""
     ai_steps = (config.PRACTICE_STEP, config.INTERACTION_STEP, config.ACCOUNTABILITY_STEP, config.TRAJECTORY_STEP)
-    workflow_steps = {config.PRACTICE_STEP: "3", config.INTERACTION_STEP: "3", config.ACCOUNTABILITY_STEP: "4"}
+    workflow_steps = {config.PRACTICE_STEP: "3", config.INTERACTION_STEP: "3", config.ACCOUNTABILITY_STEP: "4",
+                      config.TRAJECTORY_STEP: "5"}
     for index, step in enumerate(config.PIPELINE_STEPS, start=1):
         if step == config.INGESTION_STEP:
             state = run["pipeline"][step] if run else "prête"
@@ -494,6 +495,10 @@ def render_workflow_state(run: dict, stage: str, instruction: str) -> None:
     for interview in state["interviews"]:
         if interview.get("reason"):
             st.warning(f"{interview['interview_id']} : {interview['reason']}")
+        for warning in interview.get("warnings") or []:
+            st.warning(f"{interview['interview_id']} : {warning}")
+    if state.get("skipped"):
+        st.caption("Déjà terminée(s) et à jour, non rejouée(s) : " + ", ".join(state["skipped"]) + ".")
     todo = [(t, "réponse à corriger") for t in state["invalid"]] + [(t, "en attente") for t in state["pending"]]
     if todo:
         st.table([{"Tâche": t["task_id"], "Entretien": t["interview_id"], "Agent": t["agent_label"], "État": label,
@@ -883,6 +888,38 @@ def _claim_row(claim: dict) -> dict:
                 "needs_review"] else "")}
 
 
+def render_stage5_workflow(run: dict, available: list[dict]) -> None:
+    """Étape 5 sans API : TRACE prépare un paquet par entretien, Claude Code joue le Trajectory Mapper."""
+    flash = st.session_state.pop("wf5_flash", None)
+    if flash:
+        (st.warning if flash[0] == "warning" else st.success)(flash[1])
+    st.info(
+        "**Workflow Claude Code** — aucune clé API, aucun appel API, aucun coût. TRACE prépare sans IA la "
+        "représentation de l'entretien (épisodes de l'étape 4, ancrages temporels, régularités) et UN paquet de tâche "
+        "par entretien ; Claude Code joue le Trajectory Mapper (prompt du dépôt) ; TRACE valide la réponse (schéma, "
+        "validateur de l'étape 5 avec ses requalifications) et enregistre les sorties habituelles. Une étape déjà "
+        "terminée et à jour n'est pas rejouée. Procédure : `TRACE_WORKFLOW.md`."
+    )
+    ids = [f["ingestion"]["interview_id"] for f in available]
+    choice = st.selectbox("Entretien(s) pour l'étape 5", ids + ([ACC_ALL] if len(ids) > 1 else []), key="wf5_interview")
+    selected = ids if choice == ACC_ALL else [choice]
+    if st.button("Préparer / reprendre l'étape 5 (workflow Claude Code, 0 appel API)", type="primary",
+                 key="wf_stage5"):
+        try:
+            result = workflow.run_stage5(run, selected)
+        except (OSError, ValueError, KeyError) as exc:
+            logging.error("Workflow de l'étape 5 interrompu : %s", type(exc).__name__)
+            st.error(f"Workflow de l'étape 5 interrompu ({type(exc).__name__}) : vérifiez les fichiers du run.")
+            return
+        st.session_state.last_run = result["metadata"]
+        status = result["status"]["status"]
+        st.session_state.wf5_flash = (
+            ("success", "Étape 5 terminée (workflow Claude Code, 0 appel API).") if status == workflow.STAGE_COMPLETE
+            else ("warning", f"Étape 5 : {workflow.STATUS_LABELS[status]} — voir ci-dessous."))
+        st.rerun()
+    render_workflow_state(run, "5", f"Exécute TRACE sur le run {run['run_id']} jusqu'à l'étape 5")
+
+
 def render_stage5_results(run: dict) -> None:
     done = [f for f in run["files"] if "trajectory" in f]
     if not done:
@@ -895,7 +932,7 @@ def render_stage5_results(run: dict) -> None:
     st.table([{
         "Entretien": s["interview_id"],
         "Statut étape 4": STAGE4_STATE_LABELS.get(s.get("stage4_status"), s.get("stage4_status") or "n/a"),
-        "Étape 5": f"{ACC_STATUS_ICONS.get(s['status'], '')} {s['status']}",
+        "Étape 5": ai_status_label(s, ACC_STATUS_ICONS),
         "Configuration": CONFIGURATION_LABELS.get(s.get("configuration_type"), "—"),
         "Affirmations retenues": s.get("kept_claim_count") or 0,
         "Frontières stables": s.get("stable_boundaries_count") or 0,
@@ -915,7 +952,8 @@ def render_stage5_results(run: dict) -> None:
             if summary["status"] == trajectory.STATUS_BLOCKED:
                 st.error((summary.get("error") or {}).get("message") or "Étape 5 bloquée.")
             elif summary.get("error"):
-                st.error(f"Trajectory Mapper : {summary['error']['message']}")
+                show = st.info if summary["error"].get("code") == workflow.AWAITING_AGENT else st.error
+                show(f"Trajectory Mapper : {summary['error']['message']}")
             if summary["status"] == analysis.STATUS_PARTIAL:
                 st.warning("Analyse INCOMPLÈTE : l'étape 4 est partielle (analysis_complete = false).")
             if not trajectory.trajectory_current(summary):
@@ -931,8 +969,10 @@ def render_stage5_results(run: dict) -> None:
                         + f" · épisodes utilisables : **{document['material']['usable_episode_count']}** · pratiques "
                         f"sans marqueur : **{document['material']['unmarked_practice_count']}** · ancrages temporels : "
                         f"**{document['material']['temporal_anchor_count']}** · "
-                        + ("repris du cache TRACE" if document["cache_hit"] else "1 appel" if document["llm_called"]
-                           else "aucun appel (matériau insuffisant)"))
+                        + ("repris du cache TRACE" if document["cache_hit"] else
+                           "réponse d'agent du workflow Claude Code (0 appel API)"
+                           if document.get("model") == workflow.WORKFLOW_MODEL else
+                           "1 appel" if document["llm_called"] else "aucun appel (matériau insuffisant)"))
                 st.markdown(line)
                 if document.get("model_configuration_type"):
                     st.warning(f"Configuration proposée par le modèle : "
@@ -990,6 +1030,8 @@ def render_stage5_section(run: dict) -> None:
     if not available:
         st.info("Lancez d'abord l'étape 4, ou restaurez ses résultats depuis des fichiers déjà téléchargés : l'étape 5 "
                 "en consomme les épisodes.")
+    elif workflow.stage5_backend() == workflow.BACKEND_CLAUDE_CODE:
+        render_stage5_workflow(run, available)
     else:
         settings = LLMSettings.from_env()
         if not settings.enabled:
