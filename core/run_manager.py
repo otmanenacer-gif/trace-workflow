@@ -133,6 +133,14 @@ def load_metadata(output_dir: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def list_runs(outputs_root: Path | None = None) -> list[str]:
+    """Identifiants des runs enregistrés sur ce disque (dossiers avec metadata.json), du plus récent au plus ancien."""
+    root = Path(outputs_root or config.OUTPUTS_DIR)
+    if not root.is_dir():
+        return []
+    return sorted((p.name for p in root.iterdir() if (p / config.METADATA_FILENAME).is_file()), reverse=True)
+
+
 def init_run(
     files: list[tuple[str, bytes]],
     problematique: str,

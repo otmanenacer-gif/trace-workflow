@@ -26,6 +26,7 @@ def fake_api(monkeypatch):
     """Clé et modèle factices + transport simulé : le parcours complet sans aucun appel réel."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-FAKE-KEY-000")
     monkeypatch.setenv("ANTHROPIC_MODEL", "fake-model")
+    monkeypatch.setenv("TRACE_STAGE3_BACKEND", "anthropic")  # ancien mode de l'étape 3 par API (LLM simulé)
     transport = FakeTransport({PRACTICE: lambda p: text_response(si.GOOD_PRACTICES),
                                INTERACTION: lambda p: text_response(si.GOOD_SIGNALS)})
     monkeypatch.setattr(llm_client, "AnthropicTransport", lambda settings: transport)
@@ -38,7 +39,10 @@ def test_app_starts_without_api_key():
     assert "désactivée (clé API ou modèle absent)" in texts(at.markdown)
 
 
-def test_ai_section_is_disabled_without_key(tmp_path):
+def test_ai_section_is_disabled_without_key(tmp_path, monkeypatch):
+    # Ancien mode de l'étape 3 par API, demandé explicitement : sans clé, il reste désactivé.
+    # (Par défaut, l'étape 3 passe par le workflow Claude Code : tests/test_claude_code_workflow.py.)
+    monkeypatch.setenv("TRACE_STAGE3_BACKEND", "anthropic")
     at = app_with_run(si.make_ingested_run(tmp_path))
     assert not at.exception
     assert "Analyse IA — Étape 3" in texts(at.header)
@@ -105,6 +109,7 @@ def test_force_option_is_reset_after_each_launch(tmp_path, fake_api):
 def test_speaker_audit_is_shown_and_never_editable(tmp_path, monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-FAKE-KEY-000")
     monkeypatch.setenv("ANTHROPIC_MODEL", "fake-model")
+    monkeypatch.setenv("TRACE_STAGE3_BACKEND", "anthropic")  # ancien mode de l'étape 3 par API (LLM simulé)
     from tests.fake_llm import AUDITOR
     transport = FakeTransport({PRACTICE: lambda p: text_response({"practices": [], "extraction_notes": None}),
                                INTERACTION: lambda p: text_response({"signals": [], "reading_notes": None}),
@@ -169,6 +174,7 @@ def long_interview_api(monkeypatch, interaction=None):
     from tests.fake_llm import LONG_DISTANCE
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-FAKE-KEY-000")
     monkeypatch.setenv("ANTHROPIC_MODEL", "fake-model")
+    monkeypatch.setenv("TRACE_STAGE3_BACKEND", "anthropic")  # ancien mode de l'étape 3 par API (LLM simulé)
     transport = FakeTransport({PRACTICE: lambda p: text_response({"practices": [], "extraction_notes": None}),
                                INTERACTION: interaction or L.simulated_chunk_reader,
                                LONG_DISTANCE: L.simulated_long_distance_reader})
@@ -223,6 +229,7 @@ def stage37_api(monkeypatch, practice=None):
     from tests.fake_llm import AUDITOR, LONG_DISTANCE
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-FAKE-KEY-000")
     monkeypatch.setenv("ANTHROPIC_MODEL", "fake-model")
+    monkeypatch.setenv("TRACE_STAGE3_BACKEND", "anthropic")  # ancien mode de l'étape 3 par API (LLM simulé)
     transport = FakeTransport({PRACTICE: practice or S.practice_reader, INTERACTION: S.naive_reader,
                                LONG_DISTANCE: S.long_distance_reader,
                                AUDITOR: lambda p: text_response({"assessments": [], "audit_notes": None})})

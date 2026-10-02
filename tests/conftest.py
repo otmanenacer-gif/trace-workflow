@@ -12,13 +12,14 @@ import socket
 import pytest
 
 import core.llm_client as llm_client
-from core import config
+from core import claude_code_workflow, config
 
 _ENV_VARS = (
     "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_MODEL", "ANTHROPIC_PROFILE",
     llm_client.ENV_MAX_CONCURRENCY, llm_client.ENV_TIMEOUT, llm_client.ENV_MAX_RETRIES,
     llm_client.ENV_MAX_TOKENS, llm_client.ENV_EFFORT, llm_client.ENV_TEMPERATURE,
     llm_client.ENV_INTERACTION_CHUNK_TOKENS, llm_client.ENV_PRACTICE_CHUNK_TOKENS,
+    claude_code_workflow.ENV_STAGE3_BACKEND,
 )
 
 _real_connect = socket.socket.connect

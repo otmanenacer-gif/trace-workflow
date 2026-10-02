@@ -66,9 +66,11 @@ _purge_stale_project_modules()
 
 from core import accountability, analysis, config, stage3_restore, stage4_restore, trajectory  # noqa: E402
 from core import cross_interview, cross_interview_corpus  # noqa: E402
+from core import claude_code_workflow as workflow  # noqa: E402
 from core.ingestion import ingest_run  # noqa: E402
 from core.llm_client import LLMError, LLMSettings  # noqa: E402
-from core.run_manager import TraceError, get_extension, init_run, load_problematique, save_problematique  # noqa: E402
+from core.run_manager import TraceError, get_extension, init_run, list_runs, load_metadata  # noqa: E402
+from core.run_manager import load_problematique, save_problematique  # noqa: E402
 
 _stamp_project_modules()
 
@@ -135,6 +137,8 @@ def format_count(value: int | None) -> str:
 def render_pipeline(run: dict | None, llm_enabled: bool) -> None:
     """Affiche les étapes : structuration, puis les deux agents de l'étape 3 ; le reste est inactif."""
     ai_steps = (config.PRACTICE_STEP, config.INTERACTION_STEP, config.ACCOUNTABILITY_STEP, config.TRAJECTORY_STEP)
+    stage3_steps = (config.PRACTICE_STEP, config.INTERACTION_STEP)
+    stage3_workflow = workflow.stage3_backend() == workflow.BACKEND_CLAUDE_CODE
     for index, step in enumerate(config.PIPELINE_STEPS, start=1):
         if step == config.INGESTION_STEP:
             state = run["pipeline"][step] if run else "prête"
@@ -155,6 +159,8 @@ def render_pipeline(run: dict | None, llm_enabled: bool) -> None:
             if state != "inactive":
                 warn = "échec" in state or "incomplet" in state or "bloqué" in state
                 st.markdown(f"{'🟠' if warn else '🟢'} **{index}. {step}** (IA) — {state}")
+            elif step in stage3_steps and stage3_workflow:
+                st.markdown(f"🔵 **{index}. {step}** (IA) — prête, workflow Claude Code (0 appel API)")
             elif llm_enabled:
                 st.markdown(f"🔵 **{index}. {step}** (IA) — prête, sur action explicite")
             else:
@@ -309,6 +315,12 @@ def render_selectivity(agents: dict) -> None:
                    "sans pratique non_use / refusal associée (indice lexical, à vérifier ; voir non_use_cues).")
 
 
+def ai_status_label(summary: dict) -> str:
+    if (summary.get("error") or {}).get("code") == workflow.AWAITING_AGENT:
+        return "⏳ EN ATTENTE (workflow Claude Code)"
+    return f"{AI_STATUS_ICONS.get(summary.get('status'), '')} {summary.get('status') or 'n/a'}"
+
+
 def render_analysis_results(run: dict) -> None:
     """Statuts, comptes, consommation de tokens, aperçus et téléchargements."""
     analyzed = [f for f in run["files"] if "analysis" in f]
@@ -336,11 +348,11 @@ def render_analysis_results(run: dict) -> None:
             billed.append(audit["usage"])
         rows.append({
             "Entretien": f["analysis"]["interview_id"],
-            "Audit locuteurs": f"{AI_STATUS_ICONS.get(audit.get('status'), '')} {audit.get('status') or 'n/a'}",
+            "Audit locuteurs": ai_status_label(audit),
             "Tours suspects": audit.get("candidate_count") or 0,
             "Locuteurs à vérifier": audit.get("review_count") or 0,
-            "Practice Extractor": f"{AI_STATUS_ICONS.get(practice['status'], '')} {practice['status']}",
-            "Interaction Reader": f"{AI_STATUS_ICONS.get(signals['status'], '')} {signals['status']}",
+            "Practice Extractor": ai_status_label(practice),
+            "Interaction Reader": ai_status_label(signals),
             "Pratiques": practice.get("item_count") or 0,
             "Signaux": signals.get("item_count") or 0,
             "Citations invalides": f["analysis"]["invalid_evidence_count"],
@@ -359,7 +371,8 @@ def render_analysis_results(run: dict) -> None:
         with st.expander(f"Analyse IA — {iid} — aperçu"):
             for name, agent in summary["agents"].items():
                 if agent.get("error"):
-                    st.error(f"{AI_AGENTS[name].label} : {agent['error']['message']}")
+                    show = st.info if agent["error"].get("code") == workflow.AWAITING_AGENT else st.error
+                    show(f"{AI_AGENTS[name].label} : {agent['error']['message']}")
             render_chunking(summary["agents"]["practice_extractor"], "Practice Extractor")
             render_chunking(summary["agents"]["interaction_signal_reader"])
             render_selectivity(summary["agents"])
@@ -438,6 +451,53 @@ def render_speaker_audit(summary: dict) -> None:
                            key=f"dl_{iid}_{AUDITOR.output_filename}")
 
 
+def render_stage3_workflow(run: dict, eligible: list[dict]) -> None:
+    """Étape 3 sans API : TRACE prépare les tâches, Claude Code joue les agents, TRACE valide et enregistre."""
+    flash = st.session_state.pop("wf_flash", None)
+    if flash:
+        (st.warning if flash[0] == "warning" else st.success)(flash[1])
+    st.info(
+        "**Workflow Claude Code** — aucune clé API, aucun appel API, aucun coût. TRACE prépare un paquet de tâche "
+        "par agent (prompt du dépôt, matériau exact, schéma JSON attendu) ; Claude Code, ouvert dans ce dépôt, joue "
+        "chaque agent et écrit sa réponse ; TRACE la valide (schéma, citations, garde-fou, sélectivité) et "
+        "enregistre les sorties habituelles de l'étape 3. Procédure : `TRACE_WORKFLOW.md`."
+    )
+    mode = st.radio("Mode", [MODE_TEST, MODE_CORPUS], key="wf_mode", horizontal=True)
+    ids = [f["ingestion"]["interview_id"] for f in eligible]
+    selected = [st.selectbox("Entretien à analyser", ids, key="wf_interview")] if mode == MODE_TEST else ids
+    if st.button("Préparer / reprendre l'étape 3 (workflow Claude Code, 0 appel API)", type="primary",
+                 key="wf_stage3"):
+        try:
+            result = workflow.run_stage3(run, selected)
+        except (OSError, ValueError, KeyError) as exc:
+            logging.error("Workflow de l'étape 3 interrompu : %s", type(exc).__name__)
+            st.error(f"Workflow de l'étape 3 interrompu ({type(exc).__name__}) : vérifiez les fichiers du run.")
+            return
+        st.session_state.last_run = result["metadata"]
+        status = result["status"]
+        st.session_state.wf_flash = (
+            ("success", "Étape 3 terminée (workflow Claude Code, 0 appel API).")
+            if status["status"] == workflow.STAGE3_COMPLETE else
+            ("warning", f"Étape 3 : {workflow.STAGE3_STATUS_LABELS[status['status']]} — voir ci-dessous."))
+        st.rerun()
+
+    state = (st.session_state.get("last_run") or run).get("stage3_workflow")
+    if not state:
+        return
+    st.markdown(f"**Workflow Claude Code :** {workflow.STAGE3_STATUS_LABELS[state['status']]} — "
+                f"{state['answered_count']}/{state['task_count']} tâche(s) avec une réponse conforme — "
+                f"{state['api_calls']} appel API")
+    todo = [(t, "réponse à corriger") for t in state["invalid"]] + [(t, "en attente") for t in state["pending"]]
+    if todo:
+        st.table([{"Tâche": t["task_id"], "Entretien": t["interview_id"], "Agent": t["agent_label"], "État": label}
+                  for t, label in todo])
+        st.markdown("Dans **Claude Code**, ouvert dans ce dépôt, demandez :")
+        st.code(f"Exécute les tâches TRACE en attente du run {run['run_id']}", language=None)
+        st.caption("Claude Code joue chaque agent (un sous-agent par tâche), valide sa réponse "
+                   f"(`{workflow.CLI} check …`), puis rejoue l'étape 3. Revenez ensuite ici et cliquez de nouveau "
+                   "sur « Préparer / reprendre » pour afficher les résultats.")
+
+
 def render_analysis_section(run: dict) -> None:
     st.header("Analyse IA — Étape 3")
     st.markdown(
@@ -456,6 +516,8 @@ def render_analysis_section(run: dict) -> None:
         st.warning(problem)
     if not eligible:
         st.info("Aucun entretien analysable (ingestion en échec ou sans tour de parole).")
+    elif workflow.stage3_backend() == workflow.BACKEND_CLAUDE_CODE:
+        render_stage3_workflow(run, eligible)
     elif not settings.enabled:
         st.warning(settings.disabled_reason())
     else:
@@ -1160,6 +1222,19 @@ if uploaded_files:
     )
 else:
     st.info("Aucun fichier chargé.")
+
+with st.expander("Ouvrir un run existant (par exemple préparé dans Claude Code)"):
+    runs = list_runs(config.OUTPUTS_DIR)
+    if not runs:
+        st.caption("Aucun run enregistré sur ce disque.")
+    else:
+        chosen_run = st.selectbox("Run", runs, key="open_run_id")
+        if st.button("Ouvrir ce run", key="open_run"):
+            try:
+                st.session_state.last_run = load_metadata(config.OUTPUTS_DIR / chosen_run)
+                st.rerun()
+            except (TraceError, OSError, ValueError) as exc:
+                st.error(f"Run illisible : {exc}")
 
 # 5. Pipeline (structuration + étape 3 ; affichée après le lancement)
 st.header("Pipeline")

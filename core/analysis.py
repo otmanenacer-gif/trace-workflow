@@ -413,7 +413,8 @@ async def run_agent(spec: AgentSpec, prepared: PreparedInterview, client: LLMCli
             )
             output = result.data.model_dump(mode="json")
             cache.store(key_fields, output, _call_record(result))
-            manifest.update(created_at=_now(), api_calls=result.attempts, billed_this_run=True, usage=result.usage,
+            manifest.update(created_at=_now(), api_calls=result.attempts, billed_this_run=result.attempts > 0,
+                            usage=result.usage,
                             duration_seconds=result.duration_seconds, response_model=result.response_model,
                             request_id=result.request_id, stop_reason=result.stop_reason)
 
@@ -532,7 +533,7 @@ async def _cached_call(spec: AgentSpec, user_message: str, client: LLMClient, ca
         output = result.data.model_dump(mode="json")
         cache.store(key_fields, output, _call_record(result))
         record.update(status=STATUS_SUCCESS, output=output, created_at=_now(), api_calls=result.attempts,
-                      billed_this_run=True, usage=result.usage, duration_seconds=result.duration_seconds,
+                      billed_this_run=result.attempts > 0, usage=result.usage, duration_seconds=result.duration_seconds,
                       response_model=result.response_model, request_id=result.request_id,
                       stop_reason=result.stop_reason)
     except LLMError as error:
@@ -581,8 +582,9 @@ async def _long_distance_pass(prepared: PreparedInterview, chunks: list, succeed
     request = interaction_chunking.long_distance_request(transcript, chunks, selection, warnings)
     record = await _cached_call(LONG_DISTANCE, request["user_message"], client, cache, settings, force,
                                 f"{label}/longue_distance")
-    long_distance.update(_public_record(record), llm_called=record["api_calls"] > 0,
-                         speaker_warning_count=len(request["warnings"]))
+    # lecture effectuée pendant ce passage : appel API, ou réponse d'agent du workflow Claude Code (0 appel API)
+    llm_called = record["api_calls"] > 0 or record["status"] == STATUS_SUCCESS
+    long_distance.update(_public_record(record), llm_called=llm_called, speaker_warning_count=len(request["warnings"]))
     kept: list[dict] = []
     if record["status"] in CALL_OK:
         position = {t["turn_id"]: i for i, t in enumerate(transcript["turns"])}
@@ -828,7 +830,8 @@ async def run_speaker_audit(prepared: PreparedInterview, client: LLMClient, cach
                         "response_model": result.response_model, "request_id": result.request_id,
                         "stop_reason": result.stop_reason}
                 cache.store(key_fields, output, call)
-                manifest.update(llm_called=True, created_at=_now(), api_calls=result.attempts, billed_this_run=True,
+                manifest.update(llm_called=True, created_at=_now(), api_calls=result.attempts,
+                                billed_this_run=result.attempts > 0,
                                 usage=result.usage, duration_seconds=result.duration_seconds,
                                 response_model=result.response_model, request_id=result.request_id,
                                 stop_reason=result.stop_reason)
@@ -974,10 +977,16 @@ async def analyze_interview(prepared: PreparedInterview, client: LLMClient, cach
 
 async def analyze_interviews(prepared_list: list[PreparedInterview], settings: LLMSettings,
                              transport: Transport | None = None, cache: AnalysisCache | None = None,
-                             force: bool = False, on_status: StatusCallback | None = None) -> list[dict]:
-    """Analyse plusieurs entretiens ; la concurrence des appels API est bornée par le client."""
+                             force: bool = False, on_status: StatusCallback | None = None,
+                             client=None) -> list[dict]:
+    """Analyse plusieurs entretiens ; la concurrence des appels API est bornée par le client.
+
+    `client` : client déjà construit, de même interface que LLMClient (`complete_json`, `aclose`) ; le
+    workflow Claude Code (core/claude_code_workflow.py) y passe un client SANS appel réseau. Sinon, un
+    LLMClient (API Anthropic) est construit à partir de `settings` et `transport`.
+    """
     cache = cache or AnalysisCache()
-    client = LLMClient(settings, transport=transport)
+    client = client if client is not None else LLMClient(settings, transport=transport)
     try:
         for prepared in prepared_list:
             for spec in (AUDITOR, *AGENTS):
@@ -1035,22 +1044,22 @@ def _step_state(metadata: dict, agent: str) -> str:
 
 def analyze_run(metadata: dict, interview_ids: list[str] | None = None, *, settings: LLMSettings | None = None,
                 transport: Transport | None = None, cache: AnalysisCache | None = None, force: bool = False,
-                on_status: StatusCallback | None = None) -> dict:
+                on_status: StatusCallback | None = None, client=None) -> dict:
     """Analyse les entretiens choisis d'un run ingéré et met à jour metadata.json.
 
-    `interview_ids=None` : tous les entretiens analysables. Lève LLMError
-    (NOT_CONFIGURED) si la clé ou le modèle manque ; aucune analyse n'est
-    alors lancée.
+    `interview_ids=None` : tous les entretiens analysables. Sans `client`, lève LLMError
+    (NOT_CONFIGURED) si la clé ou le modèle manque ; aucune analyse n'est alors lancée.
+    Avec `client` (workflow Claude Code, sans API), aucune clé n'est demandée.
     """
     settings = settings or LLMSettings.from_env()
-    if not settings.enabled:
+    if client is None and not settings.enabled:
         raise LLMError("NOT_CONFIGURED", ", ".join(settings.missing))
     files = eligible_files(metadata)
     if interview_ids is not None:
         wanted = set(interview_ids)
         files = [f for f in files if f["ingestion"]["interview_id"] in wanted]
     prepared = [prepare_interview(f["ingestion"]) for f in files]
-    summaries = _run_coroutine(analyze_interviews(prepared, settings, transport, cache, force, on_status))
+    summaries = _run_coroutine(analyze_interviews(prepared, settings, transport, cache, force, on_status, client))
 
     by_id = {s["interview_id"]: s for s in summaries}
     for info in files:

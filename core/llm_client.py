@@ -185,6 +185,8 @@ USER_MESSAGES = {
     "INVALID_JSON": "Réponse du modèle non conforme : JSON invalide.",
     "SCHEMA_VALIDATION": "Réponse du modèle non conforme au schéma attendu.",
     "UNEXPECTED_ERROR": "Erreur inattendue pendant l'appel au modèle.",
+    # Workflow Claude Code (core/claude_code_workflow.py) : aucune API, la réponse est écrite par l'agent.
+    "AWAITING_AGENT": "En attente de la réponse de l'agent (workflow Claude Code, aucun appel API).",
 }
 
 
@@ -451,17 +453,27 @@ class LLMClient:
             raise LLMError("TRUNCATED")
         text = "".join(getattr(block, "text", "") for block in (getattr(response, "content", None) or [])
                        if getattr(block, "type", None) == "text")
-        if not text.strip():
-            raise LLMError("EMPTY_RESPONSE")
-        try:
-            payload = json.loads(text)
-        except json.JSONDecodeError as exc:
-            raise LLMError("INVALID_JSON", f"position {exc.pos}") from None
-        try:
-            return response_model.model_validate(payload)
-        except ValidationError as exc:
-            # Emplacements et types d'erreur seulement : jamais les valeurs (extraits d'entretien)
-            problems = [f"{'.'.join(str(p) for p in e['loc']) or '(racine)'}: {e['type']}"
-                        for e in exc.errors(include_url=False, include_context=False, include_input=False)]
-            detail = "; ".join(problems[:5]) + (f" (+{len(problems) - 5})" if len(problems) > 5 else "")
-            raise LLMError("SCHEMA_VALIDATION", detail) from None
+        return parse_json_output(text, response_model)
+
+
+def parse_json_output(text: str, response_model: type[BaseModel], max_problems: int = 5) -> BaseModel:
+    """Parse le JSON produit par un agent et le valide avec son schéma Pydantic. Jamais silencieux.
+
+    Partagé par l'appel API (`LLMClient.parse_response`) et par le workflow Claude Code
+    (core/claude_code_workflow.py) : une réponse est jugée par les mêmes règles, quelle que soit sa source.
+    """
+    if not text.strip():
+        raise LLMError("EMPTY_RESPONSE")
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise LLMError("INVALID_JSON", f"position {exc.pos}") from None
+    try:
+        return response_model.model_validate(payload)
+    except ValidationError as exc:
+        # Emplacements et types d'erreur seulement : jamais les valeurs (extraits d'entretien)
+        problems = [f"{'.'.join(str(p) for p in e['loc']) or '(racine)'}: {e['type']}"
+                    for e in exc.errors(include_url=False, include_context=False, include_input=False)]
+        detail = "; ".join(problems[:max_problems]) + (
+            f" (+{len(problems) - max_problems})" if len(problems) > max_problems else "")
+        raise LLMError("SCHEMA_VALIDATION", detail) from None

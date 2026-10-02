@@ -6,7 +6,8 @@ Outil expérimental d'analyse qualitative assistée par IA, destiné à analyser
 des entretiens semi-directifs. **Version actuelle :**
 
 1. ingestion **déterministe** des entretiens (sans IA) ;
-2. **étape 3** — deux agents IA **indépendants**, lancés **en parallèle** et
+2. **étape 3** — **exécutée dans Claude Code, sans aucun appel API** (workflow multi-agents,
+   [`TRACE_WORKFLOW.md`](TRACE_WORKFLOW.md)) — deux agents **indépendants**,
    uniquement sur action explicite : *Practice Extractor* (ce que l'étudiant·e
    fait, ou ne fait pas, avec ou sans IAG) et *Interaction Signal Reader*
    (comment il ou elle le raconte). Aucune synthèse, aucune analyse théorique à ce stade ;
@@ -48,7 +49,28 @@ cp .env.example .env             # facultatif : clé API et modèle pour l'étap
 ```
 
 Sans `ANTHROPIC_API_KEY` ni `ANTHROPIC_MODEL`, l'application fonctionne
-normalement pour l'ingestion ; l'analyse IA est désactivée avec un message explicite.
+normalement pour l'ingestion et pour l'étape 3 (workflow Claude Code, aucune clé nécessaire) ; les
+étapes 4 à 6, pas encore migrées, sont désactivées avec un message explicite.
+
+## Étape 3 dans Claude Code (sans API)
+
+Procédure complète : [`TRACE_WORKFLOW.md`](TRACE_WORKFLOW.md). Ouvrir Claude Code dans le dépôt et demander
+par exemple « Exécute TRACE sur `chemin/entretien.docx` jusqu'à l'étape 3 ». Claude Code lance les parties
+déterministes de TRACE, joue chaque agent dans un sous-agent (`.claude/agents/trace-agent.md`) à partir de son
+prompt (`prompts/*.md`, source de vérité), fait valider chaque réponse par les validateurs existants, puis
+TRACE enregistre les sorties habituelles de l'étape 3 :
+
+```bash
+python scripts/trace_workflow.py ingest chemin/entretien.docx   # run + ingestion (déterministe)
+python scripts/trace_workflow.py stage3 <run>                   # paquets de tâche / intégration des réponses
+python scripts/trace_workflow.py check <dossier de tâche>       # validation d'une réponse d'agent
+python scripts/trace_workflow.py status <run>
+```
+
+Dans Streamlit, la section « Analyse IA — Étape 3 » prépare et reprend le même workflow (bouton « Préparer /
+reprendre l'étape 3 », 0 appel API), et « Ouvrir un run existant » affiche un run préparé dans Claude Code.
+L'ancien mode par API de l'étape 3 n'est utilisé que si `TRACE_STAGE3_BACKEND=anthropic` (conservé pour les
+anciens tests pendant la migration ; jamais un repli automatique).
 
 ## Lancer l'application
 
@@ -101,6 +123,7 @@ python -m pytest tests/test_cross_interview_validator.py # étape 6 : validateur
 python -m pytest tests/test_stage6_sociological.py    # étape 6 : cas A à J (régularité, cas négatif, non-observation…)
 python -m pytest tests/test_stage6_pipeline.py        # étape 6 : cache, invalidation, échecs, 17 entretiens
 python -m pytest tests/test_app_stage6.py             # étape 6 : interface (AppTest)
+python -m pytest tests/test_claude_code_workflow.py   # étape 3 en workflow Claude Code : paquets, validation, restauration
 python scripts/stage6_payload_report.py              # étape 6 : tailles de la représentation (2 / 8 / 17), 0 appel
 ```
 
@@ -447,6 +470,7 @@ core/transcript_structurer.py  découpage en tours de parole (règles explicites
 core/ingestion_validator.py    contrôle de couverture, statistiques, rapport de qualité
 core/ingestion.py              orchestration par fichier et par run
 core/llm_client.py             client LLM (SDK Anthropic) : config, réessais, sortie JSON validée
+core/claude_code_workflow.py   étape 3 sans API : paquets de tâche, client sans réseau, passages, contrôle des réponses
 core/analysis.py               étape 3 : deux agents en parallèle, sorties, manifests, statuts
 core/analysis_cache.py         cache déterministe des analyses
 core/evidence_validator.py     validation déterministe des citations
@@ -481,7 +505,11 @@ prompts/accountability_episode_builder.md  consignes de l'Accountability Episode
 prompts/trajectory_mapper.md   consignes du Trajectory Mapper (étape 5, v1.0)
 prompts/cross_interview_comparator.md  consignes du Cross-Interview Comparator (étape 6, v1.0)
 scripts/stage6_payload_report.py  mesure de la représentation de l'étape 6 (aucun appel)
-scripts/smoke_test_stage3.py   test réel (payant, sur confirmation) sur l'entretien synthétique
+scripts/trace_workflow.py      commandes du workflow Claude Code (ingestion, étape 3, contrôle, état)
+scripts/smoke_test_stage3.py   ancien test réel par API de l'étape 3 (payant, sur confirmation) ; hors workflow
+TRACE_WORKFLOW.md              orchestration du workflow multi-agents dans Claude Code
+CLAUDE.md                      consignes de Claude Code dans ce dépôt
+.claude/agents/trace-agent.md  sous-agent qui exécute UNE tâche d'agent
 docs/data_model.md             format des données transmis aux agents
 docs/agents_stage3.md          étape 3 : méthode, schémas, validation, cache, configuration
 docs/speaker_attribution_audit.md  étape 3.5 : audit de l'attribution des locuteurs
