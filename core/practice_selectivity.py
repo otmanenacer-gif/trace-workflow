@@ -9,12 +9,15 @@ preuves), sur le modèle de core/signal_selectivity.py. Aucun appel au modèle, 
 2. Pertinence : une pratique doit avoir un lien EXPLICITE avec une IAG (usage, non-usage / refus / limite d'usage,
    vérification d'une sortie, délégation, interaction avec l'outil), démontrable à partir des champs déjà produits ou
    du texte cité. Le statut seul (non_use, refusal…) ne suffit JAMAIS : « je travaille à la bibliothèque » codé
-   non_use n'est pas un non-usage d'une IAG. Le lien est établi si l'un des éléments suivants est présent :
+   non_use n'est pas un non-usage d'une IAG. Pour un non-usage ou un refus, le résumé qui nomme une IAG (« ne demande
+   pas à ChatGPT de… ») établit le lien ; `student_action_after` et `verification_or_control` ne comptent que s'ils
+   nomment l'outil ou s'adressent à lui ; une simple négation n'est pas une opposition à l'usage. Le lien est établi
+   si l'un des éléments suivants est présent :
    - un champ défini par rapport à l'outil est renseigné : outil nommé (`ai_tool`), ce que l'outil produit
      (`ai_action`), ce que l'enquêté·e fait du résultat (`student_action_after`), contrôles sur le résultat
      (`verification_or_control`) ;
-   - non-usage ou refus : la phrase citée s'oppose explicitement à l'usage (« moi-même », « je ne veux pas »,
-     « jamais », « je préfère »…) dans un tour qui parle par ailleurs de l'outil, ou en réponse à une série de
+   - non-usage ou refus : la phrase citée s'oppose explicitement à l'usage (« moi-même », « jamais », « non »,
+     « je préfère », « je refuse »…) dans un tour qui parle par ailleurs de l'outil, ou en réponse à une série de
      questions de l'enquêteur centrée sur une IAG (« Tu utilises ChatGPT… ? » puis « Et pour les plans ? ») ;
    - la phrase citée nomme une IAG (IA, ChatGPT, Copilot…, ou l'outil déclaré) ou s'adresse à l'outil (« je lui
      demande », « je lui fais traduire », « je l'utilise », « je m'en sers », « il me donne »…), ou, première phrase
@@ -53,7 +56,7 @@ _AI_TERMS = re.compile(
     r"grammarly|chatbots?|midjourney|dall e|llm|intelligences? artificielles?)\b")
 # Formulations adressées à l'outil (texte replié) : « je lui demande », « je l'utilise », « je m'en sers »…
 _ADDRESSED = re.compile(
-    r"\b(?:lui (?:\w+ ){0,3}?(?:demand|fai[st]|fait|pos|donn|envoi|envoy|coll|soum|di[st]|ecri|tradu|"
+    r"\b(?:lui (?:\w+ ){0,3}?(?:demand|fai|fass|pos|donn|envoi|envoy|coll|soum|di[st]|ecri|tradu|"
     r"corrig|redig|reformul|resum|cherch|genere)\w*|l (?:\w+ ){0,2}?utilis\w*|m en (?:sers|servais|servir|suis servi\w*)|"
     r"me sers d\w*|(?:il|elle|ca) m(?:e|) (?:donn|propos|sort|gener|fai|ecri|corrig|repon|redig|resum|conseill|aid|"
     r"expliqu|sugger|recommand|montr|indiqu|tradu|reformul)\w*|(?:il|elle) (?:\w+ ){0,4}?a ma place)\b")
@@ -115,8 +118,9 @@ def turn_linked_to_ai(position: int, ordered: list[dict], tools: list[str] | Non
 
 
 # Non-usage / refus : opposition explicite à l'usage dans la phrase citée (texte replié).
-_OPPOSITION = re.compile(r"\b(?:ne|n|pas|jamais|non|sans|moi meme|par moi meme|tout seul|toute seule|prefere|"
-                         r"preferes|refuse|interdit)\b")
+# Une simple négation ne suffit pas (« je ne travaille pas chez moi ») : refus ou non-usage formulés comme tels.
+_OPPOSITION = re.compile(r"\b(?:jamais|non|moi meme|par moi meme|tout seul|toute seule|prefere|preferes|refuse|"
+                         r"refuserais)\b")
 # Question de l'enquêteur qui prolonge la précédente (« Et pour les plans ? », « Et ensuite ? », « Concrètement ? »…)
 _ELLIPTIC_QUESTION = re.compile(r"^(?:d accord |ok |bon |oui )?et\b|\b(?:ensuite|concretement|en dire plus|"
                                 r"ca se passe|par exemple|c est a dire|comment ca)\b")
@@ -152,16 +156,24 @@ def relevance_problem(practice: dict, turns: dict, ordered: list[dict]) -> str |
     """Raison d'écarter la pratique, ou None si son lien avec une IAG est établi. Le passage examiné est la PHRASE
     citée (une routine citée dans une autre phrase d'un tour qui parle de l'outil n'y est pas rattachée).
     Le statut seul (non_use, refusal…) ne suffit jamais."""
-    if any(practice.get(field) for field in AI_FIELDS):
-        return None
     non_use = practice.get("use_status") in NON_USE_STATUSES
+    tools = practice.get("ai_tool")
+    if non_use:
+        # non-usage / refus : ce que l'outil produit ou l'outil nommé ; la suite donnée au résultat et le contrôle du
+        # résultat n'ont pas de sens sans usage, ils ne comptent que s'ils nomment l'outil ou s'adressent à lui ;
+        # le résumé compte s'il nomme une IAG (« ne demande pas à ChatGPT de… »)
+        if tools or practice.get("ai_action") or names_ai(practice.get("summary") or "", tools) or any(
+                _linked(" ".join(practice.get(field) or []), tools)
+                for field in ("student_action_after", "verification_or_control")):
+            return None
+    elif any(practice.get(field) for field in AI_FIELDS):
+        return None
     for evidence in practice.get("evidence", []):
         turn = turns.get(evidence.get("turn_id"))
         if turn is None:
             continue
         # la phrase du tour qui contient la citation (comme le validateur pour la référence à sa propre parole)
         sentence = " ".join(evidence_validator.quoted_sentences(evidence.get("quote") or "", turn["text"]))
-        tools = practice.get("ai_tool")
         if turn_linked_to_ai(turn["position"], ordered, tools, text=sentence):
             return None
         # non-usage : opposition explicite à l'usage (« moi-même », « je ne veux pas », « jamais »…) dans un tour qui

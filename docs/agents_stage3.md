@@ -293,8 +293,10 @@ Après la réponse du modèle et avant la validation des preuves, sans aucun app
   parasite) → `null` ; `non_use` / `refusal` sans raison → `not_stated`. Une vraie raison n'est jamais modifiée
   (incohérence signalée : `NON_USE_REASON_MISMATCH`). Bilan : `practice_selectivity.non_use_reason_normalized`.
 - **Pratique : lien explicite avec une IAG.** Le statut seul (`non_use`, `refusal`…) ne suffit **jamais** : une
-  routine (« je travaille sur le campus, à la bibliothèque ») codée `non_use` est écartée. Pour un non-usage ou un
-  refus, la phrase citée doit s'opposer explicitement à l'usage (« moi-même », « je ne veux pas », « jamais »,
+  routine (« je travaille sur le campus, à la bibliothèque ») codée `non_use` est écartée. Pour un non-usage ou un refus,
+  le résumé qui nomme une IAG (« ne demande pas à ChatGPT de… ») suffit ; `student_action_after` et
+  `verification_or_control` ne comptent que s'ils nomment l'outil ; une simple négation n'est pas une opposition. Pour un non-usage ou un
+  refus, la phrase citée peut aussi s'opposer explicitement à l'usage (« moi-même », « jamais », « non »,
   « je préfère ») dans un tour qui parle par ailleurs de l'outil, ou en réponse à une série de questions de
   l'enquêteur centrée sur une IAG (« Tu utilises ChatGPT… ? » puis « Et pour les plans ? »). Sinon, le lien est établi
   comme pour tout statut par : un champ défini par

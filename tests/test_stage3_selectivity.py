@@ -239,3 +239,59 @@ def test_refilter_refuses_and_writes_nothing_when_a_response_is_missing_from_the
     with pytest.raises(ValueError, match="absente"):
         lp.refilter_stage3(run)
     assert path.read_bytes() == before
+
+
+# --- Cas réels OTMANE_NACER (refilter) : P023 et P025 conservées, routine campus / bibliothèque écartée ---------
+
+OTMANE_TEXT = ("Enquêteur : Tu utilises ChatGPT pour tes études ?\n"
+               "Enquêté : Oui, pour réviser surtout.\n"
+               "Enquêteur : Et pour tes devoirs ?\n"
+               "Enquêté : Non, je vais pas lui faire faire mes devoirs à ma place.\n"
+               "Enquêteur : Et pour des choses plus personnelles ?\n"
+               "Enquêté : Des conseils perso, ça je demande pas, c'est pas son rôle.\n"
+               "Enquêteur : Et tu travailles où, en général ?\n"
+               "Enquêté : Je travaille sur le campus, je ne travaille pas chez moi.\n")
+
+
+def otmane_case(tmp_path):
+    run = si.make_ingested_run(tmp_path, [("Entretien_otmane_cas.txt", OTMANE_TEXT.encode("utf-8"))])
+    transcript = json.loads((Path(run["files"][0]["ingestion"]["output_dir"]) / config.STRUCTURED_TRANSCRIPT_FILENAME)
+                            .read_text(encoding="utf-8"))
+
+    def op(number: int, quote: str, summary: str, **fields) -> dict:
+        tid = f"ENTRETIEN_OTMANE_CAS_T{number:04d}"
+        values = {"use_status": "refusal", "non_use_reason": "not_stated", "ai_tool": [], "ai_action": []}
+        values.update(fields)
+        return si.practice(summary=summary, turn_start=tid, turn_end=tid, evidence=[{"turn_id": tid, "quote": quote}],
+                           **values)
+    return transcript, op
+
+
+def test_p023_refusal_naming_chatgpt_is_kept(tmp_path):
+    transcript, op = otmane_case(tmp_path)
+    p023 = op(4, "je vais pas lui faire faire mes devoirs à ma place",
+              "L'étudiant ne demande pas à ChatGPT de lui faire des devoirs à sa place.")
+    quote_only = op(4, "je vais pas lui faire faire mes devoirs", "Refus de délégation des devoirs.")  # « lui faire »
+    result = practice_selectivity.apply([p023, quote_only], transcript)
+    assert result["practices"] == [p023, quote_only] and not result["set_aside"]
+
+
+def test_p025_non_use_naming_chatgpt_in_its_summary_is_kept(tmp_path):
+    transcript, op = otmane_case(tmp_path)
+    p025 = op(6, "Des conseils perso, ça je demande pas", use_status="non_use",
+              summary="L'étudiant ne demande pas à ChatGPT de lui donner des conseils personnels.")
+    result = practice_selectivity.apply([p025], transcript)
+    assert result["practices"] == [p025] and not result["set_aside"]
+
+
+def test_campus_routine_stays_set_aside_despite_negation_question_series_or_unrelated_fields(tmp_path):
+    """Les deux voies qui la conservaient : simple négation (« je ne travaille pas chez moi ») dans une série de
+    questions sur l'IAG, et `student_action_after` rempli d'une action sans lien avec l'outil."""
+    transcript, op = otmane_case(tmp_path)
+    campus = op(8, "Je travaille sur le campus, je ne travaille pas chez moi.", use_status="non_use",
+                summary="L'étudiant travaille sur le campus plutôt que chez lui.")
+    with_field = {**campus, "student_action_after": ["travaille sur le campus"],
+                  "verification_or_control": ["relit ses notes"]}
+    result = practice_selectivity.apply([campus, with_field], transcript)
+    assert [p["set_aside_reason"] for p in result["set_aside"]] == [practice_selectivity.REASON_NO_AI_LINK] * 2
+    assert not result["practices"]
