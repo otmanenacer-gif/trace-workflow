@@ -31,7 +31,7 @@ from core import speaker_attribution_auditor as speaker_audit
 from core import trajectory
 from core import trajectory_candidates as tc
 from core import trajectory_validator
-from core import stage3_repair
+from core import citation_resolver, stage3_repair
 
 # Agents sémantiques des étapes 3 à 6
 STAGE3_SPECS: tuple[AgentSpec, ...] = (analysis.AUDITOR, analysis.PRACTICE, analysis.INTERACTION,
@@ -167,8 +167,28 @@ class MethodChecker:
             if issue.get("turn_id"):
                 where.append(f"tour {issue['turn_id']}")
             problems.append(f"{issue['code']}{' — ' + ', '.join(where) if where else ''} : {issue['message']}")
+        blocking = [i for i in issues if i["severity"] == evidence_validator.ERROR]
         return {"problems": problems, "invalid_citations": sum(not r["valid"] for r in results),
-                "citations": len(results)}
+                "citations": len(results), "invalid_indices": [i for i, r in enumerate(results) if not r["valid"]],
+                # anomalies portant uniquement sur des citations (pas sur un champ ni un intervalle)
+                "citation_only": bool(blocking) and all(i["code"] in stage3_repair.CITATION_CODES
+                                                        and not i.get("field") for i in blocking)}
+
+    def _allowed(self, label: str, user_content: str) -> set[str]:
+        """turn_id du matériau envoyé à l'agent (bloc ou sélection) : seuls tours citables par une correction."""
+        turns = self._context(label)["transcript"]["turns"]
+        allowed = {t["turn_id"] for t in turns if f'"{t["turn_id"]}"' in user_content}
+        return allowed or {t["turn_id"] for t in turns}
+
+    def resolve_citations(self, spec: AgentSpec, label: str, user_content: str, item: dict) -> tuple[dict, list]:
+        """Correction DÉTERMINISTE des citations invalides d'un objet (core/citation_resolver.py), sans modèle.
+        → (objet, journal des décisions)."""
+        invalid = self.item_check(spec, label, item)["invalid_indices"]
+        if not invalid:
+            return item, []
+        turns = self._context(label)["transcript"]["turns"]
+        return citation_resolver.resolve_item(item, invalid, turns, self._allowed(label, user_content),
+                                              signal=spec.name != analysis.PRACTICE.name)
 
     def repair_turns(self, spec: AgentSpec, label: str, user_content: str, item) -> str:
         """Les seuls tours utiles à la réparation d'un objet, pris dans le matériau envoyé à l'agent (bloc ou
@@ -177,7 +197,8 @@ class MethodChecker:
         context = self._context(label)
         turns, transcript = context["transcript"]["turns"], context["transcript"]
         position = context["position"]
-        allowed = {i for i, t in enumerate(turns) if f'"{t["turn_id"]}"' in user_content} or set(range(len(turns)))
+        allowed_ids = self._allowed(label, user_content)
+        allowed = {i for i, t in enumerate(turns) if t["turn_id"] in allowed_ids}
         item = item if isinstance(item, dict) else {}
         evidence = [e for e in item.get("evidence") or [] if isinstance(e, dict)]
         cited = [position[e.get("turn_id")] for e in evidence if e.get("turn_id") in position]

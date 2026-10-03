@@ -179,23 +179,29 @@ def totals(records: list[dict], status: dict) -> dict:
             "max_num_ctx": max((r["num_ctx"] or 0 for r in records), default=0)}
 
 
+# Mesures réelles de référence (qwen2.5:7b, GPU 100 %, contexte 20 480, entretien synthétique d'une heure)
+REFERENCES = (
+    {"label": "baseline 1 (régénération complète)", "seconds": 1128.8, "output_tokens": 40753, "llm_repairs": 0},
+    {"label": "réparation ciblée par le modèle", "seconds": 1451.8, "output_tokens": 53097, "llm_repairs": 39},
+)
+QUALITY_KEYS = ("citations_invalid_initial", "citations_fixed_deterministic", "citations_ambiguous",
+                "citations_not_found", "objects_rejected_no_evidence", "objects_dropped_schema",
+                "llm_repairs_attempted", "llm_repairs_succeeded", "citations_invalid_final")
+
+
 def repair_summary(records: list[dict], run: dict) -> dict:
-    """Générations complètes, réparations ciblées, tokens, objets, citations (étape 3, core/stage3_repair.py).
+    """Générations, corrections déterministes, réparations par le modèle, tokens, citations (étape 3).
     Citations de la sortie finale : evidence_validation.json de l'entretien (fichier habituel)."""
     out = {"logical_calls": len(records), "initial_generations": len(records), "full_regenerations": 0,
-           "targeted_repairs": 0, "initial_output_tokens": 0, "repair_output_tokens": 0, "repair_input_tokens": 0,
-           "repair_seconds": 0.0, "objects_total": 0, "objects_repaired": 0, "objects_rejected": 0,
-           "objects_unresolved": 0, "citations_invalid_initial": 0, "citations_repaired": 0,
-           "citations_withdrawn": 0, "citations_invalid_after_repair": 0}
+           "initial_output_tokens": 0, "repair_output_tokens": 0, "repair_input_tokens": 0, "repair_seconds": 0.0,
+           "objects_total": 0, **{key: 0 for key in QUALITY_KEYS}}
     for r in records:
-        if "repairs" in r:  # appel passé par la réparation ciblée
+        if "repairs" in r:  # appel passé par la correction de l'étape 3
             full = r["full_generations"]
             out["initial_output_tokens"] += r["initial_output_tokens"]
             for key in ("repair_output_tokens", "repair_input_tokens", "repair_seconds", "objects_total",
-                        "objects_repaired", "objects_rejected", "objects_unresolved", "citations_invalid_initial",
-                        "citations_repaired", "citations_withdrawn", "citations_invalid_after_repair"):
-                out[key] += r[key]
-            out["targeted_repairs"] += r["repairs"]
+                        *QUALITY_KEYS):
+                out[key] += r.get(key) or 0
         else:  # régénérations complètes (ancien mécanisme, ou erreur globale)
             full = r["attempts"]
             out["initial_output_tokens"] += r["output_tokens"] or 0
@@ -218,21 +224,31 @@ def repair_summary(records: list[dict], run: dict) -> dict:
 
 def print_repair_summary(summary: dict) -> None:
     print(f"Générations initiales : {summary['initial_generations']} · régénérations complètes : "
-          f"{summary['full_regenerations']} · réparations ciblées : {summary['targeted_repairs']}")
+          f"{summary['full_regenerations']} · réparations par le modèle : {summary['llm_repairs_attempted']} tentées, "
+          f"{summary['llm_repairs_succeeded']} réussies")
     print(f"Tokens générés : génération initiale (et régénérations) {summary['initial_output_tokens']} · "
           f"réparations {summary['repair_output_tokens']} (entrée des réparations : {summary['repair_input_tokens']}, "
           f"durée des réparations : {summary['repair_seconds']} s)")
-    print(f"Objets : {summary['objects_total']} reçus · {summary['objects_repaired']} réparés · "
-          f"{summary['objects_rejected']} retirés faute de preuve ou hors schéma · {summary['objects_unresolved']} "
-          "encore fautifs (conservés, signalés par le validateur)")
-    print(f"Citations initialement invalides : {summary['citations_invalid_initial']} · réparées (objet désormais "
-          f"appuyé par des citations valides) : {summary['citations_repaired']} · retirées faute de preuve : "
-          f"{summary['citations_withdrawn']} · encore invalides après réparation : "
-          f"{summary['citations_invalid_after_repair']}")
+    print(f"Citations invalides initiales : {summary['citations_invalid_initial']} · corrigées automatiquement "
+          f"(déterministe, sans modèle) : {summary['citations_fixed_deterministic']} · ambiguës : "
+          f"{summary['citations_ambiguous']} · introuvables : {summary['citations_not_found']}")
+    print(f"Objets rejetés faute de preuve (aucune citation valide : signalés, écartés par l'étape 4) : "
+          f"{summary['objects_rejected_no_evidence']} · objets hors schéma écartés : {summary['objects_dropped_schema']}")
     final = summary["final_evidence"]
     agents = ", ".join(f"{a} {v['invalid']}/{v['evidence']}" for a, v in final["by_agent"].items())
-    print(f"Sortie finale (evidence_validation.json) : {final['total_invalid_evidence']} citation(s) invalide(s) sur "
-          f"{final['total_evidence']} ({agents})")
+    print(f"Citations invalides finales : {summary['citations_invalid_final']} (evidence_validation.json : "
+          f"{final['total_invalid_evidence']} sur {final['total_evidence']} — {agents})")
+
+
+def print_comparison(summary: dict, stage3: dict, n: int) -> None:
+    """Comparaison avec les deux mesures réelles de référence."""
+    rows = [*REFERENCES, {"label": "cette mesure", "seconds": stage3["stage3_seconds"],
+                          "output_tokens": stage3["output_tokens"], "llm_repairs": summary["llm_repairs_attempted"]}]
+    print(f"\n| Mesure | durée étape 3 | tokens générés | réparations par le modèle | {n} entretiens |")
+    print("|---|---:|---:|---:|---:|")
+    for row in rows:
+        print(f"| {row['label']} | {row['seconds'] / 60:.1f} min | {row['output_tokens']} | {row['llm_repairs']} | "
+              f"{row['seconds'] * n / 3600:.1f} h |")
 
 
 def compare_format(first: dict, settings: LLMSettings) -> dict:
@@ -340,6 +356,7 @@ def cmd_run(args) -> int:
               f"{summary['generation_seconds']} s · chargements du modèle : {summary['load_seconds']} s")
         repairs = repair_summary(records, run)
         print_repair_summary(repairs)
+        print_comparison(repairs, summary, args.interviews)
         n = args.interviews
         estimate = summary["stage3_seconds"] * n
         print(f"Estimation étape 3 pour {n} entretiens de cette longueur : {estimate / 3600:.1f} h "

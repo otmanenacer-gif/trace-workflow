@@ -6,6 +6,7 @@ sans réseau, sans clé. Les sorties sont comparées à celles du pipeline de r�
 directement aux orchestrateurs), pour vérifier que seuls les moyens d'obtenir la réponse ont changé.
 """
 
+import copy
 import json
 from pathlib import Path
 
@@ -26,8 +27,7 @@ from tests import synthetic_stage4_otmane as O
 from tests import synthetic_stage5 as S5
 from tests import synthetic_stage6 as S6
 from tests.fake_llm import (ACCOUNTABILITY, AUDITOR, COMPARATOR, INTERACTION, LONG_DISTANCE, PRACTICE, TRAJECTORY,
-                            REPAIR, FakeAgents, fake_settings, repair_object, repaired, text_response,
-                            use_fake_runtime)
+                            REPAIR, FakeAgents, fake_settings, text_response, use_fake_runtime)
 
 GOOD = {PRACTICE: lambda p: text_response(si.GOOD_PRACTICES), INTERACTION: lambda p: text_response(si.GOOD_SIGNALS)}
 STAGE5_FILES = (config.STUDENT_TRAJECTORY_FILENAME, config.STUDENT_TRAJECTORY_VALIDATION_FILENAME,
@@ -117,29 +117,26 @@ def test_missing_model_is_a_clear_error_and_nothing_is_written(tmp_path, monkeyp
     assert not analysis_dir(run, si.INTERVIEW_ID).exists()
 
 
-def test_a_fabricated_quote_is_repaired_alone_with_the_validator_errors(tmp_path, monkeypatch):
-    fabricated = si.with_fabricated_quote(si.GOOD_PRACTICES, "practices")
-    ollama = use_fake_runtime(monkeypatch, {**GOOD, PRACTICE: text_response(fabricated),
-                                            REPAIR + PRACTICE: repaired(si.GOOD_PRACTICES["practices"][0])})
+def test_a_quote_with_typographic_differences_is_restored_without_the_model(tmp_path, monkeypatch):
+    altered = copy.deepcopy(si.GOOD_PRACTICES)
+    exact = altered["practices"][0]["evidence"][0]["quote"]
+    altered["practices"][0]["evidence"][0]["quote"] = exact.replace("'", "’").upper() + " "
+    ollama = use_fake_runtime(monkeypatch, {**GOOD, PRACTICE: text_response(altered)})
     run = lp.run_stage("3", si.make_ingested_run(tmp_path))["metadata"]
-    assert len(ollama.calls_for(PRACTICE)) == 1  # aucune régénération complète
-    [repair] = ollama.calls_for(REPAIR + PRACTICE)
-    assert "QUOTE_NOT_FOUND" in repair["params"]["messages"][0]["content"]  # erreur du validateur, objet seul
-    assert repair_object(repair["params"]) == fabricated["practices"][0]
+    assert len(ollama.calls_for(PRACTICE)) == 1 and not ollama.calls_for(REPAIR + PRACTICE)  # aucun appel en plus
     document = load(run, "practice_extractor.json", si.INTERVIEW_ID)
-    assert document["status"] == "SUCCESS" and load(run, config.EVIDENCE_VALIDATION_FILENAME,
-                                                    si.INTERVIEW_ID)["total_invalid_evidence"] == 0
-    assert run["stage3_local"]["corrected_calls"] == 1
+    assert document["status"] == "SUCCESS" and document["practices"][0]["evidence"][0]["quote"] == exact
+    assert load(run, config.EVIDENCE_VALIDATION_FILENAME, si.INTERVIEW_ID)["total_invalid_evidence"] == 0
 
 
-def test_the_validator_is_never_bypassed_when_the_model_keeps_an_error(tmp_path, monkeypatch):
+def test_the_validator_is_never_bypassed_when_a_quote_is_invented(tmp_path, monkeypatch):
     fabricated = si.with_fabricated_quote(si.GOOD_PRACTICES, "practices")
     ollama = use_fake_runtime(monkeypatch, {**GOOD, PRACTICE: lambda p: text_response(fabricated)})
     run = lp.run_stage("3", si.make_ingested_run(tmp_path))["metadata"]
-    # 1 génération + 2 réparations de l'objet fautif (le faux modèle le renvoie inchangé), jamais plus
-    assert len(ollama.calls_for(PRACTICE)) == 1 and len(ollama.calls_for(REPAIR + PRACTICE)) == 2
+    # citation introuvable : ni régénération, ni réparation par le modèle ; l'objet reste signalé par TRACE
+    assert len(ollama.calls_for(PRACTICE)) == 1 and not ollama.calls_for(REPAIR + PRACTICE)
     document = load(run, "practice_extractor.json", si.INTERVIEW_ID)
-    assert document["status"] == "SUCCESS_WITH_WARNINGS"  # la citation inventée reste signalée par TRACE
+    assert document["status"] == "SUCCESS_WITH_WARNINGS"
     assert load(run, config.EVIDENCE_VALIDATION_FILENAME, si.INTERVIEW_ID)["total_invalid_evidence"] == 1
 
 

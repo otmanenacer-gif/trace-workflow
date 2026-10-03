@@ -79,20 +79,27 @@ jamais utilisés pour joindre Ollama.
 1. La réponse doit être un JSON conforme au schéma de l'agent (Ollama reçoit ce schéma : sortie structurée).
 2. Elle est validée par Pydantic, puis par le validateur de l'étape (citations mot pour mot, identifiants,
    épisodes, ancrages, appuis du corpus…).
-3. **Étape 3 (Practice Extractor, Interaction Reader, lecture à longue distance) : réparation ciblée**
-   (`core/stage3_repair.py`). Si la réponse est un JSON lisible, les objets conformes au schéma et sans anomalie
-   bloquante sont conservés tels quels et ne sont jamais redemandés ; chaque objet fautif (citation absente ou non
-   littérale, tour inconnu, intervalle invalide, aucune preuve valide, champ hors schéma) est redemandé SEUL :
-   prompt système de l'agent (inchangé), l'objet, les erreurs exactes du validateur, les seuls tours utiles de
-   l'entretien (tours cités, intervalle, tours où figure la citation à la forme près, voisins ; au plus 14 tours, pris
-   dans le bloc envoyé), son numéro et le schéma de l'objet. Le modèle rend l'objet corrigé, ou le retire si aucun
-   passage ne le soutient (« un objet qui n'est pas appuyé par le matériau est retiré »). Au plus
-   `TRACE_LOCAL_MAX_CORRECTIONS` réparations par objet ; un objet encore fautif garde sa version d'ORIGINE (jamais
-   une réparation ratée), signalée par le validateur habituel. Fusion dans l'ordre d'origine, puis validation
-   complète habituelle : les fichiers de l'étape 3 gardent exactement leur format. Les objets validés et les
-   réparations terminées sont enregistrés au fur et à mesure (`local_runs/stage3/partial/<appel>.json`) : une
-   reprise ne refait ni la génération du bloc ni une réparation terminée. Seule une erreur GLOBALE (JSON illisible,
-   racine non conforme, réponse tronquée) donne lieu à une nouvelle génération complète.
+3. **Étape 3 (Practice Extractor, Interaction Reader, lecture à longue distance)** (`core/stage3_repair.py`) :
+   une réponse lisible n'est jamais régénérée en entier. Les objets conformes au schéma et sans anomalie bloquante
+   sont conservés tels quels.
+   - **Citations invalides : `CitationResolver`, déterministe, sans modèle** (`core/citation_resolver.py`). La
+     citation est cherchée à la forme près (espaces, apostrophes et guillemets typographiques, casse, ponctuation)
+     dans le tour annoncé, puis dans les autres tours du matériau envoyé (au moins 4 mots). Une correspondance UNIQUE
+     remplace la citation par le passage LITTÉRAL du transcript (et le turn_id par celui du tour). Plusieurs tours
+     possibles (ambiguë), aucun tour (introuvable), citation trop courte : rien n'est corrigé. Jamais de
+     paraphrase, de citation recousue ni de tour hors du matériau. Chaque décision est journalisée
+     (`citation_fixes` dans le journal de l'appel).
+   - **Preuve introuvable ou ambiguë** : aucun appel au modèle ; l'objet est conservé tel quel, le validateur
+     habituel le signale (citation invalide, needs_review) et l'étape 4 l'écarte s'il n'a aucune citation valide
+     (règle existante, `NO_VALID_EVIDENCE`). Aucun objet n'est sauvé artificiellement.
+   - **Autre anomalie locale** (intervalle, champ hors schéma, turn_ids inexistant…) : **une seule** réparation par
+     le modèle pour cet objet (prompt système de l'agent inchangé, l'objet, les erreurs exactes, les seuls tours
+     utiles, le schéma de l'objet) ; si elle échoue, l'objet garde sa version d'origine (corrections déterministes
+     comprises), signalée par le validateur, ou est écarté s'il est hors schéma. Jamais une 2e réparation.
+   - Fusion dans l'ordre d'origine, puis validation complète habituelle : les fichiers de l'étape 3 gardent leur
+     format. Décisions, corrections et réparations sont enregistrées au fur et à mesure
+     (`local_runs/stage3/partial/<appel>.json`) : une reprise ne les recalcule pas. Seule une erreur GLOBALE (JSON
+     illisible, racine non conforme, réponse tronquée) donne lieu à une nouvelle génération complète.
    Autres agents : JSON invalide ou schéma non respecté : le modèle reçoit sa réponse et la liste des erreurs, et
    renvoie l'objet complet corrigé (au plus `TRACE_LOCAL_MAX_CORRECTIONS` fois). Anomalie **bloquante** du validateur sur une
    réponse conforme au schéma : même principe, au plus `TRACE_LOCAL_MAX_METHOD_CORRECTIONS` fois. Une réponse
@@ -144,9 +151,11 @@ python scripts/trace_benchmark.py run --compare-format # mesure « après » + c
 python scripts/trace_benchmark.py run --no-repair      # comparaison : régénération complète au lieu de la réparation ciblée
 ```
 
-Le rapport distingue générations initiales, régénérations complètes et réparations ciblées (tokens d'entrée et de
-sortie, durée), les objets réparés, retirés ou encore fautifs, et les citations : invalides avant réparation,
-réparées, retirées faute de preuve, encore invalides, et le compte final de `evidence_validation.json`.
+Le rapport distingue générations initiales, régénérations complètes et réparations par le modèle (tentées,
+réussies, tokens, durée), et les citations : invalides initiales, corrigées automatiquement (déterministe), ambiguës,
+introuvables, objets rejetés faute de preuve, citations invalides finales (et le compte de
+`evidence_validation.json`). Il se compare aux deux mesures réelles de référence (régénération complète : 18,8 min,
+40 753 tokens ; réparation ciblée par le modèle : 24,2 min, 53 097 tokens, 39 réparations).
 
 Entretien synthétique représentatif (≈ 1 h, 349 tours, ≈ 56 000 caractères) : `benchmarks/entretien_synthetique_1h.txt`.
 Le benchmark travaille dans un dossier temporaire (aucun résultat en cache réutilisé), n'utilise que le modèle

@@ -12,7 +12,8 @@ Règles :
 - aucun fournisseur externe, aucune clé, aucun repli : Ollama absent, modèle absent ou délai dépassé donnent une
   erreur claire (`OLLAMA_UNAVAILABLE`, `MODEL_NOT_FOUND`, `OLLAMA_TIMEOUT`), jamais un autre modèle ;
 - étape 3 (Practice Extractor, Interaction Reader, longue distance) : une réponse lisible n'est jamais régénérée en
-  entier ; seuls les objets fautifs sont réparés, un par un, avec un contexte minimal (core/stage3_repair.py) ;
+  entier ; citations corrigées sans modèle quand c'est sûr (core/citation_resolver.py), au plus UNE réparation par le
+  modèle et par objet pour une autre anomalie locale (core/stage3_repair.py) ;
 - sinon, une réponse non conforme donne lieu à de nouvelles tentatives LOCALES : JSON invalide ou hors schéma, au plus
   `max_corrections` ; anomalie bloquante du validateur de l'étape, au plus `max_method_corrections`. Le modèle reçoit
   sa réponse et la liste des erreurs, et renvoie l'objet complet corrigé. Une réponse tronquée (réponse maximale
@@ -567,8 +568,10 @@ class LocalAgentRunner:
     async def _repair_items(self, spec: AgentSpec, label: str, system_prompt: str, user_content: str,
                             response_model, split: dict | None, record: dict, attempts: list, started: float,
                             tokens: dict, reply: dict, state_file, state: dict | None = None) -> LLMResult:
-        """Réparation CIBLÉE (core/stage3_repair.py) : objets valides conservés, chaque objet fautif redemandé seul
-        avec son contexte minimal, fusion dans l'ordre d'origine, puis validation complète habituelle."""
+        """Étape 3 (core/stage3_repair.py) : objets valides conservés ; citations invalides corrigées de façon
+        DÉTERMINISTE quand c'est sûr (core/citation_resolver.py) ; objet qui ne garde que des anomalies de citation :
+        conservé tel quel et signalé par le validateur (aucun appel au modèle) ; autre anomalie locale : UNE
+        réparation par le modèle au plus ; fusion dans l'ordre d'origine, puis validation complète habituelle."""
         if state is None:
             initial = [a for a in attempts if a.get("phase", "initial") == "initial"]
             state = {"state_version": stage3_repair.STATE_VERSION, "call_id": record["call_id"],
@@ -579,79 +582,64 @@ class LocalAgentRunner:
                                  "seconds": round(sum(a.get("duration_seconds") or 0 for a in initial), 2)},
                      "items": []}
             for index, item in enumerate(split["items"]):
-                schema_problems = split["schema_problems"].get(index)
-                checked = (self.checker.item_check(spec, label, item) if not schema_problems
-                           else {"problems": schema_problems, "invalid_citations": 0, "citations": 0})
-                if schema_problems and isinstance(item, dict) and isinstance(item.get("evidence"), list):
-                    try:  # citations d'un objet hors schéma, pour le bilan
-                        checked["invalid_citations"] = self.checker.item_check(spec, label, item)["invalid_citations"]
-                    except Exception:  # noqa: BLE001 — objet trop malformé pour être lu : aucune citation comptée
-                        pass
-                state["items"].append({
-                    "index": index, "original": item, "object": item,
-                    "status": stage3_repair.PENDING if checked["problems"] else stage3_repair.VALID,
-                    "schema_ok": not schema_problems, "problems": checked["problems"],
-                    "invalid_citations_initial": checked["invalid_citations"],
-                    "invalid_citations": checked["invalid_citations"], "repairs": 0, "reason": None})
-            stage3_repair.save_state(state_file, state)  # objets validés enregistrés avant toute réparation
+                state["items"].append(self._triage_item(spec, label, user_content, index, item,
+                                                        split["schema_problems"].get(index)))
+            stage3_repair.save_state(state_file, state)  # objets validés et corrections déterministes enregistrés
         else:
             reply = {"model": self.settings.model}
         total = len(state["items"])
         reserve = stage3_repair.REPAIR_RESERVE.get(spec.name, 1024)
         schema = stage3_repair.repair_schema(spec)
-        budget = max(1, self.settings.max_corrections)
         number = len(attempts)
         for entry in state["items"]:
-            while entry["status"] == stage3_repair.PENDING:
-                if entry["repairs"] >= budget:
-                    # non réparable : l'objet d'origine conforme au schéma est conservé tel quel et signalé par le
-                    # validateur habituel ; hors schéma, il ne peut pas figurer dans la sortie
-                    if stage3_repair.item_schema_problems(entry["original"], state["root"], spec, response_model):
-                        entry["status"] = stage3_repair.DROPPED
-                    else:  # jamais une réparation ratée (tour ou citation inventés) : l'objet d'origine, signalé
-                        entry.update(status=stage3_repair.UNRESOLVED, object=entry["original"],
-                                     invalid_citations=entry["invalid_citations_initial"])
-                    break
-                number += 1
-                entry["repairs"] += 1
-                turns_json = self.checker.repair_turns(spec, label, user_content, entry["object"])
-                message = stage3_repair.repair_message(spec, entry["index"], total, entry["object"], entry["problems"],
-                                                       turns_json)
-                _, text, attempt = await self._generate(
-                    [{"role": "system", "content": system_prompt}, {"role": "user", "content": message}], schema,
-                    reserve, record, tokens, number=number, phase="repair", item_index=entry["index"])
-                parsed = stage3_repair.parse_repair(text, spec, state["root"], response_model)
-                if attempt.get("done_reason") == "length":
-                    parsed = {"decision": "invalid", "object": None, "reason": None,
-                              "problems": ["TRUNCATED — réparation tronquée"]}
-                if parsed["decision"] == "withdrawn":
-                    entry.update(status=stage3_repair.WITHDRAWN, reason=parsed["reason"])
-                    status, problems = "withdrawn", []
-                elif parsed["decision"] == "corrected":
-                    checked = self.checker.item_check(spec, label, parsed["object"])
-                    problems = checked["problems"]
-                    entry.update(object=parsed["object"], schema_ok=True, problems=problems,
-                                 invalid_citations=checked["invalid_citations"])
-                    if not problems:
-                        entry["status"] = stage3_repair.REPAIRED
-                    status = "repaired" if not problems else "blocking"
-                else:
-                    problems = parsed["problems"]
-                    status = "invalid"
-                    if not entry["schema_ok"]:
-                        entry["problems"] = problems
-                attempts.append({**attempt, "status": status, "problems": problems})
-                self._log_attempt(record, attempts[-1], "repair")
-                stage3_repair.save_state(state_file, state)  # chaque réparation terminée est conservée
-        stage3_repair.save_state(state_file, state)
+            if entry["status"] != stage3_repair.PENDING:
+                continue
+            if entry["repairs"] >= stage3_repair.MAX_LLM_REPAIRS_PER_OBJECT:  # reprise après une réparation faite
+                self._settle(entry)
+                stage3_repair.save_state(state_file, state)
+                continue
+            number += 1
+            turns_json = self.checker.repair_turns(spec, label, user_content, entry["object"])
+            message = stage3_repair.repair_message(spec, entry["index"], total, entry["object"], entry["problems"],
+                                                   turns_json)
+            _, text, attempt = await self._generate(
+                [{"role": "system", "content": system_prompt}, {"role": "user", "content": message}], schema,
+                reserve, record, tokens, number=number, phase="repair", item_index=entry["index"])
+            entry["repairs"] += 1  # réparation terminée : jamais une 2e pour le même objet, même après une reprise
+            parsed = stage3_repair.parse_repair(text, spec, state["root"], response_model)
+            if attempt.get("done_reason") == "length":
+                parsed = {"decision": "invalid", "object": None, "reason": None,
+                          "problems": ["TRUNCATED — réparation tronquée"]}
+            problems = parsed["problems"]
+            if parsed["decision"] == "withdrawn":
+                entry.update(status=stage3_repair.WITHDRAWN, reason=parsed["reason"])
+                status = "withdrawn"
+            elif parsed["decision"] == "corrected":
+                fixed, log = self.checker.resolve_citations(spec, label, user_content, parsed["object"])
+                checked = self.checker.item_check(spec, label, fixed)
+                problems = checked["problems"]
+                entry["repair_citation_log"] = log
+                if not problems:
+                    entry.update(status=stage3_repair.REPAIRED, object=fixed, problems=[],
+                                 invalid_citations=0, citations=checked["citations"])
+                status = "repaired" if not problems else "blocking"
+            else:
+                status = "invalid"
+            if entry["status"] == stage3_repair.PENDING:
+                entry["repair_problems"] = problems
+                self._settle(entry)
+            attempts.append({**attempt, "status": status, "problems": problems})
+            self._log_attempt(record, attempts[-1], "repair")
+            stage3_repair.save_state(state_file, state)  # chaque réparation terminée est conservée
         output = stage3_repair.merged_output(state, spec)
         try:
             data = response_model.model_validate(output)
         except ValidationError:
-            raise LLMError("SCHEMA_VALIDATION", "fusion des objets réparés") from None
+            raise LLMError("SCHEMA_VALIDATION", "fusion des objets") from None
         final = self.checker(spec, label, user_content, data.model_dump(mode="json"))  # validation complète
         statuses = [i["status"] for i in state["items"]]
         repairs = [a for a in attempts if a.get("phase") == "repair"]
+        quality = stage3_repair.citation_summary(state)
         record.update(
             outcome="accepted" if not final else "accepted_with_issues", remaining_issues=final,
             full_generations=state["initial"]["generations"], repairs=len(repairs),
@@ -660,19 +648,63 @@ class LocalAgentRunner:
             repair_input_tokens=sum(int(a.get("prompt_eval_count") or 0) for a in repairs),
             repair_seconds=round(sum(a.get("duration_seconds") or 0 for a in repairs), 2),
             objects_total=total, objects_valid_initial=statuses.count(stage3_repair.VALID),
+            objects_resolved=statuses.count(stage3_repair.RESOLVED),
             objects_repaired=statuses.count(stage3_repair.REPAIRED),
-            objects_rejected=statuses.count(stage3_repair.WITHDRAWN) + statuses.count(stage3_repair.DROPPED),
             objects_unresolved=statuses.count(stage3_repair.UNRESOLVED),
+            objects_withdrawn=statuses.count(stage3_repair.WITHDRAWN),
+            citation_fixes=[{"index": i["index"], **c} for i in state["items"] for c in i.get("citation_log") or []],
             rejected_objects=[{"index": i["index"], "status": i["status"], "reason": i["reason"],
                                "problems": i["problems"]} for i in state["items"]
                               if i["status"] in (stage3_repair.WITHDRAWN, stage3_repair.DROPPED)],
-            **stage3_repair.citation_summary(state))
+            **quality)
+        if quality["citations_fixed_deterministic"]:
+            record["correction_reasons"].append(f"citations corrigées sans modèle ({quality['citations_fixed_deterministic']})")
         if repairs:
             record["correction_reasons"].append(f"réparation ciblée ({len(repairs)})")
         text = json.dumps(output, ensure_ascii=False)
         result = self._result(data, record, attempts, started, tokens, reply, text)
         stage3_repair.drop_state(state_file)
         return result
+
+    def _triage_item(self, spec: AgentSpec, label: str, user_content: str, index: int, item,
+                     schema_problems: list[str] | None) -> dict:
+        """Un objet de la réponse : valide, corrigé sans modèle, conservé avec ses anomalies de citation (signalées
+        par le validateur), ou à réparer UNE fois par le modèle (autre anomalie locale)."""
+        entry = {"index": index, "original": item, "object": item, "resolved": item, "schema_ok": not schema_problems,
+                 "problems": list(schema_problems or []), "invalid_citations_initial": 0, "invalid_citations": 0,
+                 "citations": 0, "citation_log": [], "repairs": 0, "reason": None, "status": stage3_repair.PENDING}
+        if schema_problems:
+            if isinstance(item, dict) and isinstance(item.get("evidence"), list):
+                try:  # citations d'un objet hors schéma, pour le bilan
+                    entry["invalid_citations_initial"] = self.checker.item_check(spec, label, item)["invalid_citations"]
+                except Exception:  # noqa: BLE001 — objet trop malformé pour être lu : aucune citation comptée
+                    pass
+            return entry
+        checked = self.checker.item_check(spec, label, item)
+        entry.update(invalid_citations_initial=checked["invalid_citations"], citations=checked["citations"])
+        if not checked["problems"]:
+            entry["status"] = stage3_repair.VALID
+            return entry
+        fixed, log = self.checker.resolve_citations(spec, label, user_content, item)
+        if log:
+            checked = self.checker.item_check(spec, label, fixed)
+        entry.update(object=fixed, resolved=fixed, citation_log=log, problems=checked["problems"],
+                     invalid_citations=checked["invalid_citations"], citations=checked["citations"])
+        if not checked["problems"]:
+            entry["status"] = stage3_repair.RESOLVED
+        elif checked["citation_only"]:
+            # preuve introuvable ou ambiguë : aucun appel au modèle ; le validateur signale l'objet et les étapes
+            # suivantes l'écartent s'il n'a aucune citation valide (règle existante)
+            entry["status"] = stage3_repair.UNRESOLVED
+        return entry
+
+    def _settle(self, entry: dict) -> None:
+        """Réparation par le modèle échouée ou déjà tentée : version déterministe conservée (conforme au schéma) et
+        signalée par le validateur, ou objet écarté s'il est hors schéma. Jamais une réparation ratée."""
+        if entry["schema_ok"]:
+            entry.update(status=stage3_repair.UNRESOLVED, object=entry["resolved"])
+        else:
+            entry["status"] = stage3_repair.DROPPED
 
     def _finish(self, record: dict, attempts: list, started: float, tokens: dict, text: str) -> None:
         # durée passée sur le modèle (toutes tentatives), sans l'attente d'accès au modèle

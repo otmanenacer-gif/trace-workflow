@@ -386,7 +386,11 @@ def render_runtime_panel() -> None:
 
 
 def show_flash(key: str) -> None:
-    flash = st.session_state.pop(key, None)
+    # Message de fin d'une exécution en arrière-plan (3e élément « job ») : gardé jusqu'au lancement suivant, pour
+    # qu'un rechargement de la page interrompu par le panneau de progression ne le fasse pas disparaître.
+    flash = st.session_state.get(key)
+    if flash and flash[2:] != ("job",):
+        st.session_state.pop(key, None)
     if flash:
         (st.warning if flash[0] == "warning" else st.success)(flash[1])
 
@@ -415,6 +419,7 @@ def run_local_stage(stage: str, run: dict, selected: list[str]) -> None:
     if not _runtime_ready():
         return
     try:
+        st.session_state.pop(f"local{stage}_flash", None)  # le message de l'exécution précédente disparaît
         local_jobs.start_run_job(Path(run["output_dir"]), stage, selected)
     except local_jobs.JobAlreadyRunning as exc:
         st.warning(str(exc))
@@ -516,6 +521,7 @@ def render_job_panel(job_dir: Path, restart) -> None:
         if st.button("Reprendre l'exécution", type="primary", key=f"job_resume_{job['job_id']}"):
             if _runtime_ready():
                 try:
+                    st.session_state.pop(f"local{job.get('stage')}_flash", None)
                     restart(job)
                 except local_jobs.JobAlreadyRunning as exc:
                     st.warning(str(exc))
@@ -545,10 +551,10 @@ def finish_run_job(run: dict) -> dict:
     status = job.get("result") or {}
     if job["state"] == local_jobs.COMPLETE:
         st.session_state[f"local{stage}_flash"] = (
-            "success", f"Étape {stage} terminée (exécution locale, modèle {status.get('model')}, 0 appel API).")
+            "success", f"Étape {stage} terminée (exécution locale, modèle {status.get('model')}, 0 appel API).", "job")
     elif job["state"] in (local_jobs.FAILED, local_jobs.BLOCKED):
         st.session_state[f"local{stage}_flash"] = (
-            "warning", f"Étape {stage} : {job.get('message')} — voir ci-dessous.")
+            "warning", f"Étape {stage} : {job.get('message')} — voir ci-dessous.", "job")
     local_jobs.acknowledge(job_dir)
     return run
 
@@ -1029,6 +1035,7 @@ def render_stage6_workflow(files: list[tuple[str, bytes]], prepared) -> None:
         if not _runtime_ready():
             return
         try:
+            st.session_state.pop("local6_flash", None)
             local_jobs.start_stage6_job(files)
         except local_jobs.JobAlreadyRunning as exc:
             st.warning(str(exc))
@@ -1157,9 +1164,9 @@ def finish_stage6_job() -> None:
             st.session_state.stage6_last = {**json.loads(outputs["manifest"]), "corpus_dir": corpus_dir}
     if job["state"] == local_jobs.COMPLETE:
         st.session_state.local6_flash = (
-            "success", f"Étape 6 terminée (exécution locale, modèle {result.get('model')}, 0 appel API).")
+            "success", f"Étape 6 terminée (exécution locale, modèle {result.get('model')}, 0 appel API).", "job")
     elif job["state"] in (local_jobs.FAILED, local_jobs.BLOCKED):
-        st.session_state.local6_flash = ("warning", f"Étape 6 : {job.get('message')} — voir ci-dessous.")
+        st.session_state.local6_flash = ("warning", f"Étape 6 : {job.get('message')} — voir ci-dessous.", "job")
     local_jobs.acknowledge(job_dir)
 
 

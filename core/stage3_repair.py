@@ -1,30 +1,25 @@
-"""Réparation CIBLÉE des réponses de l'étape 3 : seuls les objets fautifs sont redemandés au modèle.
+"""Réparation des réponses de l'étape 3 : jamais de régénération complète d'une réponse lisible, des corrections
+DÉTERMINISTES d'abord, au plus UNE réparation par le modèle et par objet, et seulement quand le déterminisme ne peut
+rien.
 
 Agents concernés : Practice Extractor, Interaction Signal Reader et sa lecture à longue distance.
 
     réponse du modèle (JSON lisible)
-      → objets conformes au schéma ET sans anomalie bloquante du validateur : conservés tels quels, jamais redemandés
-      → chaque objet fautif : UNE tâche de réparation minimale (prompt système de l'agent, inchangé ; l'objet ; les
-        erreurs exactes du validateur ; les seuls tours de l'entretien utiles ; son numéro ; le schéma de l'objet)
-      → le modèle rend l'objet corrigé, ou le retire si aucun passage ne le soutient (règle de correction existante :
-        « un objet qui n'est pas appuyé par le matériau est retiré »)
-      → fusion dans l'ordre d'origine → validation complète habituelle.
+      → objets conformes au schéma ET sans anomalie bloquante : conservés tels quels, jamais redemandés
+      → citations invalides : CitationResolver (core/citation_resolver.py), sans modèle — passage littéral restauré
+        quand une correspondance textuelle sûre et unique existe dans le matériau envoyé ; sinon la citation reste
+        telle quelle (ambiguë ou introuvable)
+      → objet dont il ne reste QUE des anomalies de citation : conservé tel quel ; le validateur habituel le signale
+        (citation invalide, needs_review) et les étapes suivantes l'écartent faute de preuve valide (règle existante,
+        NO_VALID_EVIDENCE) — aucun appel au modèle, aucun objet sauvé artificiellement
+      → autre anomalie locale (intervalle, champ hors schéma, turn_ids inexistant…) : UNE réparation par le modèle
+        (prompt système de l'agent inchangé, l'objet, les erreurs exactes, les seuls tours utiles, le schéma de l'objet) ;
+        si elle échoue, l'objet garde sa version déterministe (jamais une réparation ratée) ou, hors schéma, est écarté
+      → fusion dans l'ordre d'origine → validation complète habituelle (formats de sortie inchangés).
 
-Classes d'erreurs :
-- A, locale réparable : citation absente ou non littérale, tour inconnu, intervalle invalide, aucune preuve valide,
-  champ non conforme au schéma dans un objet → réparation de cet objet seulement ;
-- B, locale non réparable : le modèle retire l'objet faute de passage qui le soutienne, ou l'objet reste fautif après
-  les tentatives de réparation → l'objet D'ORIGINE (jamais une réparation ratée) est conservé s'il est conforme au
-  schéma, et le validateur habituel le signale (citation invalide, needs_review) ; un objet d'origine non conforme
-  au schéma est écarté (il ne peut pas figurer dans la sortie) ;
-- C, globale : JSON illisible, racine non conforme, réponse tronquée → nouvelle génération complète (mécanisme existant).
-
-Rien n'est inventé : les tours fournis sont ceux de l'entretien (et du bloc envoyé), le texte est exact, et la
-réponse réparée passe par les mêmes validateurs. Les prompts, schémas, validateurs et le découpage ne changent pas.
-
-État persistant (reprise) : après la génération initiale puis après chaque réparation, l'état des objets (validés,
-réparés, retirés, à traiter) est écrit dans <journal>/partial/<appel>.json ; une reprise ne refait ni la génération
-initiale ni une réparation terminée. Le fichier est supprimé quand l'appel aboutit.
+Seule une erreur GLOBALE (JSON illisible, racine non conforme, réponse tronquée) donne lieu à une nouvelle génération
+complète. Corrections, décisions et réparations sont journalisées et enregistrées au fur et à mesure dans
+<journal>/partial/<appel>.json : une reprise ne les recalcule pas. Le fichier est supprimé quand l'appel aboutit.
 """
 
 from __future__ import annotations
@@ -46,12 +41,17 @@ REPAIRABLE_AGENTS = (PRACTICE_AGENT, INTERACTION_AGENT, LONG_DISTANCE_AGENT)
 REPAIR_RESERVE = {PRACTICE_AGENT: 1536, INTERACTION_AGENT: 1024, LONG_DISTANCE_AGENT: 1024}
 REPAIR_MAX_TURNS = 14
 REPAIR_MAX_CHARS = 9000
-STATE_VERSION = "1"
+STATE_VERSION = "2"
+MAX_LLM_REPAIRS_PER_OBJECT = 1   # jamais une 2e réparation du même objet
+
+# Anomalies bloquantes qui portent sur une citation (et non sur un champ ou un intervalle)
+CITATION_CODES = {"UNKNOWN_TURN_ID", "FOREIGN_INTERVIEW_TURN", "EMPTY_QUOTE", "QUOTE_NOT_FOUND", "QUOTE_NOT_EXACT",
+                  "NO_VALID_EVIDENCE"}
 
 # États d'un objet
-VALID, PENDING, REPAIRED, WITHDRAWN, UNRESOLVED, DROPPED = (
-    "valid", "pending", "repaired", "withdrawn", "unresolved", "dropped")
-KEPT = (VALID, REPAIRED, UNRESOLVED)
+VALID, RESOLVED, PENDING, REPAIRED, WITHDRAWN, UNRESOLVED, DROPPED = (
+    "valid", "resolved", "pending", "repaired", "withdrawn", "unresolved", "dropped")
+KEPT = (VALID, RESOLVED, REPAIRED, UNRESOLVED)
 DECISIONS = ("corrected", "withdrawn")
 
 REPAIR_INSTRUCTIONS = """Consignes de la réparation :
@@ -187,16 +187,31 @@ def merged_output(state: dict, spec: AgentSpec) -> dict:
 
 
 def citation_summary(state: dict) -> dict:
-    """Citations invalides avant réparation, réparées (objet validé), retirées faute de preuve, encore invalides."""
-    out = {"citations_invalid_initial": 0, "citations_repaired": 0, "citations_withdrawn": 0,
-           "citations_invalid_after_repair": 0}
+    """Bilan qualité d'un appel : citations invalides initiales, corrigées de façon déterministe, ambiguës,
+    introuvables ; objets rejetés faute de preuve ; réparations par le modèle ; citations invalides finales."""
+    from core import citation_resolver as cr
+    out = {"citations_invalid_initial": 0, "citations_fixed_deterministic": 0, "citations_ambiguous": 0,
+           "citations_not_found": 0, "objects_rejected_no_evidence": 0, "llm_repairs_attempted": 0,
+           "llm_repairs_succeeded": 0, "citations_invalid_final": 0, "objects_dropped_schema": 0}
     for item in state["items"]:
-        initial = item.get("invalid_citations_initial") or 0
-        out["citations_invalid_initial"] += initial
-        if item["status"] == REPAIRED:
-            out["citations_repaired"] += initial
-        elif item["status"] in (WITHDRAWN, DROPPED):
-            out["citations_withdrawn"] += initial
-        elif item["status"] == UNRESOLVED:
-            out["citations_invalid_after_repair"] += item.get("invalid_citations") or 0
+        out["citations_invalid_initial"] += item.get("invalid_citations_initial") or 0
+        for entry in item.get("citation_log") or []:
+            decision = entry["decision"]
+            if decision in (cr.FIXED_IN_TURN, cr.FIXED_OTHER_TURN):
+                out["citations_fixed_deterministic"] += 1
+            elif decision == cr.AMBIGUOUS:
+                out["citations_ambiguous"] += 1
+            else:
+                out["citations_not_found"] += 1
+        out["llm_repairs_attempted"] += item.get("repairs") or 0
+        out["llm_repairs_succeeded"] += item["status"] == REPAIRED
+        if item["status"] in KEPT:
+            out["citations_invalid_final"] += item.get("invalid_citations") or 0
+            # aucune citation valide : l'objet reste signalé et les étapes suivantes l'écartent (NO_VALID_EVIDENCE)
+            out["objects_rejected_no_evidence"] += bool(item.get("citations")) and \
+                (item.get("invalid_citations") or 0) >= item["citations"]
+        elif item["status"] == WITHDRAWN:
+            out["objects_rejected_no_evidence"] += 1
+        elif item["status"] == DROPPED:
+            out["objects_dropped_schema"] += 1
     return out
