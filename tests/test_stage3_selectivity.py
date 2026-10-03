@@ -295,3 +295,68 @@ def test_campus_routine_stays_set_aside_despite_negation_question_series_or_unre
     result = practice_selectivity.apply([campus, with_field], transcript)
     assert [p["set_aside_reason"] for p in result["set_aside"]] == [practice_selectivity.REASON_NO_AI_LINK] * 2
     assert not result["practices"]
+
+
+# Contexte réel d'OTMANE_NACER (T0290, T0302-T0310), précédé de vrais usages / non-usages de ChatGPT
+T0290 = ("Hm Non, parce que ça reste assez superficiel au sens où c'est des c'est des questions académiques, mais je parle "
+         "je ne parle jamais de enfin juste une fois et j'ai essayé le plus impersonnel possible – parce que c'était parce "
+         "que c'était c'était dans un moment d'urgence – H j'essaye – en fait c'est juste que j'utilise pas l'IA – pour – "
+         "pour avoir des – des échanges personnels. C'est seulement pour – pour mon travail ou pour avoir des informations.")
+T0309 = ("semaine type eh bien disons que je vais je me rends sur le campus, je je travaille Soit j'ai un cours le matin, "
+         "donc je je m'y rends pour aller à ce cours. Soit je je je m'y rends avant que le cours ait lieu pour travailler à "
+         "la bibliothèque. {hm} hm. Je fais quelques pauses où soit je suis sur le téléphone, soit je lis quelque chose "
+         "entre mes mes sessions de travail. Euh généralement, je déjeune sur le campus avec une partie d'un plat que j'ai "
+         "préparé la veille. – Euh je bois je bois un café. – Une fois que j'ai général Normalement, je reste à part si "
+         "j'ai un événement qui fait que je dois partir du campus plus tôt, je reste travailler jusqu'à ce que j'ai "
+         "terminé mon travail ou que la bibliothèque ferme")
+T0310 = "puis je puis je rentre chez moi et je continue à travailler ou alors juste je je me repose."
+P026_TEXT = ("Enquêteur : Tu utilises ChatGPT pour tes études ?\n"
+             "Enquêté : Oui, je lui demande des définitions de concepts.\n"
+             "Enquêteur : Et pour tes devoirs ?\n"
+             "Enquêté : Non, je ne demande pas à ChatGPT de faire mes devoirs.\n"
+             "Enquêteur : D'accord. Est-ce que tu as l'impression qu'il te connaît ?\n"
+             f"Enquêté : {T0290}\n"
+             "Enquêteur : Au même titre que tes autres outils numériques ou il a une place plus importante ?\n"
+             "Enquêté : Ouais. Il est plus performant que les autres outils.\n"
+             "Enquêteur : C'est ça. Et c'est comme l'outil le plus comme c'est le plus utile, tu l'utilises un peu plus.\n"
+             "Enquêté : non, j'utilise plus Google.\n"
+             "Enquêteur : D'accord. OK. Maintenant, j'aimerais bien comprendre un peu comment tu travailles toi, comment "
+             "quels sont tes moments de travail et cetera. Tu peux me raconter un peu comment c'est ?\n"
+             "Enquêté : C'est-à-dire comment est-ce que je travaille ?\n"
+             "Enquêteur : Bah une semaine type par exemple pour les moments les plus difficiles. Après, tu peux enchaîner "
+             "sur les moments les plus difficiles. Ouais.\n"
+             f"Enquêté : {T0309.format(hm='Hm')} {T0310}\n")
+
+
+def test_p026_campus_routine_with_an_inexact_quote_is_set_aside_true_ai_cases_are_kept(tmp_path):
+    """P026 réel (OTMANE_NACER, T0309-T0310) : routine campus / bibliothèque codée non_use, sans outil, citations sans
+    aucune mention d'une IAG. Elle était conservée parce qu'une citation est inexacte (« Ehm hm. » au lieu de
+    « Hm hm. » → QUOTE_NOT_FOUND) et qu'une pratique ayant une citation invalide n'était jamais examinée ; la seconde
+    citation est exacte. `student_action_after` non vide ne crée pas de lien. → NO_AI_LINK."""
+    run = si.make_ingested_run(tmp_path, [("Entretien_p026.txt", P026_TEXT.encode("utf-8"))])
+    transcript = json.loads((Path(run["files"][0]["ingestion"]["output_dir"]) / config.STRUCTURED_TRANSCRIPT_FILENAME)
+                            .read_text(encoding="utf-8"))
+    tid = {n: f"ENTRETIEN_P026_T{n:04d}" for n in range(1, 15)}
+
+    def pp(summary: str, use_status: str, evidence: list[tuple[int, str]], **fields) -> dict:
+        values = {"non_use_reason": "not_stated" if use_status == "non_use" else None, "ai_tool": [], "ai_action": []}
+        values.update(fields)
+        return si.practice(summary=summary, use_status=use_status, turn_start=tid[evidence[0][0]],
+                           turn_end=tid[evidence[-1][0]], evidence=[{"turn_id": tid[n], "quote": q} for n, q in evidence],
+                           **values)
+
+    p026 = pp("L'étudiant travaille sur le campus, principalement à la bibliothèque.", "non_use",
+              [(14, T0309.format(hm="Ehm")), (14, T0310)], context="travail sur le campus",
+              student_action_before=["se rendre sur le campus"],
+              student_action_after=["continuer à travailler chez soi ou se reposer"])
+    exact = {**p026, "evidence": [{"turn_id": tid[14], "quote": T0309.format(hm="Hm")}, p026["evidence"][1]]}
+    homework = pp("L'étudiant ne demande pas à ChatGPT de faire ses devoirs.", "non_use",
+                  [(4, "je ne demande pas à ChatGPT de faire mes devoirs.")])
+    personal = pp("L'étudiant n'utilise pas l'IA pour des échanges personnels.", "non_use",
+                  [(6, "en fait c'est juste que j'utilise pas l'IA")])
+    asks = pp("L'étudiant demande des définitions.", "use", [(2, "je lui demande des définitions de concepts.")])
+    result = practice_selectivity.apply([p026, exact, homework, personal, asks], transcript)
+
+    assert [p["set_aside_reason"] for p in result["set_aside"]] == [practice_selectivity.REASON_NO_AI_LINK] * 2
+    assert [e["validation"]["code"] for e in result["set_aside"][0]["evidence"]] == ["QUOTE_NOT_FOUND", None]
+    assert result["practices"] == [homework, personal, asks]

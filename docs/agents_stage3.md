@@ -311,7 +311,10 @@ Après la réponse du modèle et avant la validation des preuves, sans aucun app
   **opposition** identifiable (négation, fréquence, exclusivité ou repère temporel d'un seul côté). Sinon :
   `CONTRADICTION_NO_SHARED_OBJECT`, `CONTRADICTION_NO_OPPOSITION` ou `CONTRADICTION_NOT_TWO_TURNS`, signal écarté
   (`set_aside_signals`).
-- Un objet dont une citation est invalide n'est jamais écarté : le validateur le signale.
+- Un signal dont une citation est invalide n'est jamais écarté : le validateur le signale. Une pratique non plus, sauf
+  si au moins une de ses citations est exacte et que toutes visent un tour existant : une citation inexacte
+  (`QUOTE_NOT_FOUND` / `QUOTE_NOT_EXACT`) est alors examinée sur son tour cité entier, et la pratique peut être
+  écartée (`NO_AI_LINK`) ; la validation de chaque citation reste visible dans `set_aside_practices`.
 
 Réappliquer ce filtre à un run existant, à partir des réponses déjà validées du cache TRACE, sans aucun appel au
 modèle : `python scripts/trace_local.py refilter <run> [--interview ID]` (rapport : objets conservés, écartés et leur

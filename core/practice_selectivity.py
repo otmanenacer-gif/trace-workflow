@@ -27,7 +27,10 @@ preuves), sur le modèle de core/signal_selectivity.py. Aucun appel au modèle, 
      routine citée dans une autre phrase d'un tour qui parle de l'outil n'y est pas rattachée.
    Sinon, la pratique est une routine sans lien démontré avec une IAG (NO_AI_LINK) : elle reste visible dans
    `set_aside_practices` (avec sa raison et la vérification de ses citations) et n'est transmise ni à la validation ni
-   aux étapes suivantes. Une pratique dont une citation est invalide n'est jamais écartée : le validateur la signale.
+   aux étapes suivantes. Une pratique sans aucune citation exacte, ou dont une citation vise un tour inconnu (ou est
+   vide), n'est jamais écartée : le validateur la signale. Si au moins une citation est exacte, une citation
+   inexacte (QUOTE_NOT_FOUND / QUOTE_NOT_EXACT) dans un tour existant ne protège plus la pratique : son tour cité
+   entier est examiné (contexte plus large que la phrase, donc plus favorable au lien avec une IAG).
 """
 
 from __future__ import annotations
@@ -152,9 +155,10 @@ def question_series_on_ai(position: int, ordered: list[dict], tools=None) -> boo
     return False
 
 
-def relevance_problem(practice: dict, turns: dict, ordered: list[dict]) -> str | None:
+def relevance_problem(practice: dict, turns: dict, ordered: list[dict], results: list[dict] | None = None) -> str | None:
     """Raison d'écarter la pratique, ou None si son lien avec une IAG est établi. Le passage examiné est la PHRASE
-    citée (une routine citée dans une autre phrase d'un tour qui parle de l'outil n'y est pas rattachée).
+    citée (une routine citée dans une autre phrase d'un tour qui parle de l'outil n'y est pas rattachée) ; pour une
+    citation inexacte (`results` : validation par citation), le tour cité entier.
     Le statut seul (non_use, refusal…) ne suffit jamais."""
     non_use = practice.get("use_status") in NON_USE_STATUSES
     tools = practice.get("ai_tool")
@@ -168,12 +172,14 @@ def relevance_problem(practice: dict, turns: dict, ordered: list[dict]) -> str |
             return None
     elif any(practice.get(field) for field in AI_FIELDS):
         return None
-    for evidence in practice.get("evidence", []):
+    for index, evidence in enumerate(practice.get("evidence", [])):
         turn = turns.get(evidence.get("turn_id"))
         if turn is None:
             continue
-        # la phrase du tour qui contient la citation (comme le validateur pour la référence à sa propre parole)
-        sentence = " ".join(evidence_validator.quoted_sentences(evidence.get("quote") or "", turn["text"]))
+        # la phrase du tour qui contient la citation (comme le validateur pour la référence à sa propre parole) ;
+        # citation inexacte : le tour entier, faute de pouvoir situer la phrase
+        sentence = turn["text"] if results and not results[index]["valid"] else " ".join(
+            evidence_validator.quoted_sentences(evidence.get("quote") or "", turn["text"]))
         if turn_linked_to_ai(turn["position"], ordered, tools, text=sentence):
             return None
         # non-usage : opposition explicite à l'usage (« moi-même », « je ne veux pas », « jamais »…) dans un tour qui
@@ -195,7 +201,10 @@ def apply(practices: list[dict], transcript: dict) -> dict:
         if change:
             normalized.append({"index_received": index, **change})
         results = evidence_validator.validate_evidence(practice.get("evidence", []), turns, interview_id)
-        reason = relevance_problem(practice, turns, ordered) if results and all(r["valid"] for r in results) else None
+        # pertinence examinée si au moins une citation est exacte et si toutes visent un tour existant de l'entretien
+        # (une citation inexacte y est lue sur son tour entier) ; sinon jamais écartée : le validateur la signale
+        checkable = any(r["valid"] for r in results) and all(r["match"] is not None for r in results)
+        reason = relevance_problem(practice, turns, ordered, results) if checkable else None
         if reason is None:
             kept.append(practice)
         else:
