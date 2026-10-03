@@ -40,7 +40,10 @@ N. étape 6, sans run : import de 2 triplets d'étape 5 → comparaison EXPLORAT
 O. étape 6 sur le corpus synthétique de 17 entretiens + un entretien invalide + un fichier illisible : tableau du corpus
    (18 entretiens, 17 exploitables, raison d'exclusion), 1 appel au modèle local, cas négatifs et éléments à revoir visibles,
    3 téléchargements JSON vérifiés ;
-P. relance de l'étape 6 sur le même corpus : corpus déjà complet, non rejoué.
+P. relance de l'étape 6 sur le même corpus : corpus déjà complet, non rejoué ;
+Q. exécution en arrière-plan (agents simulés ralentis) : étape 3 de l'entretien long lancée, agent en cours et liste
+   des appels affichés, page RAFRAÎCHIE en cours d'exécution puis navigateur rouvert sans adresse : l'exécution
+   continue, la page la retrouve, puis « Étape 3 terminée » et le tableau des mesures par appel.
 
 `--only-stage6` n'exécute que les scénarios N à P.
 
@@ -81,7 +84,7 @@ from tests import synthetic_stage6 as stage6  # noqa: E402
 
 TIMEOUT_MS = 30_000
 WORKFLOW_BUTTON = "Exécuter l'étape {} (local, Ollama)"
-WORKFLOW_DONE = "Étape {} terminée (exécution locale, modèle qwen2.5:14b, 0 appel API)."
+WORKFLOW_DONE = "Étape {} terminée (exécution locale, modèle qwen2.5:7b, 0 appel API)."
 NO_COST = "0 appel(s) API — 0 tokens entrée — 0 tokens sortie"
 
 
@@ -663,6 +666,33 @@ def run_dirs() -> set[Path]:
     return {p for base in (ROOT / "data" / "inputs", ROOT / "data" / "outputs") for p in base.glob("run_*")}
 
 
+def scenario_refresh_during_run(browser, url: str, interview: Path, shots: Path) -> None:
+    page = browser.new_page(viewport={"width": 1400, "height": 1000})
+    page.goto(url)
+    upload_and_ingest(page, interview)
+    page.get_by_role("button", name=WORKFLOW_BUTTON.format(3)).click()
+    expect(page.get_by_text("Exécution locale en cours — étape 3", exact=False)).to_be_visible(timeout=TIMEOUT_MS)
+    expect(page.get_by_text("tokens générés", exact=False).first).to_be_visible(timeout=TIMEOUT_MS)
+    page.screenshot(path=str(shots / "q1_execution_en_cours.png"), full_page=True)
+    page.reload()  # refresh pendant l'exécution
+    expect(page.get_by_text("Exécution locale en cours — étape 3", exact=False)).to_be_visible(timeout=TIMEOUT_MS)
+    expect(page.get_by_text("✓ Practice Extractor — bloc 1/", exact=False)).to_be_visible(timeout=TIMEOUT_MS)
+    page.screenshot(path=str(shots / "q2_apres_refresh.png"), full_page=True)
+    address = url
+    page.close()  # navigateur fermé…
+    page = browser.new_page(viewport={"width": 1400, "height": 1000})
+    page.goto(address)  # … puis rouvert, sans le run dans l'adresse
+    expect(page.get_by_text("Exécution locale en cours détectée", exact=False)).to_be_visible(timeout=TIMEOUT_MS)
+    expect(page.get_by_text(WORKFLOW_DONE.format(3)).first).to_be_visible(timeout=TIMEOUT_MS)
+    page.get_by_text("Mesures de la dernière exécution locale", exact=False).click()
+    expect(page.get_by_text("Tokens entrée", exact=False).first).to_be_visible(timeout=TIMEOUT_MS)
+    page.screenshot(path=str(shots / "q3_termine.png"), full_page=True)
+    assert_no_exception(page)
+    page.close()
+    print("Q. arrière-plan : étape 3 en cours, page rafraîchie puis navigateur rouvert sans adresse, exécution "
+          "retrouvée et terminée, mesures par appel affichées")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--screenshots", type=Path, default=Path(tempfile.mkdtemp(prefix="trace_e2e_")))
@@ -720,6 +750,9 @@ def main() -> int:
                 scenario_otmane(browser, url, otmane_file, args.screenshots)
                 scenario_stage5_temporal(browser, url, temporal_file, args.screenshots)
                 scenario_stage5_long(browser, url, stage5_long_file, args.screenshots)
+            env_slow = {**base_env, "TRACE_E2E_CACHE_DIR": str(work / "cache_slow"), "TRACE_E2E_AGENT_DELAY": "1.5"}
+            with streamlit_server(ROOT / "tests" / "e2e" / "fake_llm_app.py", env_slow) as url:
+                scenario_refresh_during_run(browser, url, long_file, args.screenshots)
             downloads = stage3_downloads(work)
             downloads4 = stage4_downloads(work)
             env_restore = {**base_env, "TRACE_E2E_CACHE_DIR": str(work / "cache_after_redeploy")}

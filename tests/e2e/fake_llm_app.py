@@ -36,6 +36,7 @@ classe chaque candidat « incertain » et l'étape 5 simulée ne décrit aucune 
 import os
 import runpy
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -54,6 +55,10 @@ from tests import synthetic_stage5_long as stage5_long  # noqa: E402
 from tests import synthetic_stage6 as stage6  # noqa: E402
 from tests.fake_llm import (ACCOUNTABILITY, AUDITOR, COMPARATOR, INTERACTION, LONG_DISTANCE, PRACTICE,  # noqa: E402
                             TRAJECTORY, FakeLocalAgentRunner, FakeOllama, text_response)
+
+# Exécution « en arrière-plan » dans un fil du serveur (et non un processus détaché) : les agents simulés de ce
+# lanceur restent en place ; l'interface suit la progression exactement comme avec le processus détaché.
+os.environ["TRACE_JOB_MODE"] = "thread"
 
 if os.environ.get("TRACE_E2E_CACHE_DIR"):
     config.CACHE_DIR = Path(os.environ["TRACE_E2E_CACHE_DIR"])
@@ -219,6 +224,15 @@ _OLLAMA = FakeOllama(
 def _make_runner(settings, *, journal_dir=None, checker=None):
     return FakeLocalAgentRunner(settings=settings, ollama=_OLLAMA, checker=checker, journal_dir=journal_dir)
 
+
+if os.environ.get("TRACE_E2E_AGENT_DELAY"):  # agents simulés plus lents : test du refresh pendant l'exécution
+    _fast_chat = _OLLAMA.chat
+
+    def _slow_chat(payload, on_progress=None, _delay=float(os.environ["TRACE_E2E_AGENT_DELAY"])):
+        time.sleep(_delay)
+        return _fast_chat(payload, on_progress)
+
+    _OLLAMA.chat = _slow_chat
 
 local_pipeline.make_runner = _make_runner
 

@@ -35,7 +35,7 @@ def complete(runner, label=LABEL, user_content="<transcript>…</transcript>"):
 
 def test_defaults_are_local_ollama_without_any_key():
     settings = LLMSettings.from_env({})
-    assert settings.model == DEFAULT_LOCAL_MODEL == "qwen2.5:14b"
+    assert settings.model == DEFAULT_LOCAL_MODEL == "qwen2.5:7b"
     assert settings.ollama_url == DEFAULT_OLLAMA_URL == "http://localhost:11434"
     assert settings.max_corrections == 2 and settings.temperature == 0.0 and settings.num_ctx == 32768
     assert not any("key" in name.lower() for name in settings.__dataclass_fields__)
@@ -78,9 +78,11 @@ def test_request_uses_the_agent_prompt_and_its_strict_json_schema(tmp_path):
     result = complete(runner)
     [call] = runner.calls
     payload = call["payload"]
-    assert payload["model"] == "fake-model" and payload["stream"] is False
+    assert payload["model"] == "fake-model" and payload["stream"] is True  # progression en flux
     assert payload["format"] == PRACTICE_SPEC.output_schema  # sortie structurée : le JSON Schema strict de l'agent
-    assert payload["options"] == {"temperature": 0.0, "num_ctx": 32768}
+    # fenêtre dimensionnée pour CET appel (prompt + réponse réservée + marge), réponse bornée, modèle gardé chargé
+    assert payload["options"] == {"temperature": 0.0, "num_ctx": 16384, "num_predict": 8192}
+    assert payload["keep_alive"] == "30m"
     assert payload["messages"][0] == {"role": "system", "content": PRACTICE_SPEC.system_prompt}  # prompt du dépôt
     assert payload["messages"][1]["content"] == "<transcript>…</transcript>" and len(payload["messages"]) == 2
     assert len(result.data.practices) == len(si.GOOD_PRACTICES["practices"])
@@ -132,7 +134,7 @@ def test_methodological_errors_are_sent_back_and_the_validator_is_never_bypassed
     runner = FakeLocalAgentRunner({PRACTICE: text_response(si.GOOD_PRACTICES)},
                                   checker=lambda spec, label, content, output: list(blocking))
     result = complete(runner)  # la réponse reste conforme au schéma : rendue telle quelle, anomalies signalées
-    assert len(runner.calls) == 1 + runner.settings.max_corrections
+    assert len(runner.calls) == 1 + runner.settings.max_method_corrections  # chaque correction régénère tout
     assert "QUOTE_NOT_FOUND" in runner.calls[1]["params"]["history"][1]["content"]
     [record] = runner.records.values()
     assert record["outcome"] == "accepted_with_issues" and record["remaining_issues"] == blocking
@@ -163,13 +165,13 @@ def test_ollama_unavailable_is_a_clear_error_without_retry_nor_fallback():
 
 def test_missing_model_is_a_clear_error_with_the_install_command():
     runner = FakeLocalAgentRunner({PRACTICE: text_response(si.GOOD_PRACTICES)}, models=["llama3.2:3b"],
-                                  settings=fake_settings(model="qwen2.5:14b"))
+                                  settings=fake_settings(model="qwen2.5:7b"))
     status = runner.check()
     assert status["available"] and not status["model_installed"] and status["models"] == ["llama3.2:3b"]
-    assert status["install_command"] == "ollama pull qwen2.5:14b"
+    assert status["install_command"] == "ollama pull qwen2.5:7b"
     with pytest.raises(LLMError) as info:
         runner.require_ready()
-    assert info.value.code == "MODEL_NOT_FOUND" and "ollama pull qwen2.5:14b" in info.value.user_message
+    assert info.value.code == "MODEL_NOT_FOUND" and "ollama pull qwen2.5:7b" in info.value.user_message
     with pytest.raises(LLMError) as info:
         complete(runner)
     assert info.value.code == "MODEL_NOT_FOUND" and runner.calls == []
@@ -213,19 +215,33 @@ def ollama_stub(loopback_only):
             if self.path == "/api/version":
                 self._send(200, {"version": "0.9.9"})
             elif self.path == "/api/tags":
-                self._send(200, {"models": [{"name": "qwen2.5:14b"}, {"name": "mistral:latest"}]})
+                self._send(200, {"models": [{"name": "qwen2.5:7b"}, {"name": "mistral:latest"}]})
             else:
                 self._send(404, {"error": "not found"})
 
         def do_POST(self):
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             received.append({"path": self.path, "body": body})
-            if body["model"] not in ("qwen2.5:14b", "mistral:latest"):
+            if body["model"] not in ("qwen2.5:7b", "mistral:latest"):
                 self._send(404, {"error": f'model "{body["model"]}" not found, try pulling it first'})
                 return
-            self._send(200, {"model": body["model"], "message": {"role": "assistant",
-                                                                 "content": json.dumps(si.GOOD_PRACTICES)},
-                             "done": True, "done_reason": "stop", "prompt_eval_count": 1234, "eval_count": 567})
+            content = json.dumps(si.GOOD_PRACTICES)
+            final = {"model": body["model"], "done": True, "done_reason": "stop", "prompt_eval_count": 1234,
+                     "prompt_eval_duration": 617_000_000, "eval_count": 567, "eval_duration": 14_175_000_000,
+                     "load_duration": 2_000_000_000}
+            if not body.get("stream"):
+                self._send(200, {**final, "message": {"role": "assistant", "content": content}})
+                return
+            # flux NDJSON, comme Ollama : un fragment par token, puis le bilan
+            pieces = [content[i:i + 40] for i in range(0, len(content), 40)]
+            lines = [{"model": body["model"], "message": {"role": "assistant", "content": piece}, "done": False}
+                     for piece in pieces] + [{**final, "message": {"role": "assistant", "content": ""}}]
+            data = "".join(json.dumps(line) + "\n" for line in lines).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/x-ndjson")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
 
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -239,7 +255,7 @@ def test_real_http_transport_talks_to_a_local_ollama_and_ignores_proxies(ollama_
     url, received = ollama_stub
     monkeypatch.setenv("HTTP_PROXY", "http://10.255.255.1:3128")  # jamais utilisé : boucle locale, sans proxy
     monkeypatch.setenv("http_proxy", "http://10.255.255.1:3128")
-    settings = LLMSettings(model="qwen2.5:14b", ollama_url=url)
+    settings = LLMSettings(model="qwen2.5:7b", ollama_url=url)
     status = check_runtime(settings)
     assert status["ready"] and status["version"] == "0.9.9" and "mistral:latest" in status["models"]
     assert check_runtime(LLMSettings(model="mistral", ollama_url=url))["model_installed"]  # « latest » implicite
@@ -247,7 +263,7 @@ def test_real_http_transport_talks_to_a_local_ollama_and_ignores_proxies(ollama_
     result = complete(LocalAgentRunner(settings))
     [request] = received
     assert request["path"] == "/api/chat" and request["body"]["format"] == PRACTICE_SPEC.output_schema
-    assert request["body"]["stream"] is False and request["body"]["messages"][0]["content"] == PRACTICE_SPEC.system_prompt
+    assert request["body"]["stream"] is True and request["body"]["messages"][0]["content"] == PRACTICE_SPEC.system_prompt
     assert result.usage["input_tokens"] == 1234 and result.usage["output_tokens"] == 567
     assert len(result.data.practices) == len(si.GOOD_PRACTICES["practices"])
 

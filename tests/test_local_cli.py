@@ -34,7 +34,7 @@ def test_cli_runs_stages_1_to_5_locally_then_never_replays(tmp_path, cli, capsys
     assert cli.main(["ingest", str(source)]) == 0
     assert cli.main(["run", "latest", "--until", "5"]) == 0
     out = capsys.readouterr().out
-    assert "étape 3 (exécution locale, Ollama, modèle qwen2.5:14b, 0 appel API) : COMPLETE" in out
+    assert "étape 3 (exécution locale, Ollama, modèle qwen2.5:7b, 0 appel API) : COMPLETE" in out
     assert "étape 5 (exécution locale" in out and "Sorties :" in out
     calls = len(ollama.calls)
     assert cli.main(["run", "latest", "--until", "5"]) == 0
@@ -56,7 +56,7 @@ def test_cli_reports_ollama_stopped_with_a_clear_message(tmp_path, cli, capsys, 
     assert cli.main(["runtime"]) == 7
     out = capsys.readouterr().out
     assert "Exécution : locale · Runtime : Ollama" in out and "Données externes : aucune" in out
-    assert "Démarrer Ollama : ollama serve" in out and "ollama pull qwen2.5:14b" in out
+    assert "Démarrer Ollama : ollama serve" in out and "ollama pull qwen2.5:7b" in out
     source = tmp_path / si.FILENAME
     source.write_text(si.TEXT, encoding="utf-8")
     assert cli.main(["ingest", str(source)]) == 0  # l'ingestion n'a pas besoin d'Ollama
@@ -68,3 +68,16 @@ def test_cli_reports_ollama_stopped_with_a_clear_message(tmp_path, cli, capsys, 
 def test_cli_runtime_ready(cli, capsys, monkeypatch):
     use_fake_runtime(monkeypatch, {})
     assert cli.main(["runtime"]) == 0 and "Runtime local prêt." in capsys.readouterr().out
+
+
+def test_cli_job_runs_stages_in_the_background_and_reports_progress(tmp_path, cli, capsys, monkeypatch):
+    use_fake_runtime(monkeypatch, agents())
+    source = tmp_path / S4.FILENAME
+    source.write_text(S4.TEXT, encoding="utf-8")
+    assert cli.main(["ingest", str(source)]) == 0
+    assert cli.main(["job", "start", "latest", "--until", "5", "--wait"]) == 0  # TRACE_JOB_MODE=inline (conftest)
+    out = capsys.readouterr().out
+    assert "Exécution lancée en arrière-plan" in out and "étape 5 — terminée" in out
+    assert "✓ Accountability Episode Builder" in out and "✓ Trajectory Mapper" in out
+    assert cli.main(["job", "status", "latest"]) == 0 and "terminée" in capsys.readouterr().out
+    assert cli.main(["job", "stop", "latest"]) == 0 and "Aucune exécution détachée" in capsys.readouterr().out

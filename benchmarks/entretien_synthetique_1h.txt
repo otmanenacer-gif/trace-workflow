@@ -1,0 +1,349 @@
+Enquêteur : Et pour les fiches de lecture, comment tu t'organises, au semestre 0 ?
+Enquêté : Alors les exposés, ça dépend des semaines. Au semestre 1 je m'y prenais tard, je relisais le cours la veille et je faisais un petit plan à la main, avec des couleurs, avant d'écrire au propre sur l'ordinateur.
+Enquêteur : Tu peux me raconter une fois récente pour les exposés, au semestre 1 ?
+Enquêté : Pour les révisions, je demande parfois à une amie de relire, on s'échange nos brouillons. Au semestre 2 on avait un groupe de travail à la bibliothèque le jeudi, on restait jusqu'à la fermeture.
+Enquêteur : Concrètement, pour les révisions, tu fais comment, au semestre 2 ?
+Enquêté : Pour les mails aux professeurs, je travaille d'abord avec mes notes de cours, puis je compare avec les lectures conseillées par l'enseignante ; au semestre 3 j'ai gardé la même méthode parce qu'elle me fait gagner du temps et que je retrouve plus facilement mes sources.
+Enquêteur : Et pour les mails aux professeurs, comment tu t'organises, au semestre 3 ?
+Enquêté : Alors les traductions, ça dépend des semaines. Au semestre 4 je m'y prenais tard, je relisais le cours la veille et je faisais un petit plan à la main, avec des couleurs, avant d'écrire au propre sur l'ordinateur.
+Enquêteur : Tu peux me raconter une fois récente pour les traductions, au semestre 4 ?
+Enquêté : Non, je n'utilise jamais ChatGPT pour rédiger mes dissertations, c'est moi qui écris tout, du début à la fin.
+Enquêteur : Concrètement, pour les exercices de statistiques, tu fais comment, au semestre 5 ?
+Enquêté : Pour les dossiers de groupe, je travaille d'abord avec mes notes de cours, puis je compare avec les lectures conseillées par l'enseignante ; au semestre 6 j'ai gardé la même méthode parce qu'elle me fait gagner du temps et que je retrouve plus facilement mes sources.
+Enquêteur : Et pour les dossiers de groupe, comment tu t'organises, au semestre 6 ?
+Enquêté : Euh… Alors la prise de notes, ça dépend des semaines. Au semestre 7 je m'y prenais tard, je relisais le cours la veille et je faisais un petit plan à la main, avec des couleurs, avant d'écrire au propre sur l'ordinateur.
+Enquêteur : Tu peux me raconter une fois récente pour la prise de notes, au semestre 7 ?
+Enquêté : Pour les recherches documentaires, je demande parfois à une amie de relire, on s'échange nos brouillons. Au semestre 8 on avait un groupe de travail à la bibliothèque le jeudi, on restait jusqu'à la fermeture.
+Enquêteur : Concrètement, pour les recherches documentaires, tu fais comment, au semestre 8 ?
+Enquêté : Pour le mémoire, je travaille d'abord avec mes notes de cours, puis je compare avec les lectures conseillées par l'enseignante ; au semestre 9 j'ai gardé la même méthode parce qu'elle me fait gagner du temps et que je retrouve plus facilement mes sources.
+Enquêteur : Et pour le mémoire, comment tu t'organises, au semestre 9 ?
+Enquêté : Alors les oraux, ça dépend des semaines. Au semestre 10 je m'y prenais tard, je relisais le cours la veille et je faisais un petit plan à la main, avec des couleurs, avant d'écrire au propre sur l'ordinateur.
+Enquêteur : Tu peux me raconter une fois récente pour les oraux, au semestre 10 ?
+Enquêté : Pour les comptes rendus, je demande parfois à une amie de relire, on s'échange nos brouillons. Au semestre 11 on avait un groupe de travail à la bibliothèque le jeudi, on restait jusqu'à la fermeture.
+Enquêteur : Concrètement, pour les comptes rendus, tu fais comment, au semestre 11 ?
+Enquêté : Pour les fiches de lecture, je travaille d'abord avec mes notes de cours, puis je compare avec les lectures conseillées par l'enseignante ; au semestre 12 j'ai gardé la même méthode parce qu'elle me fait gagner du temps et que je retrouve plus facilement mes sources.
+Enquêteur : Et pour les fiches de lecture, comment tu t'organises, au semestre 12 ?
+Enquêté : Alors les exposés, ça dépend des semaines. Au semestre 13 je m'y prenais tard, je relisais le cours la veille et je faisais un petit plan à la main, avec des couleurs, avant d'écrire au propre sur l'ordinateur.
+Enquêteur : Tu peux me raconter une fois récente pour les exposés, au semestre 13 ?
+Enquêté : Euh… Pour les révisions, je demande parfois à une amie de relire, on s'échange nos brouillons. Au semestre 14 on avait un groupe de travail à la bibliothèque le jeudi, on restait jusqu'à la fermeture.
+Enquêteur : Concrètement, pour les révisions, tu fais comment, au semestre 14 ?
+Enquêté : Pour les mails aux professeurs, je travaille d'abord avec mes notes de cours, puis je compare avec les lectures conseillées par l'enseignante ; au semestre 15 j'ai gardé la même méthode parce qu'elle me fait gagner du temps et que je retrouve plus facilement mes sources.
+Enquêteur : Et pour les mails aux professeurs, comment tu t'organises, au semestre 15 ?
+Enquêté : Alors les traductions, ça dépend des semaines. Au semestre 16 je m'y prenais tard, je relisais le cours la veille et je faisais un petit plan à la main, avec des couleurs, avant d'écrire au propre sur l'ordinateur.
+Enquêteur : Tu peux me raconter une fois récente pour les traductions, au semestre 16 ?
+Enquêté : Pour les exercices de statistiques, je demande parfois à une amie de relire, on s'échange nos brouillons. Au semestre 17 on avait un groupe de travail à la bibliothèque le jeudi, on restait jusqu'à la fermeture.
+Enquêteur : Concrètement, pour les exercices de statistiques, tu fais comment, au semestre 17 ?
+Enquêté : Pour les dossiers de groupe, je travaille d'abord avec mes notes de cours, puis je compare avec les lectures conseillées par l'enseignante ; au semestre 18 j'ai gardé la même méthode parce qu'elle me fait gagner du temps et que je retrouve plus facilement mes sources.
+Enquêteur : Et pour les dossiers de groupe, comment tu t'organises, au semestre 18 ?
+Enquêté : Alors la prise de notes, ça dépend des semaines. Au semestre 19 je m'y prenais tard, je relisais le cours la veille et je faisais un petit plan à la main, avec des couleurs, avant d'écrire au propre sur l'ordinateur.
+Enquêteur : Tu peux me raconter une fois récente pour la prise de notes, au semestre 19 ?
+Enquêté : Pour les recherches documentaires, je demande parfois à une amie de relire, on s'échange nos brouillons. Au semestre 20 on avait un groupe de travail à la bibliothèque le jeudi, on restait jusqu'à la fermeture.
+Enquêteur : Concrètement, pour les recherches documentaires, tu fais comment, au semestre 20 ?
+Enquêté : Euh… Pour le mémoire, je travaille d'abord avec mes notes de cours, puis je compare avec les lectures conseillées par l'enseignante ; au semestre 21 j'ai gardé la même méthode parce qu'elle me fait gagner du temps et que je retrouve plus facilement mes sources.
+Enquêteur : Et pour le mémoire, comment tu t'organises, au semestre 21 ?
+Enquêté : Alors les oraux, ça dépend des semaines. Au semestre 22 je m'y prenais tard, je relisais le cours la veille et je faisais un petit plan à la main, avec des couleurs, avant d'écrire au propre sur l'ordinateur.
+Enquêteur : Tu peux me raconter une fois récente pour les oraux, au semestre 22 ?
+Enquêté : Pour les comptes rendus, je demande parfois à une amie de relire, on s'échange nos brouillons. Au semestre 23 on avait un groupe de travail à la bibliothèque le jeudi, on restait jusqu'à la fermeture.
+Enquêteur : Concrètement, pour les comptes rendus, tu fais comment, au semestre 23 ?
+Enquêté : Pour les fiches de lecture, je travaille d'abord avec mes notes de cours, puis je compare avec les lectures conseillées par l'enseignante ; au semestre 24 j'ai gardé la même méthode parce qu'elle me fait gagner du temps et que je retrouve plus facilement mes sources.
+Enquêteur : Et pour les fiches de lecture, comment tu t'organises, au semestre 24 ?
+Enquêté : Alors les exposés, ça dépend des semaines. Au semestre 25 je m'y prenais tard, je relisais le cours la veille et je faisais un petit plan à la main, avec des couleurs, avant d'écrire au propre sur l'ordinateur.
+Enquêteur : Tu peux me raconter une fois récente pour les exposés, au semestre 25 ?
+Enquêté : Pour les révisions, je demande parfois à une amie de relire, on s'échange nos brouillons. Au semestre 26 on avait un groupe de travail à la bibliothèque le jeudi, on restait jusqu'à la fermeture.
+Enquêteur : Concrètement, pour les révisions, tu fais comment, au semestre 26 ?
+Enquêté : Pour les mails aux professeurs, je travaille d'abord avec mes notes de cours, puis je compare avec les lectures conseillées par l'enseignante ; au semestre 27 j'ai gardé la même méthode parce qu'elle me fait gagner du temps et que je retrouve plus facilement mes sources.
+Enquêteur : Et pour les mails aux professeurs, comment tu t'organises, au semestre 27 ?
+Enquêté : Euh… Alors les traductions, ça dépend des semaines. Au semestre 28 je m'y prenais tard, je relisais le cours la veille et je faisais un petit plan à la main, avec des couleurs, avant d'écrire au propre sur l'ordinateur.
+Enquêteur : Tu peux me raconter une fois récente pour les traductions, au semestre 28 ?
+Enquêté : Pour les exercices de statistiques, je demande parfois à une amie de relire, on s'échange nos brouillons. Au semestre 29 on avait un groupe de travail à la bibliothèque le jeudi, on restait jusqu'à la fermeture.
+Enquêteur : Concrètement, pour les exercices de statistiques, tu fais comment, au semestre 29 ?
+Enquêté : Pour les dossiers de groupe, je travaille d'abord avec mes notes de cours, puis je compare avec les lectures conseillées par l'enseignante ; au semestre 30 j'ai gardé la même méthode parce qu'elle me fait gagner du temps et que je retrouve plus facilement mes sources.
+Enquêteur : Et pour les dossiers de groupe, comment tu t'organises, au semestre 30 ?
+Enquêté : Alors la prise de notes, ça dépend des semaines. Au semestre 31 je m'y prenais tard, je relisais le cours la veille et je faisais un petit plan à la main, avec des couleurs, avant d'écrire au propre sur l'ordinateur.
+Enquêteur : Tu peux me raconter une fois récente pour la prise de notes, au semestre 31 ?
+Enquêté : Pour les recherches documentaires, je demande parfois à une amie de relire, on s'échange nos brouillons. Au semestre 32 on avait un groupe de travail à la bibliothèque le jeudi, on restait jusqu'à la fermeture.
+Enquêteur : Concrètement, pour les recherches documentaires, tu fais comment, au semestre 32 ?
+Enquêté : Pour le mémoire, je travaille d'abord avec mes notes de cours, puis je compare avec les lectures conseillées par l'enseignante ; au semestre 33 j'ai gardé la même méthode parce qu'elle me fait gagner du temps et que je retrouve plus facilement mes sources.
+Enquêteur : Et pour le mémoire, comment tu t'organises, au semestre 33 ?
+Enquêté : Alors les oraux, ça dépend des semaines. Au semestre 34 je m'y prenais tard, je relisais le cours la veille et je faisais un petit plan à la main, avec des couleurs, avant d'écrire au propre sur l'ordinateur.
+Enquêteur : Tu peux me raconter une fois récente pour les oraux, au semestre 34 ?
+Enquêté : Euh… Pour les comptes rendus, je demande parfois à une amie de relire, on s'échange nos brouillons. Au semestre 35 on avait un groupe de travail à la bibliothèque le jeudi, on restait jusqu'à la fermeture.
+Enquêteur : Concrètement, pour les comptes rendus, tu fais comment, au semestre 35 ?
+Enquêté : Pour les fiches de lecture, je travaille d'abord avec mes notes de cours, puis je compare avec les lectures conseillées par l'enseignante ; au semestre 36 j'ai gardé la même méthode parce qu'elle me fait gagner du temps et que je retrouve plus facilement mes sources.
+Enquêteur : Et pour les fiches de lecture, comment tu t'organises, au semestre 36 ?
+Enquêté : Alors les exposés, ça dépend des semaines. Au semestre 37 je m'y prenais tard, je relisais le cours la veille et je faisais un petit plan à la main, avec des couleurs, avant d'écrire au propre sur l'ordinateur.
+Enquêteur : Tu peux me raconter une fois récente pour les exposés, au semestre 37 ?
+Enquêté : Pour les révisions, je demande parfois à une amie de relire, on s'échange nos brouillons. Au semestre 38 on avait un groupe de travail à la bibliothèque le jeudi, on restait jusqu'à la fermeture.
+Enquêteur : Concrètement, pour les révisions, tu fais comment, au semestre 38 ?
+Enquêté : Pour les mails aux professeurs, je travaille d'abord avec mes notes de cours, puis je compare avec les lectures conseillées par l'enseignante ; au semestre 39 j'ai gardé la même méthode parce qu'elle me fait gagner du temps et que je retrouve plus facilement mes sources.
+Enquêteur : Et pour les mails aux professeurs, comment tu t'organises, au semestre 39 ?
+Enquêté : Alors les traductions, ça dépend des semaines. Au semestre 40 je m'y prenais tard, je relisais le cours la veille et je faisais un petit plan à la main, avec des couleurs, avant d'écrire au propre sur l'ordinateur.
+Enquêteur : Tu peux me raconter une fois récente pour les traductions, au semestre 40 ?
+Enquêté : Pour les exercices de statistiques, je demande parfois à une amie de relire, on s'échange nos brouillons. Au semestre 41 on avait un groupe de travail à la bibliothèque le jeudi, on restait jusqu'à la fermeture.
+Enquêteur : Concrètement, pour les exercices de statistiques, tu fais comment, au semestre 41 ?
+Enquêté : Euh… Pour les dossiers de groupe, je travaille d'abord avec mes notes de cours, puis je compare avec les lectures conseillées par l'enseignante ; au semestre 42 j'ai gardé la même méthode parce qu'elle me fait gagner du temps et que je retrouve plus facilement mes sources.
+Enquêteur : Et pour les dossiers de groupe, comment tu t'organises, au semestre 42 ?
+Enquêté : Alors la prise de notes, ça dépend des semaines. Au semestre 43 je m'y prenais tard, je relisais le cours la veille et je faisais un petit plan à la main, avec des couleurs, avant d'écrire au propre sur l'ordinateur.
+Enquêteur : Tu peux me raconter une fois récente pour la prise de notes, au semestre 43 ?
+Enquêté : Pour les recherches documentaires, je demande parfois à une amie de relire, on s'échange nos brouillons. Au semestre 44 on avait un groupe de travail à la bibliothèque le jeudi, on restait jusqu'à la fermeture.
+Enquêteur : Concrètement, pour les recherches documentaires, tu fais comment, au semestre 44 ?
+Enquêté : Pour le mémoire, je travaille d'abord avec mes notes de cours, puis je compare avec les lectures conseillées par l'enseignante ; au semestre 45 j'ai gardé la même méthode parce qu'elle me fait gagner du temps et que je retrouve plus facilement mes sources.
+Enquêteur : Et pour le mémoire, comment tu t'organises, au semestre 45 ?
+Enquêté : Alors les oraux, ça dépend des semaines. Au semestre 46 je m'y prenais tard, je relisais le cours la veille et je faisais un petit plan à la main, avec des couleurs, avant d'écrire au propre sur l'ordinateur.
+Enquêteur : Tu peux me raconter une fois récente pour les oraux, au semestre 46 ?
+Enquêté : Pour les comptes rendus, je demande parfois à une amie de relire, on s'échange nos brouillons. Au semestre 47 on avait un groupe de travail à la bibliothèque le jeudi, on restait jusqu'à la fermeture.
+Enquêteur : Concrètement, pour les comptes rendus, tu fais comment, au semestre 47 ?
+Enquêté : Pour les fiches de lecture, je travaille d'abord avec mes notes de cours, puis je compare avec les lectures conseillées par l'enseignante ; au semestre 48 j'ai gardé la même méthode parce qu'elle me fait gagner du temps et que je retrouve plus facilement mes sources.
+Enquêteur : Et pour les fiches de lecture, comment tu t'organises, au semestre 48 ?
+Enquêté : Euh… Alors les exposés, ça dépend des semaines. Au semestre 49 je m'y prenais tard, je relisais le cours la veille et je faisais un petit plan à la main, avec des couleurs, avant d'écrire au propre sur l'ordinateur.
+Enquêteur : Tu peux me raconter une fois récente pour les exposés, au semestre 49 ?
+Enquêté : Pour les révisions, je demande parfois à une amie de relire, on s'échange nos brouillons. Au semestre 50 on avait un groupe de travail à la bibliothèque le jeudi, on restait jusqu'à la fermeture.
+Enquêteur : Concrètement, pour les révisions, tu fais comment, au semestre 50 ?
+Enquêté : Pour les mails aux professeurs, je travaille d'abord avec mes notes de cours, puis je compare avec les lectures conseillées par l'enseignante ; au semestre 51 j'ai gardé la même méthode parce qu'elle me fait gagner du temps et que je retrouve plus facilement mes sources.
+Enquêteur : Et pour les mails aux professeurs, comment tu t'organises, au semestre 51 ?
+Enquêté : Alors les traductions, ça dépend des semaines. Au semestre 52 je m'y prenais tard, je relisais le cours la veille et je faisais un petit plan à la main, avec des couleurs, avant d'écrire au propre sur l'ordinateur.
+Enquêteur : Tu peux me raconter une fois récente pour les traductions, au semestre 52 ?
+Enquêté : Pour les exercices de statistiques, je demande parfois à une amie de relire, on s'échange nos brouillons. Au semestre 53 on avait un groupe de travail à la bibliothèque le jeudi, on restait jusqu'à la fermeture.
+Enquêteur : Concrètement, pour les exercices de statistiques, tu fais comment, au semestre 53 ?
+Enquêté : Pour les dossiers de groupe, je travaille d'abord avec mes notes de cours, puis je compare avec les lectures conseillées par l'enseignante ; au semestre 54 j'ai gardé la même méthode parce qu'elle me fait gagner du temps et que je retrouve plus facilement mes sources.
+Enquêteur : Et pour les dossiers de groupe, comment tu t'organises, au semestre 54 ?
+Enquêté : Alors la prise de notes, ça dépend des semaines. Au semestre 55 je m'y prenais tard, je relisais le cours la veille et je faisais un petit plan à la main, avec des couleurs, avant d'écrire au propre sur l'ordinateur.
+Enquêteur : Tu peux me raconter une fois récente pour la prise de notes, au semestre 55 ?
+Enquêté : Euh… Pour les recherches documentaires, je demande parfois à une amie de relire, on s'échange nos brouillons. Au semestre 56 on avait un groupe de travail à la bibliothèque le jeudi, on restait jusqu'à la fermeture.
+Enquêteur : Concrètement, pour les recherches documentaires, tu fais comment, au semestre 56 ?
+Enquêté : Pour le mémoire, je travaille d'abord avec mes notes de cours, puis je compare avec les lectures conseillées par l'enseignante ; au semestre 57 j'ai gardé la même méthode parce qu'elle me fait gagner du temps et que je retrouve plus facilement mes sources.
+Enquêteur : Et pour le mémoire, comment tu t'organises, au semestre 57 ?
+Enquêté : Alors les oraux, ça dépend des semaines. Au semestre 58 je m'y prenais tard, je relisais le cours la veille et je faisais un petit plan à la main, avec des couleurs, avant d'écrire au propre sur l'ordinateur.
+Enquêteur : Tu peux me raconter une fois récente pour les oraux, au semestre 58 ?
+Enquêté : Pour les comptes rendus, je demande parfois à une amie de relire, on s'échange nos brouillons. Au semestre 59 on avait un groupe de travail à la bibliothèque le jeudi, on restait jusqu'à la fermeture.
+Enquêteur : Concrètement, pour les comptes rendus, tu fais comment, au semestre 59 ?
+Enquêté : Pour les fiches de lecture, je travaille d'abord avec mes notes de cours, puis je compare avec les lectures conseillées par l'enseignante ; au semestre 60 j'ai gardé la même méthode parce qu'elle me fait gagner du temps et que je retrouve plus facilement mes sources.
+Enquêteur : Et pour les fiches de lecture, comment tu t'organises, au semestre 60 ?
+Enquêté : Alors les exposés, ça dépend des semaines. Au semestre 61 je m'y prenais tard, je relisais le cours la veille et je faisais un petit plan à la main, avec des couleurs, avant d'écrire au propre sur l'ordinateur.
+Enquêteur : Tu peux me raconter une fois récente pour les exposés, au semestre 61 ?
+Enquêté : Pour les révisions, je demande parfois à une amie de relire, on s'échange nos brouillons. Au semestre 62 on avait un groupe de travail à la bibliothèque le jeudi, on restait jusqu'à la fermeture.
+Enquêteur : Concrètement, pour les révisions, tu fais comment, au semestre 62 ?
+Enquêté : Euh… Pour les mails aux professeurs, je travaille d'abord avec mes notes de cours, puis je compare avec les lectures conseillées par l'enseignante ; au semestre 63 j'ai gardé la même méthode parce qu'elle me fait gagner du temps et que je retrouve plus facilement mes sources.
+Enquêteur : Et pour les mails aux professeurs, comment tu t'organises, au semestre 63 ?
+Enquêté : Alors les traductions, ça dépend des semaines. Au semestre 64 je m'y prenais tard, je relisais le cours la veille et je faisais un petit plan à la main, avec des couleurs, avant d'écrire au propre sur l'ordinateur.
+Enquêteur : Tu peux me raconter une fois récente pour les traductions, au semestre 64 ?
+Enquêté : Pour les exercices de statistiques, je demande parfois à une amie de relire, on s'échange nos brouillons. Au semestre 65 on avait un groupe de travail à la bibliothèque le jeudi, on restait jusqu'à la fermeture.
+Enquêteur : Concrètement, pour les exercices de statistiques, tu fais comment, au semestre 65 ?
+Enquêté : Pour les dossiers de groupe, je travaille d'abord avec mes notes de cours, puis je compare avec les lectures conseillées par l'enseignante ; au semestre 66 j'ai gardé la même méthode parce qu'elle me fait gagner du temps et que je retrouve plus facilement mes sources.
+Enquêteur : Et pour les dossiers de groupe, comment tu t'organises, au semestre 66 ?
+Enquêté : Alors la prise de notes, ça dépend des semaines. Au semestre 67 je m'y prenais tard, je relisais le cours la veille et je faisais un petit plan à la main, avec des couleurs, avant d'écrire au propre sur l'ordinateur.
+Enquêteur : Tu peux me raconter une fois récente pour la prise de notes, au semestre 67 ?
+Enquêté : Pour les recherches documentaires, je demande parfois à une amie de relire, on s'échange nos brouillons. Au semestre 68 on avait un groupe de travail à la bibliothèque le jeudi, on restait jusqu'à la fermeture.
+Enquêteur : Concrètement, pour les recherches documentaires, tu fais comment, au semestre 68 ?
+Enquêté : Pour le mémoire, je travaille d'abord avec mes notes de cours, puis je compare avec les lectures conseillées par l'enseignante ; au semestre 69 j'ai gardé la même méthode parce qu'elle me fait gagner du temps et que je retrouve plus facilement mes sources.
+Enquêteur : Et pour le mémoire, comment tu t'organises, au semestre 69 ?
+Enquêté : Euh… Alors les oraux, ça dépend des semaines. Au semestre 70 je m'y prenais tard, je relisais le cours la veille et je faisais un petit plan à la main, avec des couleurs, avant d'écrire au propre sur l'ordinateur.
+Enquêteur : Tu peux me raconter une fois récente pour les oraux, au semestre 70 ?
+Enquêté : Pour les comptes rendus, je demande parfois à une amie de relire, on s'échange nos brouillons. Au semestre 71 on avait un groupe de travail à la bibliothèque le jeudi, on restait jusqu'à la fermeture.
+Enquêteur : Concrètement, pour les comptes rendus, tu fais comment, au semestre 71 ?
+Enquêté : Pour les fiches de lecture, je travaille d'abord avec mes notes de cours, puis je compare avec les lectures conseillées par l'enseignante ; au semestre 72 j'ai gardé la même méthode parce qu'elle me fait gagner du temps et que je retrouve plus facilement mes sources.
+Enquêteur : Et pour les fiches de lecture, comment tu t'organises, au semestre 72 ?
+Enquêté : Alors les exposés, ça dépend des semaines. Au semestre 73 je m'y prenais tard, je relisais le cours la veille et je faisais un petit plan à la main, avec des couleurs, avant d'écrire au propre sur l'ordinateur.
+Enquêteur : Tu peux me raconter une fois récente pour les exposés, au semestre 73 ?
+Enquêté : Pour les révisions, je demande parfois à une amie de relire, on s'échange nos brouillons. Au semestre 74 on avait un groupe de travail à la bibliothèque le jeudi, on restait jusqu'à la fermeture.
+Enquêteur : Concrètement, pour les révisions, tu fais comment, au semestre 74 ?
+Enquêté : Pour les mails aux professeurs, je travaille d'abord avec mes notes de cours, puis je compare avec les lectures conseillées par l'enseignante ; au semestre 75 j'ai gardé la même méthode parce qu'elle me fait gagner du temps et que je retrouve plus facilement mes sources.
+Enquêteur : Et pour les mails aux professeurs, comment tu t'organises, au semestre 75 ?
+Enquêté : Alors les traductions, ça dépend des semaines. Au semestre 76 je m'y prenais tard, je relisais le cours la veille et je faisais un petit plan à la main, avec des couleurs, avant d'écrire au propre sur l'ordinateur.
+Enquêteur : Tu peux me raconter une fois récente pour les traductions, au semestre 76 ?
+Enquêté : Euh… Pour les exercices de statistiques, je demande parfois à une amie de relire, on s'échange nos brouillons. Au semestre 77 on avait un groupe de travail à la bibliothèque le jeudi, on restait jusqu'à la fermeture.
+Enquêteur : Concrètement, pour les exercices de statistiques, tu fais comment, au semestre 77 ?
+Enquêté : Pour les dossiers de groupe, je travaille d'abord avec mes notes de cours, puis je compare avec les lectures conseillées par l'enseignante ; au semestre 78 j'ai gardé la même méthode parce qu'elle me fait gagner du temps et que je retrouve plus facilement mes sources.
+Enquêteur : Et pour les dossiers de groupe, comment tu t'organises, au semestre 78 ?
+Enquêté : Alors la prise de notes, ça dépend des semaines. Au semestre 79 je m'y prenais tard, je relisais le cours la veille et je faisais un petit plan à la main, avec des couleurs, avant d'écrire au propre sur l'ordinateur.
+Enquêteur : Tu peux me raconter une fois récente pour la prise de notes, au semestre 79 ?
+Enquêté : Pour les recherches documentaires, je demande parfois à une amie de relire, on s'échange nos brouillons. Au semestre 80 on avait un groupe de travail à la bibliothèque le jeudi, on restait jusqu'à la fermeture.
+Enquêteur : Concrètement, pour les recherches documentaires, tu fais comment, au semestre 80 ?
+Enquêté : Pour le mémoire, je travaille d'abord avec mes notes de cours, puis je compare avec les lectures conseillées par l'enseignante ; au semestre 81 j'ai gardé la même méthode parce qu'elle me fait gagner du temps et que je retrouve plus facilement mes sources.
+Enquêteur : Et pour le mémoire, comment tu t'organises, au semestre 81 ?
+Enquêté : Alors les oraux, ça dépend des semaines. Au semestre 82 je m'y prenais tard, je relisais le cours la veille et je faisais un petit plan à la main, avec des couleurs, avant d'écrire au propre sur l'ordinateur.
+Enquêteur : Tu peux me raconter une fois récente pour les oraux, au semestre 82 ?
+Enquêté : Pour les comptes rendus, je demande parfois à une amie de relire, on s'échange nos brouillons. Au semestre 83 on avait un groupe de travail à la bibliothèque le jeudi, on restait jusqu'à la fermeture.
+Enquêteur : Concrètement, pour les comptes rendus, tu fais comment, au semestre 83 ?
+Enquêté : Euh… Pour les fiches de lecture, je travaille d'abord avec mes notes de cours, puis je compare avec les lectures conseillées par l'enseignante ; au semestre 84 j'ai gardé la même méthode parce qu'elle me fait gagner du temps et que je retrouve plus facilement mes sources.
+Enquêteur : Et pour les fiches de lecture, comment tu t'organises, au semestre 84 ?
+Enquêté : Alors les exposés, ça dépend des semaines. Au semestre 85 je m'y prenais tard, je relisais le cours la veille et je faisais un petit plan à la main, avec des couleurs, avant d'écrire au propre sur l'ordinateur.
+Enquêteur : Tu peux me raconter une fois récente pour les exposés, au semestre 85 ?
+Enquêté : Pour les révisions, je demande parfois à une amie de relire, on s'échange nos brouillons. Au semestre 86 on avait un groupe de travail à la bibliothèque le jeudi, on restait jusqu'à la fermeture.
+Enquêteur : Concrètement, pour les révisions, tu fais comment, au semestre 86 ?
+Enquêté : Pour les mails aux professeurs, je travaille d'abord avec mes notes de cours, puis je compare avec les lectures conseillées par l'enseignante ; au semestre 87 j'ai gardé la même méthode parce qu'elle me fait gagner du temps et que je retrouve plus facilement mes sources.
+Enquêteur : Et pour les mails aux professeurs, comment tu t'organises, au semestre 87 ?
+Enquêté : Alors les traductions, ça dépend des semaines. Au semestre 88 je m'y prenais tard, je relisais le cours la veille et je faisais un petit plan à la main, avec des couleurs, avant d'écrire au propre sur l'ordinateur.
+Enquêteur : Tu peux me raconter une fois récente pour les traductions, au semestre 88 ?
+Enquêté : Pour les exercices de statistiques, je demande parfois à une amie de relire, on s'échange nos brouillons. Au semestre 89 on avait un groupe de travail à la bibliothèque le jeudi, on restait jusqu'à la fermeture.
+Enquêteur : Concrètement, pour les exercices de statistiques, tu fais comment, au semestre 89 ?
+Enquêté : Pour les dossiers de groupe, je travaille d'abord avec mes notes de cours, puis je compare avec les lectures conseillées par l'enseignante ; au semestre 90 j'ai gardé la même méthode parce qu'elle me fait gagner du temps et que je retrouve plus facilement mes sources.
+Enquêteur : Et pour les dossiers de groupe, comment tu t'organises, au semestre 90 ?
+Enquêté : Euh… Alors la prise de notes, ça dépend des semaines. Au semestre 91 je m'y prenais tard, je relisais le cours la veille et je faisais un petit plan à la main, avec des couleurs, avant d'écrire au propre sur l'ordinateur.
+Enquêteur : Tu peux me raconter une fois récente pour la prise de notes, au semestre 91 ?
+Enquêté : Pour les recherches documentaires, je demande parfois à une amie de relire, on s'échange nos brouillons. Au semestre 92 on avait un groupe de travail à la bibliothèque le jeudi, on restait jusqu'à la fermeture.
+Enquêteur : Concrètement, pour les recherches documentaires, tu fais comment, au semestre 92 ?
+Enquêté : Pour le mémoire, je travaille d'abord avec mes notes de cours, puis je compare avec les lectures conseillées par l'enseignante ; au semestre 93 j'ai gardé la même méthode parce qu'elle me fait gagner du temps et que je retrouve plus facilement mes sources.
+Enquêteur : Et pour le mémoire, comment tu t'organises, au semestre 93 ?
+Enquêté : Alors les oraux, ça dépend des semaines. Au semestre 94 je m'y prenais tard, je relisais le cours la veille et je faisais un petit plan à la main, avec des couleurs, avant d'écrire au propre sur l'ordinateur.
+Enquêteur : Tu peux me raconter une fois récente pour les oraux, au semestre 94 ?
+Enquêté : Pour les comptes rendus, je demande parfois à une amie de relire, on s'échange nos brouillons. Au semestre 95 on avait un groupe de travail à la bibliothèque le jeudi, on restait jusqu'à la fermeture.
+Enquêteur : Concrètement, pour les comptes rendus, tu fais comment, au semestre 95 ?
+Enquêté : Pour les fiches de lecture, je travaille d'abord avec mes notes de cours, puis je compare avec les lectures conseillées par l'enseignante ; au semestre 96 j'ai gardé la même méthode parce qu'elle me fait gagner du temps et que je retrouve plus facilement mes sources.
+Enquêteur : Et pour les fiches de lecture, comment tu t'organises, au semestre 96 ?
+Enquêté : Alors les exposés, ça dépend des semaines. Au semestre 97 je m'y prenais tard, je relisais le cours la veille et je faisais un petit plan à la main, avec des couleurs, avant d'écrire au propre sur l'ordinateur.
+Enquêteur : Tu peux me raconter une fois récente pour les exposés, au semestre 97 ?
+Enquêté : Euh… Pour les révisions, je demande parfois à une amie de relire, on s'échange nos brouillons. Au semestre 98 on avait un groupe de travail à la bibliothèque le jeudi, on restait jusqu'à la fermeture.
+Enquêteur : Concrètement, pour les révisions, tu fais comment, au semestre 98 ?
+Enquêté : Pour les mails aux professeurs, je travaille d'abord avec mes notes de cours, puis je compare avec les lectures conseillées par l'enseignante ; au semestre 99 j'ai gardé la même méthode parce qu'elle me fait gagner du temps et que je retrouve plus facilement mes sources.
+Enquêteur : Et pour les mails aux professeurs, comment tu t'organises, au semestre 99 ?
+Enquêté : Alors les traductions, ça dépend des semaines. Au semestre 100 je m'y prenais tard, je relisais le cours la veille et je faisais un petit plan à la main, avec des couleurs, avant d'écrire au propre sur l'ordinateur.
+Enquêteur : Tu peux me raconter une fois récente pour les traductions, au semestre 100 ?
+Enquêté : Pour les exercices de statistiques, je demande parfois à une amie de relire, on s'échange nos brouillons. Au semestre 101 on avait un groupe de travail à la bibliothèque le jeudi, on restait jusqu'à la fermeture.
+Enquêteur : Concrètement, pour les exercices de statistiques, tu fais comment, au semestre 101 ?
+Enquêté : Pour les dossiers de groupe, je travaille d'abord avec mes notes de cours, puis je compare avec les lectures conseillées par l'enseignante ; au semestre 102 j'ai gardé la même méthode parce qu'elle me fait gagner du temps et que je retrouve plus facilement mes sources.
+Enquêteur : Et pour les dossiers de groupe, comment tu t'organises, au semestre 102 ?
+Enquêté : Alors la prise de notes, ça dépend des semaines. Au semestre 103 je m'y prenais tard, je relisais le cours la veille et je faisais un petit plan à la main, avec des couleurs, avant d'écrire au propre sur l'ordinateur.
+Enquêteur : Tu peux me raconter une fois récente pour la prise de notes, au semestre 103 ?
+Enquêté : Pour les recherches documentaires, je demande parfois à une amie de relire, on s'échange nos brouillons. Au semestre 104 on avait un groupe de travail à la bibliothèque le jeudi, on restait jusqu'à la fermeture.
+Enquêteur : Concrètement, pour les recherches documentaires, tu fais comment, au semestre 104 ?
+Enquêté : Euh… Pour le mémoire, je travaille d'abord avec mes notes de cours, puis je compare avec les lectures conseillées par l'enseignante ; au semestre 105 j'ai gardé la même méthode parce qu'elle me fait gagner du temps et que je retrouve plus facilement mes sources.
+Enquêteur : Et pour le mémoire, comment tu t'organises, au semestre 105 ?
+Enquêté : Alors les oraux, ça dépend des semaines. Au semestre 106 je m'y prenais tard, je relisais le cours la veille et je faisais un petit plan à la main, avec des couleurs, avant d'écrire au propre sur l'ordinateur.
+Enquêteur : Tu peux me raconter une fois récente pour les oraux, au semestre 106 ?
+Enquêté : Pour les comptes rendus, je demande parfois à une amie de relire, on s'échange nos brouillons. Au semestre 107 on avait un groupe de travail à la bibliothèque le jeudi, on restait jusqu'à la fermeture.
+Enquêteur : Concrètement, pour les comptes rendus, tu fais comment, au semestre 107 ?
+Enquêté : Pour les fiches de lecture, je travaille d'abord avec mes notes de cours, puis je compare avec les lectures conseillées par l'enseignante ; au semestre 108 j'ai gardé la même méthode parce qu'elle me fait gagner du temps et que je retrouve plus facilement mes sources.
+Enquêteur : Et pour les fiches de lecture, comment tu t'organises, au semestre 108 ?
+Enquêté : Alors les exposés, ça dépend des semaines. Au semestre 109 je m'y prenais tard, je relisais le cours la veille et je faisais un petit plan à la main, avec des couleurs, avant d'écrire au propre sur l'ordinateur.
+Enquêteur : Tu peux me raconter une fois récente pour les exposés, au semestre 109 ?
+Enquêté : Pour les révisions, je demande parfois à une amie de relire, on s'échange nos brouillons. Au semestre 110 on avait un groupe de travail à la bibliothèque le jeudi, on restait jusqu'à la fermeture.
+Enquêteur : Concrètement, pour les révisions, tu fais comment, au semestre 110 ?
+Enquêté : Pour les mails aux professeurs, je travaille d'abord avec mes notes de cours, puis je compare avec les lectures conseillées par l'enseignante ; au semestre 111 j'ai gardé la même méthode parce qu'elle me fait gagner du temps et que je retrouve plus facilement mes sources.
+Enquêteur : Et pour les mails aux professeurs, comment tu t'organises, au semestre 111 ?
+Enquêté : Euh… Alors les traductions, ça dépend des semaines. Au semestre 112 je m'y prenais tard, je relisais le cours la veille et je faisais un petit plan à la main, avec des couleurs, avant d'écrire au propre sur l'ordinateur.
+Enquêteur : Tu peux me raconter une fois récente pour les traductions, au semestre 112 ?
+Enquêté : Pour les exercices de statistiques, je demande parfois à une amie de relire, on s'échange nos brouillons. Au semestre 113 on avait un groupe de travail à la bibliothèque le jeudi, on restait jusqu'à la fermeture.
+Enquêteur : Concrètement, pour les exercices de statistiques, tu fais comment, au semestre 113 ?
+Enquêté : Pour les dossiers de groupe, je travaille d'abord avec mes notes de cours, puis je compare avec les lectures conseillées par l'enseignante ; au semestre 114 j'ai gardé la même méthode parce qu'elle me fait gagner du temps et que je retrouve plus facilement mes sources.
+Enquêteur : Et pour les dossiers de groupe, comment tu t'organises, au semestre 114 ?
+Enquêté : Alors la prise de notes, ça dépend des semaines. Au semestre 115 je m'y prenais tard, je relisais le cours la veille et je faisais un petit plan à la main, avec des couleurs, avant d'écrire au propre sur l'ordinateur.
+Enquêteur : Tu peux me raconter une fois récente pour la prise de notes, au semestre 115 ?
+Enquêté : Pour les recherches documentaires, je demande parfois à une amie de relire, on s'échange nos brouillons. Au semestre 116 on avait un groupe de travail à la bibliothèque le jeudi, on restait jusqu'à la fermeture.
+Enquêteur : Concrètement, pour les recherches documentaires, tu fais comment, au semestre 116 ?
+Enquêté : Pour le mémoire, je travaille d'abord avec mes notes de cours, puis je compare avec les lectures conseillées par l'enseignante ; au semestre 117 j'ai gardé la même méthode parce qu'elle me fait gagner du temps et que je retrouve plus facilement mes sources.
+Enquêteur : Et pour le mémoire, comment tu t'organises, au semestre 117 ?
+Enquêté : Alors les oraux, ça dépend des semaines. Au semestre 118 je m'y prenais tard, je relisais le cours la veille et je faisais un petit plan à la main, avec des couleurs, avant d'écrire au propre sur l'ordinateur.
+Enquêteur : Tu peux me raconter une fois récente pour les oraux, au semestre 118 ?
+Enquêté : Euh… Pour les comptes rendus, je demande parfois à une amie de relire, on s'échange nos brouillons. Au semestre 119 on avait un groupe de travail à la bibliothèque le jeudi, on restait jusqu'à la fermeture.
+Enquêteur : Concrètement, pour les comptes rendus, tu fais comment, au semestre 119 ?
+Enquêté : Pour les fiches de lecture, je travaille d'abord avec mes notes de cours, puis je compare avec les lectures conseillées par l'enseignante ; au semestre 120 j'ai gardé la même méthode parce qu'elle me fait gagner du temps et que je retrouve plus facilement mes sources.
+Enquêteur : Et pour les fiches de lecture, comment tu t'organises, au semestre 120 ?
+Enquêté : Alors les exposés, ça dépend des semaines. Au semestre 121 je m'y prenais tard, je relisais le cours la veille et je faisais un petit plan à la main, avec des couleurs, avant d'écrire au propre sur l'ordinateur.
+Enquêteur : Tu peux me raconter une fois récente pour les exposés, au semestre 121 ?
+Enquêté : Pour les révisions, je demande parfois à une amie de relire, on s'échange nos brouillons. Au semestre 122 on avait un groupe de travail à la bibliothèque le jeudi, on restait jusqu'à la fermeture.
+Enquêteur : Concrètement, pour les révisions, tu fais comment, au semestre 122 ?
+Enquêté : Pour les mails aux professeurs, je travaille d'abord avec mes notes de cours, puis je compare avec les lectures conseillées par l'enseignante ; au semestre 123 j'ai gardé la même méthode parce qu'elle me fait gagner du temps et que je retrouve plus facilement mes sources.
+Enquêteur : Et pour les mails aux professeurs, comment tu t'organises, au semestre 123 ?
+Enquêté : Alors les traductions, ça dépend des semaines. Au semestre 124 je m'y prenais tard, je relisais le cours la veille et je faisais un petit plan à la main, avec des couleurs, avant d'écrire au propre sur l'ordinateur.
+Enquêteur : Tu peux me raconter une fois récente pour les traductions, au semestre 124 ?
+Enquêté : Pour les exercices de statistiques, je demande parfois à une amie de relire, on s'échange nos brouillons. Au semestre 125 on avait un groupe de travail à la bibliothèque le jeudi, on restait jusqu'à la fermeture.
+Enquêteur : Concrètement, pour les exercices de statistiques, tu fais comment, au semestre 125 ?
+Enquêté : Euh… Pour les dossiers de groupe, je travaille d'abord avec mes notes de cours, puis je compare avec les lectures conseillées par l'enseignante ; au semestre 126 j'ai gardé la même méthode parce qu'elle me fait gagner du temps et que je retrouve plus facilement mes sources.
+Enquêteur : Et pour les dossiers de groupe, comment tu t'organises, au semestre 126 ?
+Enquêté : Alors la prise de notes, ça dépend des semaines. Au semestre 127 je m'y prenais tard, je relisais le cours la veille et je faisais un petit plan à la main, avec des couleurs, avant d'écrire au propre sur l'ordinateur.
+Enquêteur : Tu peux me raconter une fois récente pour la prise de notes, au semestre 127 ?
+Enquêté : Pour les recherches documentaires, je demande parfois à une amie de relire, on s'échange nos brouillons. Au semestre 128 on avait un groupe de travail à la bibliothèque le jeudi, on restait jusqu'à la fermeture.
+Enquêteur : Concrètement, pour les recherches documentaires, tu fais comment, au semestre 128 ?
+Enquêté : Pour le mémoire, je travaille d'abord avec mes notes de cours, puis je compare avec les lectures conseillées par l'enseignante ; au semestre 129 j'ai gardé la même méthode parce qu'elle me fait gagner du temps et que je retrouve plus facilement mes sources.
+Enquêteur : Et pour le mémoire, comment tu t'organises, au semestre 129 ?
+Enquêté : Alors les oraux, ça dépend des semaines. Au semestre 130 je m'y prenais tard, je relisais le cours la veille et je faisais un petit plan à la main, avec des couleurs, avant d'écrire au propre sur l'ordinateur.
+Enquêteur : Tu peux me raconter une fois récente pour les oraux, au semestre 130 ?
+Enquêté : Pour les comptes rendus, je demande parfois à une amie de relire, on s'échange nos brouillons. Au semestre 131 on avait un groupe de travail à la bibliothèque le jeudi, on restait jusqu'à la fermeture.
+Enquêteur : Concrètement, pour les comptes rendus, tu fais comment, au semestre 131 ?
+Enquêté : Pour les fiches de lecture, je travaille d'abord avec mes notes de cours, puis je compare avec les lectures conseillées par l'enseignante ; au semestre 132 j'ai gardé la même méthode parce qu'elle me fait gagner du temps et que je retrouve plus facilement mes sources.
+Enquêteur : Et pour les fiches de lecture, comment tu t'organises, au semestre 132 ?
+Enquêté : Euh… Alors les exposés, ça dépend des semaines. Au semestre 133 je m'y prenais tard, je relisais le cours la veille et je faisais un petit plan à la main, avec des couleurs, avant d'écrire au propre sur l'ordinateur.
+Enquêteur : Tu peux me raconter une fois récente pour les exposés, au semestre 133 ?
+Enquêté : Pour les révisions, je demande parfois à une amie de relire, on s'échange nos brouillons. Au semestre 134 on avait un groupe de travail à la bibliothèque le jeudi, on restait jusqu'à la fermeture.
+Enquêteur : Concrètement, pour les révisions, tu fais comment, au semestre 134 ?
+Enquêté : Pour les mails aux professeurs, je travaille d'abord avec mes notes de cours, puis je compare avec les lectures conseillées par l'enseignante ; au semestre 135 j'ai gardé la même méthode parce qu'elle me fait gagner du temps et que je retrouve plus facilement mes sources.
+Enquêteur : Et pour les mails aux professeurs, comment tu t'organises, au semestre 135 ?
+Enquêté : Alors les traductions, ça dépend des semaines. Au semestre 136 je m'y prenais tard, je relisais le cours la veille et je faisais un petit plan à la main, avec des couleurs, avant d'écrire au propre sur l'ordinateur.
+Enquêteur : Tu peux me raconter une fois récente pour les traductions, au semestre 136 ?
+Enquêté : Pour les exercices de statistiques, je demande parfois à une amie de relire, on s'échange nos brouillons. Au semestre 137 on avait un groupe de travail à la bibliothèque le jeudi, on restait jusqu'à la fermeture.
+Enquêteur : Concrètement, pour les exercices de statistiques, tu fais comment, au semestre 137 ?
+Enquêté : Pour les dossiers de groupe, je travaille d'abord avec mes notes de cours, puis je compare avec les lectures conseillées par l'enseignante ; au semestre 138 j'ai gardé la même méthode parce qu'elle me fait gagner du temps et que je retrouve plus facilement mes sources.
+Enquêteur : Et pour les dossiers de groupe, comment tu t'organises, au semestre 138 ?
+Enquêté : Alors la prise de notes, ça dépend des semaines. Au semestre 139 je m'y prenais tard, je relisais le cours la veille et je faisais un petit plan à la main, avec des couleurs, avant d'écrire au propre sur l'ordinateur.
+Enquêteur : Tu peux me raconter une fois récente pour la prise de notes, au semestre 139 ?
+Enquêté : Euh… Pour les recherches documentaires, je demande parfois à une amie de relire, on s'échange nos brouillons. Au semestre 140 on avait un groupe de travail à la bibliothèque le jeudi, on restait jusqu'à la fermeture.
+Enquêteur : Concrètement, pour les recherches documentaires, tu fais comment, au semestre 140 ?
+Enquêté : Pour le mémoire, je travaille d'abord avec mes notes de cours, puis je compare avec les lectures conseillées par l'enseignante ; au semestre 141 j'ai gardé la même méthode parce qu'elle me fait gagner du temps et que je retrouve plus facilement mes sources.
+Enquêteur : Et pour le mémoire, comment tu t'organises, au semestre 141 ?
+Enquêté : Alors les oraux, ça dépend des semaines. Au semestre 142 je m'y prenais tard, je relisais le cours la veille et je faisais un petit plan à la main, avec des couleurs, avant d'écrire au propre sur l'ordinateur.
+Enquêteur : Tu peux me raconter une fois récente pour les oraux, au semestre 142 ?
+Enquêté : Pour les comptes rendus, je demande parfois à une amie de relire, on s'échange nos brouillons. Au semestre 143 on avait un groupe de travail à la bibliothèque le jeudi, on restait jusqu'à la fermeture.
+Enquêteur : Concrètement, pour les comptes rendus, tu fais comment, au semestre 143 ?
+Enquêté : Pour les fiches de lecture, je travaille d'abord avec mes notes de cours, puis je compare avec les lectures conseillées par l'enseignante ; au semestre 144 j'ai gardé la même méthode parce qu'elle me fait gagner du temps et que je retrouve plus facilement mes sources.
+Enquêteur : Et pour les fiches de lecture, comment tu t'organises, au semestre 144 ?
+Enquêté : Alors les exposés, ça dépend des semaines. Au semestre 145 je m'y prenais tard, je relisais le cours la veille et je faisais un petit plan à la main, avec des couleurs, avant d'écrire au propre sur l'ordinateur.
+Enquêteur : Tu peux me raconter une fois récente pour les exposés, au semestre 145 ?
+Enquêté : Pour les révisions, je demande parfois à une amie de relire, on s'échange nos brouillons. Au semestre 146 on avait un groupe de travail à la bibliothèque le jeudi, on restait jusqu'à la fermeture.
+Enquêteur : Concrètement, pour les révisions, tu fais comment, au semestre 146 ?
+Enquêté : Euh… Pour les mails aux professeurs, je travaille d'abord avec mes notes de cours, puis je compare avec les lectures conseillées par l'enseignante ; au semestre 147 j'ai gardé la même méthode parce qu'elle me fait gagner du temps et que je retrouve plus facilement mes sources.
+Enquêteur : Et pour les mails aux professeurs, comment tu t'organises, au semestre 147 ?
+Enquêté : Alors les traductions, ça dépend des semaines. Au semestre 148 je m'y prenais tard, je relisais le cours la veille et je faisais un petit plan à la main, avec des couleurs, avant d'écrire au propre sur l'ordinateur.
+Enquêteur : Tu peux me raconter une fois récente pour les traductions, au semestre 148 ?
+Enquêté : Pour les exercices de statistiques, je demande parfois à une amie de relire, on s'échange nos brouillons. Au semestre 149 on avait un groupe de travail à la bibliothèque le jeudi, on restait jusqu'à la fermeture.
+Enquêteur : Concrètement, pour les exercices de statistiques, tu fais comment, au semestre 149 ?
+Enquêté : Pour les dossiers de groupe, je travaille d'abord avec mes notes de cours, puis je compare avec les lectures conseillées par l'enseignante ; au semestre 150 j'ai gardé la même méthode parce qu'elle me fait gagner du temps et que je retrouve plus facilement mes sources.
+Enquêteur : Et pour les dossiers de groupe, comment tu t'organises, au semestre 150 ?
+Enquêté : Alors la prise de notes, ça dépend des semaines. Au semestre 151 je m'y prenais tard, je relisais le cours la veille et je faisais un petit plan à la main, avec des couleurs, avant d'écrire au propre sur l'ordinateur.
+Enquêteur : Tu peux me raconter une fois récente pour la prise de notes, au semestre 151 ?
+Enquêté : Pour les recherches documentaires, je demande parfois à une amie de relire, on s'échange nos brouillons. Au semestre 152 on avait un groupe de travail à la bibliothèque le jeudi, on restait jusqu'à la fermeture.
+Enquêteur : Concrètement, pour les recherches documentaires, tu fais comment, au semestre 152 ?
+Enquêté : Pour le mémoire, je travaille d'abord avec mes notes de cours, puis je compare avec les lectures conseillées par l'enseignante ; au semestre 153 j'ai gardé la même méthode parce qu'elle me fait gagner du temps et que je retrouve plus facilement mes sources.
+Enquêteur : Et pour le mémoire, comment tu t'organises, au semestre 153 ?
+Enquêté : Euh… Alors les oraux, ça dépend des semaines. Au semestre 154 je m'y prenais tard, je relisais le cours la veille et je faisais un petit plan à la main, avec des couleurs, avant d'écrire au propre sur l'ordinateur.
+Enquêteur : Tu peux me raconter une fois récente pour les oraux, au semestre 154 ?
+Enquêté : Pour les comptes rendus, je demande parfois à une amie de relire, on s'échange nos brouillons. Au semestre 155 on avait un groupe de travail à la bibliothèque le jeudi, on restait jusqu'à la fermeture.
+Enquêteur : Concrètement, pour les comptes rendus, tu fais comment, au semestre 155 ?
+Enquêté : Pour les fiches de lecture, je travaille d'abord avec mes notes de cours, puis je compare avec les lectures conseillées par l'enseignante ; au semestre 156 j'ai gardé la même méthode parce qu'elle me fait gagner du temps et que je retrouve plus facilement mes sources.
+Enquêteur : Et pour les fiches de lecture, comment tu t'organises, au semestre 156 ?
+Enquêté : Alors les exposés, ça dépend des semaines. Au semestre 157 je m'y prenais tard, je relisais le cours la veille et je faisais un petit plan à la main, avec des couleurs, avant d'écrire au propre sur l'ordinateur.
+Enquêteur : Tu peux me raconter une fois récente pour les exposés, au semestre 157 ?
+Enquêté : Pour les révisions, je demande parfois à une amie de relire, on s'échange nos brouillons. Au semestre 158 on avait un groupe de travail à la bibliothèque le jeudi, on restait jusqu'à la fermeture.
+Enquêteur : Concrètement, pour les révisions, tu fais comment, au semestre 158 ?
+Enquêté : Pour les mails aux professeurs, je travaille d'abord avec mes notes de cours, puis je compare avec les lectures conseillées par l'enseignante ; au semestre 159 j'ai gardé la même méthode parce qu'elle me fait gagner du temps et que je retrouve plus facilement mes sources.
+Enquêteur : Et pour les mails aux professeurs, comment tu t'organises, au semestre 159 ?
+Enquêté : Alors les traductions, ça dépend des semaines. Au semestre 160 je m'y prenais tard, je relisais le cours la veille et je faisais un petit plan à la main, avec des couleurs, avant d'écrire au propre sur l'ordinateur.
+Enquêteur : Tu peux me raconter une fois récente pour les traductions, au semestre 160 ?
+Enquêté : Euh… Pour les exercices de statistiques, je demande parfois à une amie de relire, on s'échange nos brouillons. Au semestre 161 on avait un groupe de travail à la bibliothèque le jeudi, on restait jusqu'à la fermeture.
+Enquêteur : Concrètement, pour les exercices de statistiques, tu fais comment, au semestre 161 ?
+Enquêté : Pour les dossiers de groupe, je travaille d'abord avec mes notes de cours, puis je compare avec les lectures conseillées par l'enseignante ; au semestre 162 j'ai gardé la même méthode parce qu'elle me fait gagner du temps et que je retrouve plus facilement mes sources.
+Enquêteur : Et pour les dossiers de groupe, comment tu t'organises, au semestre 162 ?
+Enquêté : Alors la prise de notes, ça dépend des semaines. Au semestre 163 je m'y prenais tard, je relisais le cours la veille et je faisais un petit plan à la main, avec des couleurs, avant d'écrire au propre sur l'ordinateur.
+Enquêteur : Tu peux me raconter une fois récente pour la prise de notes, au semestre 163 ?
+Enquêté : Pour les recherches documentaires, je demande parfois à une amie de relire, on s'échange nos brouillons. Au semestre 164 on avait un groupe de travail à la bibliothèque le jeudi, on restait jusqu'à la fermeture.
+Enquêteur : Concrètement, pour les recherches documentaires, tu fais comment, au semestre 164 ?
+Enquêté : Pour les dissertations, ChatGPT rédige souvent mes introductions, et après je reprends le reste.
+Enquêteur : Et pour le mémoire, comment tu t'organises, au semestre 165 ?
+Enquêté : Alors les oraux, ça dépend des semaines. Au semestre 166 je m'y prenais tard, je relisais le cours la veille et je faisais un petit plan à la main, avec des couleurs, avant d'écrire au propre sur l'ordinateur.
+Enquêteur : Tu peux me raconter une fois récente pour les oraux, au semestre 166 ?
+Enquêté : Pour les comptes rendus, je demande parfois à une amie de relire, on s'échange nos brouillons. Au semestre 167 on avait un groupe de travail à la bibliothèque le jeudi, on restait jusqu'à la fermeture.
+Enquêteur : Concrètement, pour les comptes rendus, tu fais comment, au semestre 167 ?
+Enquêté : Euh… Pour les fiches de lecture, je travaille d'abord avec mes notes de cours, puis je compare avec les lectures conseillées par l'enseignante ; au semestre 168 j'ai gardé la même méthode parce qu'elle me fait gagner du temps et que je retrouve plus facilement mes sources.
+Enquêteur : Et pour les fiches de lecture, comment tu t'organises, au semestre 168 ?
+Enquêté : Alors les exposés, ça dépend des semaines. Au semestre 169 je m'y prenais tard, je relisais le cours la veille et je faisais un petit plan à la main, avec des couleurs, avant d'écrire au propre sur l'ordinateur.
+Enquêteur : Tu peux me raconter une fois récente pour les exposés, au semestre 169 ?
+Enquêté : Pour les révisions, je demande parfois à une amie de relire, on s'échange nos brouillons. Au semestre 170 on avait un groupe de travail à la bibliothèque le jeudi, on restait jusqu'à la fermeture.
+Enquêteur : Concrètement, pour les révisions, tu fais comment, au semestre 170 ?
+Enquêté : Pour les mails aux professeurs, je travaille d'abord avec mes notes de cours, puis je compare avec les lectures conseillées par l'enseignante ; au semestre 171 j'ai gardé la même méthode parce qu'elle me fait gagner du temps et que je retrouve plus facilement mes sources.
+Enquêteur : Et pour les mails aux professeurs, comment tu t'organises, au semestre 171 ?
+Enquêté : Alors les traductions, ça dépend des semaines. Au semestre 172 je m'y prenais tard, je relisais le cours la veille et je faisais un petit plan à la main, avec des couleurs, avant d'écrire au propre sur l'ordinateur.
+Enquêteur : Tu peux me raconter une fois récente pour les traductions, au semestre 172 ?
+Enquêté : Pour les exercices de statistiques, je demande parfois à une amie de relire, on s'échange nos brouillons. Au semestre 173 on avait un groupe de travail à la bibliothèque le jeudi, on restait jusqu'à la fermeture.
+Enquêteur : Concrètement, pour les exercices de statistiques, tu fais comment, au semestre 173 ?
+Enquêté : Pour les dossiers de groupe, je travaille d'abord avec mes notes de cours, puis je compare avec les lectures conseillées par l'enseignante ; au semestre 174 j'ai gardé la même méthode parce qu'elle me fait gagner du temps et que je retrouve plus facilement mes sources.
+Enquêteur : Et pour les dossiers de groupe, comment tu t'organises, au semestre 174 ?

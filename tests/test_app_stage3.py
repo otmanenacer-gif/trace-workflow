@@ -37,14 +37,14 @@ def test_app_starts_without_api_key():
     assert not at.exception
     assert "désactivée" not in texts(at.markdown) and "ANTHROPIC" not in texts(at.markdown) + texts(at.warning)
     assert texts(at.markdown).count("prête, exécution locale (Ollama)") == 5  # étapes 2 à 6 du pipeline
-    assert ("**Exécution :** locale · **Runtime :** Ollama · **Modèle :** `qwen2.5:14b` · **Données externes :** "
+    assert ("**Exécution :** locale · **Runtime :** Ollama · **Modèle :** `qwen2.5:7b` · **Données externes :** "
             "aucune") in texts(at.markdown)
     assert "Ollama ne répond pas" in texts(at.error)  # aucun vrai Ollama pendant les tests : état affiché clairement
 
 
 def test_runtime_panel_shows_a_ready_local_ollama(fake_agents):
     at = AppTest.from_file(APP, default_timeout=30).run()
-    assert not at.exception and "modèle `qwen2.5:14b` installé" in texts(at.success)
+    assert not at.exception and "modèle `qwen2.5:7b` installé" in texts(at.success)
     assert "aucune donnée envoyée hors de cet ordinateur" in texts(at.success)
 
 
@@ -52,7 +52,7 @@ def test_missing_model_is_shown_with_the_install_command(monkeypatch):
     from tests.fake_llm import use_fake_runtime as fake
     fake(monkeypatch, {}, models=["llama3.2:3b"])
     at = AppTest.from_file(APP, default_timeout=30).run()
-    assert not at.exception and "`ollama pull qwen2.5:14b`" in texts(at.error)
+    assert not at.exception and "`ollama pull qwen2.5:7b`" in texts(at.error)
 
 
 def test_running_a_stage_with_ollama_stopped_shows_a_clear_error(tmp_path, monkeypatch):
@@ -78,7 +78,7 @@ def test_test_mode_runs_both_agents_and_shows_results(tmp_path, fake_agents):
     at.button(key="run_stage3").click().run()
     assert not at.exception
     assert sorted(c["agent"] for c in fake_agents.calls) == [INTERACTION, PRACTICE]
-    assert "Étape 3 terminée (exécution locale, modèle qwen2.5:14b, 0 appel API)." in texts(at.success)
+    assert "Étape 3 terminée (exécution locale, modèle qwen2.5:7b, 0 appel API)." in texts(at.success)
     table = at.table[-1].value
     assert list(table["Practice Extractor"]) == ["✅ SUCCESS"] and list(table["Interaction Reader"]) == ["✅ SUCCESS"]
     assert list(table["Pratiques"]) == [6] and list(table["Signaux"]) == [10]
@@ -92,7 +92,7 @@ def test_test_mode_runs_both_agents_and_shows_results(tmp_path, fake_agents):
     # Second clic : l'étape est complète et à jour, elle n'est pas rejouée
     at.button(key="run_stage3").click().run()
     assert not at.exception and len(fake_agents.calls) == 2
-    assert "Étape 3 terminée (exécution locale, modèle qwen2.5:14b, 0 appel API)." in texts(at.success)
+    assert "Étape 3 terminée (exécution locale, modèle qwen2.5:7b, 0 appel API)." in texts(at.success)
     assert list(at.table[-1].value["Practice Extractor"]) == ["✅ SUCCESS"]
 
 

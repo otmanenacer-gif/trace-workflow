@@ -11,6 +11,8 @@ servi par Ollama (voir `docs/local_runtime.md`).
   Ollama uniquement sur la boucle locale. N'en ajouter aucun.
 - Les prompts `prompts/*.md`, les schémas (`agents/`) et les validateurs (`core/`) font foi : ne jamais les modifier
   pour faire passer une réponse ; aucune règle méthodologique ne se modifie sans demande explicite.
+- Exécution depuis Streamlit : en arrière-plan (`core/local_jobs.py`, processus détaché, `job.json`) ; reprise par le
+  cache TRACE (chaque réponse validée est enregistrée immédiatement). Mesures : `scripts/trace_benchmark.py`.
 - Tests : `python -m pytest` (aucun modèle réel, aucun réseau : faux Ollama derrière le vrai runner local).
 - Test navigateur (à la main) : `python tests/e2e/browser_check.py` (Playwright + Chromium).
 - Pas d'étape 7 sans demande explicite.

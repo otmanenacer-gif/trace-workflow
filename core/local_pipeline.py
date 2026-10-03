@@ -161,8 +161,37 @@ def stage_dir(metadata: dict, stage: str) -> Path:
 
 # --- Une étape d'un run ----------------------------------------------------------------------------------
 
-def _execute(stage: str, metadata: dict, ids: list[str], runner, settings: LLMSettings, force: bool) -> dict:
-    cache = AnalysisCache()
+class ReportingCache(AnalysisCache):
+    """Cache TRACE habituel qui signale à la progression chaque résultat validé repris (aucun appel au modèle) et
+    chaque réponse validée enregistrée."""
+
+    def __init__(self, on_event, root: Path | None = None):
+        super().__init__(root)
+        self.on_event = on_event
+
+    def load(self, key_fields: dict, output_model):
+        entry = super().load(key_fields, output_model)
+        if entry is not None and self.on_event is not None:
+            self.on_event({"type": "cached", "agent": key_fields["agent"], "cache_key": entry.get("cache_key"),
+                           "at": time.time()})
+        return entry
+
+    def store(self, key_fields: dict, output: dict, call: dict) -> Path:
+        path = super().store(key_fields, output, call)
+        if self.on_event is not None:  # réponse validée enregistrée : elle ne sera jamais recalculée
+            self.on_event({"type": "stored", "request_id": (call or {}).get("request_id"),
+                           "agent": key_fields["agent"], "at": time.time()})
+        return path
+
+
+def _attach_progress(runner, progress) -> None:
+    if progress is not None and hasattr(runner, "on_event"):
+        runner.on_event = progress
+
+
+def _execute(stage: str, metadata: dict, ids: list[str], runner, settings: LLMSettings, force: bool,
+             progress=None) -> dict:
+    cache = ReportingCache(progress) if progress is not None else AnalysisCache()
     if stage == "3":
         return analysis.analyze_run(metadata, ids, settings=settings, cache=cache, force=force, client=runner)
     if stage == "4":
@@ -172,12 +201,13 @@ def _execute(stage: str, metadata: dict, ids: list[str], runner, settings: LLMSe
 
 
 def run_stage(stage: str, metadata: dict, interview_ids: list[str] | None = None, *,
-              settings: LLMSettings | None = None, force: bool = False, runner=None) -> dict:
+              settings: LLMSettings | None = None, force: bool = False, runner=None, progress=None) -> dict:
     """Exécute UNE étape (« 3 », « 4 » ou « 5 ») avec le modèle local. Renvoie {"metadata", "status"}.
 
     Seulement pour les entretiens dont l'étape n'est pas déjà complète et à jour (garde), sauf `force=True`.
     Lève LLMError (OLLAMA_UNAVAILABLE, MODEL_NOT_FOUND, NON_LOCAL_URL) avant toute écriture si le runtime local
-    n'est pas prêt ; aucun repli.
+    n'est pas prêt ; aucun repli. `progress(event)` : progression (core/local_jobs.py) — début d'étape, appels,
+    tokens générés, résultats repris du cache.
     """
     if stage not in STAGES:
         raise ValueError(f"Étape inconnue : {stage} (étapes d'un run : {', '.join(STAGES)}).")
@@ -193,7 +223,11 @@ def run_stage(stage: str, metadata: dict, interview_ids: list[str] | None = None
             checker = MethodChecker({f["ingestion"]["interview_id"]: f["ingestion"]["output_dir"] for f in todo})
             runner = make_runner(settings, journal_dir=stage_dir(metadata, stage), checker=checker)
         runner.require_ready()  # Ollama absent ou modèle absent : erreur claire, rien n'est écrit
-        metadata = _execute(stage, metadata, todo_ids, runner, settings, force)
+        _attach_progress(runner, progress)
+        if progress is not None:
+            progress({"type": "stage_started", "stage": stage, "interview_ids": todo_ids, "metadata": metadata,
+                      "settings": settings, "force": force, "at": time.time()})
+        metadata = _execute(stage, metadata, todo_ids, runner, settings, force, progress)
         records = runner.records
     status = _status(metadata, stage, todo_ids, skipped, records, settings, round(time.monotonic() - started, 1))
     if todo or (metadata.get(f"stage{stage}_local") or {}).get("status") not in (None, STAGE_COMPLETE):
@@ -217,14 +251,14 @@ def run_stage5(metadata: dict, interview_ids: list[str] | None = None, **kwargs)
 
 
 def run_until(metadata: dict, until: str, interview_ids: list[str] | None = None, *,
-              settings: LLMSettings | None = None, runner=None) -> dict:
+              settings: LLMSettings | None = None, runner=None, progress=None) -> dict:
     """Étapes 3 → `until` (« 3 », « 4 » ou « 5 ») avec la garde ; s'arrête à la première étape non terminée.
     Renvoie {"metadata", "status", "stage"}."""
     if until not in STAGES:
         raise ValueError(f"Étape inconnue : {until} (étapes d'un run : {', '.join(STAGES)}).")
     settings = settings or runtime_settings()
     for stage in STAGES[:STAGES.index(until) + 1]:
-        result = run_stage(stage, metadata, interview_ids, settings=settings, runner=runner)
+        result = run_stage(stage, metadata, interview_ids, settings=settings, runner=runner, progress=progress)
         metadata = result["metadata"]
         if result["status"]["status"] != STAGE_COMPLETE:
             return {**result, "stage": stage}
@@ -352,7 +386,7 @@ def stage6_state(prepared, corpus_dir: Path) -> dict:
 
 
 def run_stage6(uploads: list[tuple[str, bytes]], *, settings: LLMSettings | None = None, base_dir: Path | None = None,
-               force: bool = False, runner=None) -> dict:
+               force: bool = False, runner=None, progress=None) -> dict:
     """Étape 6 sur les triplets de l'étape 5 importés, avec le modèle local.
 
     Contrôle du corpus et préparation habituels, UN appel du Cross-Interview Comparator, validation et sorties
@@ -373,7 +407,12 @@ def run_stage6(uploads: list[tuple[str, bytes]], *, settings: LLMSettings | None
         runner = make_runner(settings, journal_dir=corpus_runs_dir(corpus_dir), checker=MethodChecker(corpus=prepared))
     if not prepared.blocked:
         runner.require_ready()  # Ollama absent ou modèle absent : erreur claire, rien n'est écrit
-    manifest = cross_interview.run_stage6(uploads, settings=settings, cache=AnalysisCache(), base_dir=base_dir,
+    _attach_progress(runner, progress)
+    if progress is not None:
+        progress({"type": "stage_started", "stage": CORPUS_STAGE, "corpus_id": prepared.corpus_id,
+                  "prepared": prepared, "settings": settings, "force": force, "at": time.time()})
+    cache = ReportingCache(progress) if progress is not None else AnalysisCache()
+    manifest = cross_interview.run_stage6(uploads, settings=settings, cache=cache, base_dir=base_dir,
                                           force=force, client=runner)
     status = _corpus_status(prepared, corpus_dir, runner.records, manifest, settings,
                             round(time.monotonic() - started, 1))

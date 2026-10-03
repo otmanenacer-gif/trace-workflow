@@ -4,7 +4,8 @@
 - le fichier .env local n'est jamais chargé ;
 - toute connexion réseau TCP (IPv4 / IPv6), y compris vers la boucle locale (donc vers un vrai Ollama), est
   refusée immédiatement ;
-- le cache d'analyse et les sorties de l'étape 6 pointent vers des dossiers temporaires.
+- le cache d'analyse et les sorties de l'étape 6 pointent vers des dossiers temporaires ;
+- les exécutions « en arrière-plan » (core/local_jobs.py) s'exécutent dans le processus du test (TRACE_JOB_MODE=inline).
 
 Les agents sont simulés : faux Ollama derrière le vrai LocalAgentRunner (tests/fake_llm.FakeLocalAgentRunner,
 use_fake_runtime) ou double minimal des orchestrateurs (FakeAgents). Aucun modèle réel, aucun SDK, aucune clé.
@@ -38,5 +39,7 @@ def no_network(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "load_env_file", lambda path=None: [])
     monkeypatch.setattr(config, "CACHE_DIR", tmp_path / "analysis_cache")
     monkeypatch.setattr(config, "CROSS_INTERVIEW_DIR", tmp_path / "cross_interview")
+    # exécution en arrière-plan (core/local_jobs.py) : dans le processus du test, jusqu'au bout, avec le faux Ollama
+    monkeypatch.setenv("TRACE_JOB_MODE", "inline")
     monkeypatch.setattr(socket.socket, "connect", _guard(_real_connect))
     monkeypatch.setattr(socket.socket, "connect_ex", _guard(_real_connect_ex))

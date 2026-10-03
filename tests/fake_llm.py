@@ -162,7 +162,7 @@ class FakeOllama:
         self._check()
         return list(self.installed)
 
-    def chat(self, payload: dict) -> dict:
+    def chat(self, payload: dict, on_progress=None) -> dict:
         self._check()
         if not model_installed(payload["model"], self.installed):
             raise LLMError("MODEL_NOT_FOUND", payload["model"])
@@ -186,9 +186,16 @@ class FakeOllama:
             text = result.text
         else:
             text = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False)
+        eval_count = len(text) // 4
+        if on_progress is not None:
+            on_progress(eval_count)
+        # mêmes métriques qu'Ollama (durées en nanosecondes) : 1 000 tokens/s en lecture, 50 tokens/s en génération
+        prompt_eval_count = len(messages[1]["content"]) // 4
         return {"model": payload["model"], "message": {"role": "assistant", "content": text}, "done": True,
-                "done_reason": done_reason, "prompt_eval_count": len(messages[1]["content"]) // 4,
-                "eval_count": len(text) // 4}
+                "done_reason": done_reason, "prompt_eval_count": prompt_eval_count,
+                "prompt_eval_duration": prompt_eval_count * 1_000_000, "eval_count": eval_count,
+                "eval_duration": eval_count * 20_000_000, "load_duration": 1_000_000,
+                "total_duration": prompt_eval_count * 1_000_000 + eval_count * 20_000_000}
 
     def calls_for(self, agent: str) -> list[dict]:
         return [c for c in self.calls if c["agent"] == agent]

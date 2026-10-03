@@ -38,3 +38,6 @@ tmp/
 Thumbs.db
 .idea/
 .vscode/
+
+# Résultats des benchmarks locaux (mesures propres à chaque machine)
+benchmarks/results/

@@ -354,12 +354,12 @@ Chaque exécution écrit un manifest par agent (`practice_manifest.json`,
 {
   "agent": "practice_extractor", "agent_version": "1.2", "schema_version": "1.2",
   "prompt_sha256": "…", "schema_sha256": "…", "source_sha256": "…", "transcript_sha256": "…",
-  "model": "qwen2.5:14b", "request_params": {"effort": null, "temperature": 0.0},
+  "model": "qwen2.5:7b", "request_params": {"effort": null, "temperature": 0.0},
   "cache_key": "…", "cache_hit": false, "status": "SUCCESS",
   "created_at": "…", "run_at": "…", "api_calls": 0, "billed_this_run": false,
   "usage": {"input_tokens": 9120, "output_tokens": 1830,
             "cache_creation_input_tokens": null, "cache_read_input_tokens": null},
-  "duration_seconds": 84.2, "response_model": "qwen2.5:14b", "request_id": "<identifiant de l'appel local>",
+  "duration_seconds": 84.2, "response_model": "qwen2.5:7b", "request_id": "<identifiant de l'appel local>",
   "stop_reason": "stop", "speaker_warning_count": 0,
   "item_count": 6, "invalid_evidence_count": 0, "needs_review_count": 1, "error": null
 }
@@ -390,7 +390,7 @@ Voir [`local_runtime.md`](local_runtime.md).
 
 ## 11. Configuration et première exécution
 
-1. Installer Ollama et le modèle (`ollama pull qwen2.5:14b`) ; aucune clé. Réglages facultatifs : voir
+1. Installer Ollama et le modèle (`ollama pull qwen2.5:7b`) ; aucune clé. Réglages facultatifs : voir
    [`local_runtime.md`](local_runtime.md).
 2. `streamlit run app.py` : importer un entretien, lancer l'ingestion, choisir « Test — un entretien » et cliquer
    sur « Exécuter l'étape 3 (local, Ollama) ». Ou : `python scripts/trace_local.py run <run> --until 3`.

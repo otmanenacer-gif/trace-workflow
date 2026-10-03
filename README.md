@@ -61,7 +61,7 @@ cp .env.example .env             # facultatif : modèle, réglages d'Ollama, tai
 variable obligatoire. Puis, une fois : installer [Ollama](https://ollama.com/download) et le modèle recommandé :
 
 ```bash
-ollama pull qwen2.5:14b
+ollama pull qwen2.5:7b
 ```
 
 ## Étapes 3 à 6 en local (Ollama)
@@ -70,7 +70,10 @@ Détails : [`docs/local_runtime.md`](docs/local_runtime.md). Dans Streamlit, cha
 3 », « Étape 4 », « Étape 5 », « Étape 6 ») a un bouton « Exécuter l'étape N (local, Ollama) » : TRACE prépare
 le matériau, appelle le modèle local pour chaque agent (prompt `prompts/*.md`, JSON Schema strict), valide la
 réponse (Pydantic puis validateur de l'étape ; corrections locales si besoin), enregistre les sorties habituelles
-et les affiche. L'en-tête rappelle « Exécution : locale · Runtime : Ollama · Modèle : … · Données externes :
+et les affiche. L'étape s'exécute **en arrière-plan** (processus indépendant de la page) : la page affiche l'agent en
+cours, le temps écoulé et la liste des appels ; elle peut être rafraîchie ou fermée, et une exécution interrompue
+reprend au premier appel non terminé (chaque réponse validée est enregistrée immédiatement, jamais recalculée).
+Mesures et benchmark : `python scripts/trace_benchmark.py plan|run`. L'en-tête rappelle « Exécution : locale · Runtime : Ollama · Modèle : … · Données externes :
 aucune » et l'état d'Ollama. Sans interface :
 
 ```bash
@@ -107,6 +110,8 @@ python -m pytest tests/test_llm_client.py             # réponses d'agent : JSON
 python -m pytest tests/test_local_agent_runner.py     # runner local : Ollama, sortie structurée, corrections, erreurs
 python -m pytest tests/test_local_pipeline.py         # étapes 3 à 6 en local : gardes, restaurations, mêmes sorties
 python -m pytest tests/test_local_cli.py              # CLI locale
+python -m pytest tests/test_local_performance.py      # fenêtre de contexte par appel, mesures, corrections, ordre
+python -m pytest tests/test_local_jobs.py             # arrière-plan : processus détaché, refresh, reprise sans recalcul
 python -m pytest tests/test_evidence_validator.py     # validation des citations
 python -m pytest tests/test_analysis_cache.py         # cache des analyses
 python -m pytest tests/test_analysis_pipeline.py      # indépendance, agents en parallèle, échecs isolés
@@ -335,7 +340,7 @@ pour l'audit des locuteurs, [`docs/speaker_attribution_audit.md`](docs/speaker_a
 - **Coût** : aucun — exécution locale, 0 appel API. Les champs `api_calls` et `billed_this_run` des manifests
   sont conservés pour la compatibilité des formats et valent toujours 0 / `false` ; `usage` donne les tokens
   traités par le modèle local.
-- **Configuration** : aucune variable obligatoire ; `TRACE_LOCAL_MODEL` (défaut `qwen2.5:14b`), `TRACE_OLLAMA_URL`
+- **Configuration** : aucune variable obligatoire ; `TRACE_LOCAL_MODEL` (défaut `qwen2.5:7b`), `TRACE_OLLAMA_URL`
   (défaut `http://localhost:11434`, boucle locale uniquement), voir `docs/local_runtime.md` ; `TRACE_INTERACTION_CHUNK_TOKENS` (défaut 5 000) et
   `TRACE_PRACTICE_CHUNK_TOKENS` (défaut 4 000) fixent la taille d'un bloc de chaque agent.
 
@@ -477,7 +482,9 @@ core/ingestion_validator.py    contrôle de couverture, statistiques, rapport de
 core/ingestion.py              orchestration par fichier et par run
 core/llm_client.py             réponse d'un agent : JSON validé par Pydantic, erreurs (AWAITING_AGENT…), paramètres
 core/local_pipeline.py         étapes 3 à 6 en local : gardes, enchaînement 3 → 5, corpus de l'étape 6, bilans
-core/local_agent_runner.py     LocalAgentRunner : Ollama local, JSON Schema, Pydantic, corrections locales, journal
+core/local_agent_runner.py     LocalAgentRunner : Ollama local, JSON Schema, Pydantic, corrections locales, journal,
+                               fenêtre de contexte par appel, mesures de chaque tentative
+core/local_jobs.py             exécution en arrière-plan (processus détaché, job.json, battement), reprise
 core/agent_checks.py           contrôle méthodologique d'une réponse (validateurs existants) avant correction
 core/analysis.py               étape 3 : deux agents en parallèle, sorties, manifests, statuts
 core/analysis_cache.py         cache déterministe des analyses

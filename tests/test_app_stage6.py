@@ -59,7 +59,7 @@ def test_two_interviews_exploratory_then_no_replay(fake_agents):
     assert "comparaison sera marquée EXPLORATOIRE" in texts(at.warning)
     at.button(key="run_stage6").click().run()
     assert not at.exception and len(fake_agents.calls) == 1
-    assert "Étape 6 terminée (exécution locale, modèle qwen2.5:14b, 0 appel API)." in texts(at.success)
+    assert "Étape 6 terminée (exécution locale, modèle qwen2.5:7b, 0 appel API)." in texts(at.success)
     assert "Dernière exécution (étape 6) :** 0 appel(s) API" in texts(at.markdown)
     assert "Comparaison EXPLORATOIRE" in texts(at.warning)
     labels = [b.label for b in at.get("download_button")]

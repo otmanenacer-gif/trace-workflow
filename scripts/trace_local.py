@@ -7,9 +7,14 @@
     python scripts/trace_local.py stage6 SOURCE [SOURCE ...]       # étape 6 sur les sorties de l'étape 5 (runs,
                                                                    # dossiers de JSON ou fichiers JSON)
     python scripts/trace_local.py status RUN                       # état du run
+    python scripts/trace_local.py job start RUN --until 5          # mêmes étapes EN ARRIÈRE-PLAN (processus détaché :
+                                                                   # fermer le terminal ou Streamlit n'arrête rien)
+    python scripts/trace_local.py job status RUN                   # progression : agent en cours, appels validés
+    python scripts/trace_local.py job stop RUN                     # arrêt (résultats validés conservés ; relancer
+                                                                   # `job start` reprend au premier appel non terminé)
 
 RUN : identifiant du run (dossier data/outputs/<RUN>), chemin de son dossier, ou « latest ».
-Modèle : TRACE_LOCAL_MODEL (défaut qwen2.5:14b) ; adresse : TRACE_OLLAMA_URL (défaut http://localhost:11434,
+Modèle : TRACE_LOCAL_MODEL (défaut qwen2.5:7b) ; adresse : TRACE_OLLAMA_URL (défaut http://localhost:11434,
 boucle locale uniquement). Aucune clé, aucune API externe, aucun repli.
 Codes de sortie de `run` et `stage6` : 0 étape terminée, 5 échec ou analyse incomplète, 6 étape bloquée (étape
 précédente en échec, absente ou périmée ; moins de deux entretiens exploitables), 7 runtime local indisponible
@@ -20,7 +25,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -29,6 +36,7 @@ if str(ROOT) not in sys.path:
 
 from core import config  # noqa: E402
 from core import cross_interview_corpus as corpus  # noqa: E402
+from core import local_jobs  # noqa: E402
 from core import local_pipeline as lp  # noqa: E402
 from core.ingestion import ingest_run  # noqa: E402
 from core.llm_client import LLMError  # noqa: E402
@@ -189,6 +197,49 @@ def cmd_status(args) -> int:
     return 0
 
 
+def print_job(job: dict | None) -> None:
+    if not job:
+        print("Aucune exécution en arrière-plan pour ce run.")
+        return
+    print(f"Exécution {job['job_id']} — étape {job.get('stage')} — {local_jobs.JOB_LABELS.get(job['state'], job['state'])}"
+          f" — {job['elapsed_seconds']} s" + (f" — {job['message']}" if job.get("message") else ""))
+    current = job.get("current")
+    if current and job["alive"]:
+        print(f"  en cours : {current['agent_label']} ({current['label']}), tentative {current['attempt']}, "
+              f"{current.get('elapsed_seconds')} s, {current.get('output_tokens') or 0} tokens générés, contexte "
+              f"{current.get('num_ctx')}")
+    for item in job.get("checklist") or []:
+        details = f" — {item['duration_seconds']} s" if item.get("duration_seconds") is not None else ""
+        print(f"  {local_jobs.ITEM_ICONS[item['status']]} {item['agent_label']} — {item['interview_id']} "
+              f"({local_jobs.ITEM_LABELS[item['status']]}){details}")
+
+
+def cmd_job(args) -> int:
+    run_dir = resolve_run(args.run)
+    job_dir = local_jobs.run_job_dir(run_dir)
+    if args.action == "status":
+        print_job(local_jobs.read_job(job_dir))
+        return 0
+    if args.action == "stop":
+        stopped = local_jobs.stop(job_dir)
+        print("Exécution arrêtée (résultats validés conservés)." if stopped else "Aucune exécution détachée en cours.")
+        return 0
+    lp.make_runner(lp.runtime_settings()).require_ready()  # Ollama absent : erreur claire avant tout lancement
+    try:
+        job = local_jobs.start_run_job(run_dir, args.until, args.interview or None, single=False, force=args.force)
+    except local_jobs.JobAlreadyRunning as exc:
+        print(f"Erreur : {exc}", file=sys.stderr)
+        return 2
+    print(f"Exécution lancée en arrière-plan ({job['job_id']}) : étapes 3 → {args.until}. Suivi : "
+          f"{CLI} job status {run_dir.name} (journal : {lp.display_path(job_dir / local_jobs.LOG_FILENAME)}).")
+    if args.wait:
+        while (job := local_jobs.read_job(job_dir)) and job["alive"]:
+            time.sleep(2)
+        print_job(job)
+        return 0 if job and job["state"] == local_jobs.COMPLETE else 5
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="TRACE local (étapes 1 à 6 avec Ollama, sans API ni clé).")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -216,8 +267,23 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("status", help="état du run")
     p.add_argument("run")
     p.set_defaults(func=cmd_status)
+    p = sub.add_parser("job", help="étapes 3 → --until en arrière-plan (indépendant du terminal et de Streamlit)")
+    p.add_argument("action", choices=("start", "status", "stop"))
+    p.add_argument("run")
+    p.add_argument("--until", choices=lp.STAGES, default="5")
+    p.add_argument("--interview", action="append")
+    p.add_argument("--force", action="store_true")
+    p.add_argument("--wait", action="store_true", help="attendre la fin et afficher le bilan")
+    p.set_defaults(func=cmd_job)
     args = parser.parse_args(argv)
     config.load_env_file()  # mêmes réglages (.env) que l'application
+    # une ligne par appel au modèle local : agent, tokens d'entrée et de sortie, durée, vitesse, contexte, tentatives
+    log = logging.getLogger("trace.local")
+    if not log.handlers:
+        handler = logging.StreamHandler(sys.stderr)
+        handler.setFormatter(logging.Formatter("%(asctime)s %(message)s", "%H:%M:%S"))
+        log.addHandler(handler)
+        log.setLevel(logging.INFO)
     try:
         return args.func(args)
     except LLMError as exc:

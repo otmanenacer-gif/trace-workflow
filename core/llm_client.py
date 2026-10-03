@@ -35,22 +35,31 @@ ENV_OLLAMA_URL = "TRACE_OLLAMA_URL"
 ENV_NUM_CTX = "TRACE_OLLAMA_NUM_CTX"
 ENV_TIMEOUT = "TRACE_OLLAMA_TIMEOUT"
 ENV_MAX_CORRECTIONS = "TRACE_LOCAL_MAX_CORRECTIONS"
+ENV_MAX_METHOD_CORRECTIONS = "TRACE_LOCAL_MAX_METHOD_CORRECTIONS"
+ENV_KEEP_ALIVE = "TRACE_OLLAMA_KEEP_ALIVE"
 ENV_TEMPERATURE = "TRACE_LOCAL_TEMPERATURE"
 ENV_CONCURRENCY = "TRACE_LOCAL_CONCURRENCY"
 ENV_INTERACTION_CHUNK_TOKENS = "TRACE_INTERACTION_CHUNK_TOKENS"
 ENV_PRACTICE_CHUNK_TOKENS = "TRACE_PRACTICE_CHUNK_TOKENS"
-ENV_VARS = (ENV_LOCAL_MODEL, ENV_OLLAMA_URL, ENV_NUM_CTX, ENV_TIMEOUT, ENV_MAX_CORRECTIONS, ENV_TEMPERATURE,
-            ENV_CONCURRENCY, ENV_INTERACTION_CHUNK_TOKENS, ENV_PRACTICE_CHUNK_TOKENS)
+ENV_VARS = (ENV_LOCAL_MODEL, ENV_OLLAMA_URL, ENV_NUM_CTX, ENV_TIMEOUT, ENV_MAX_CORRECTIONS, ENV_MAX_METHOD_CORRECTIONS,
+            ENV_KEEP_ALIVE, ENV_TEMPERATURE, ENV_CONCURRENCY, ENV_INTERACTION_CHUNK_TOKENS, ENV_PRACTICE_CHUNK_TOKENS)
 
-# Modèle recommandé : bon en français, sorties JSON structurées fiables, fenêtre de contexte longue (le paquet de
-# l'étape 5 ou 6 peut atteindre ~24 000 tokens estimés). Remplaçable par TRACE_LOCAL_MODEL.
-DEFAULT_LOCAL_MODEL = "qwen2.5:14b"
+# Modèle par défaut : bon en français, sorties JSON structurées fiables, contexte long, et tient entièrement dans
+# une carte graphique de 8 Go avec le contexte dimensionné par appel. Remplaçable par TRACE_LOCAL_MODEL.
+DEFAULT_LOCAL_MODEL = "qwen2.5:7b"
 DEFAULT_OLLAMA_URL = "http://localhost:11434"
-DEFAULT_NUM_CTX = 32768                 # fenêtre de contexte demandée à Ollama (le défaut d'Ollama est trop court)
+# Fenêtre de contexte : choisie PAR APPEL (la plus petite de CTX_BUCKETS qui contient le prompt et une marge pour la
+# réponse), jamais au-delà de ce maximum. Le défaut d'Ollama (2 048 à 4 096) tronquerait le matériau ; un contexte
+# systématique de 32 768 alloue un cache inutile qui peut déborder de la carte graphique (calcul partiel sur CPU).
+DEFAULT_NUM_CTX = 32768
 NUM_CTX_MIN, NUM_CTX_MAX = 4096, 131072
+CTX_BUCKETS = (4096, 8192, 12288, 16384, 20480, 24576, 32768, 49152, 65536, 98304, 131072)
+DEFAULT_KEEP_ALIVE = "30m"              # garder le modèle chargé entre deux appels (pas de rechargement)
 DEFAULT_TIMEOUT_SECONDS = 1800          # une génération locale peut être longue sur un ordinateur portable
 TIMEOUT_MIN, TIMEOUT_MAX = 30, 7200
-DEFAULT_MAX_CORRECTIONS = 2             # nouvelles tentatives LOCALES, avec les erreurs du schéma / validateur
+DEFAULT_MAX_CORRECTIONS = 2             # nouvelles tentatives LOCALES après un JSON invalide ou hors schéma
+DEFAULT_MAX_METHOD_CORRECTIONS = 1      # … après une anomalie BLOQUANTE du validateur méthodologique (réponse conforme
+                                        # au schéma) : chaque correction régénère toute la réponse
 MAX_CORRECTIONS_LIMIT = 5
 DEFAULT_TEMPERATURE = 0.0               # reproductibilité : génération déterministe autant que possible
 DEFAULT_CONCURRENCY = 1                 # un seul appel à la fois : un modèle local occupe toute la machine
@@ -103,6 +112,8 @@ class LLMSettings:
     num_ctx: int = DEFAULT_NUM_CTX
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS
     max_corrections: int = DEFAULT_MAX_CORRECTIONS
+    max_method_corrections: int = DEFAULT_MAX_METHOD_CORRECTIONS
+    keep_alive: str = DEFAULT_KEEP_ALIVE
     temperature: float = DEFAULT_TEMPERATURE
     concurrency: int = DEFAULT_CONCURRENCY
     interaction_chunk_tokens: int = DEFAULT_INTERACTION_CHUNK_TOKENS
@@ -120,6 +131,9 @@ class LLMSettings:
             timeout_seconds=_int_env(env, ENV_TIMEOUT, DEFAULT_TIMEOUT_SECONDS, TIMEOUT_MIN, TIMEOUT_MAX, problems),
             max_corrections=_int_env(env, ENV_MAX_CORRECTIONS, DEFAULT_MAX_CORRECTIONS, 0, MAX_CORRECTIONS_LIMIT,
                                      problems),
+            max_method_corrections=_int_env(env, ENV_MAX_METHOD_CORRECTIONS, DEFAULT_MAX_METHOD_CORRECTIONS, 0,
+                                            MAX_CORRECTIONS_LIMIT, problems),
+            keep_alive=(env.get(ENV_KEEP_ALIVE) or "").strip() or DEFAULT_KEEP_ALIVE,
             temperature=_float_env(env, ENV_TEMPERATURE, DEFAULT_TEMPERATURE, 0.0, 1.0, problems),
             concurrency=_int_env(env, ENV_CONCURRENCY, DEFAULT_CONCURRENCY, 1, CONCURRENCY_MAX, problems),
             interaction_chunk_tokens=_int_env(env, ENV_INTERACTION_CHUNK_TOKENS, DEFAULT_INTERACTION_CHUNK_TOKENS,
@@ -149,11 +163,14 @@ USER_MESSAGES = {
     "NON_LOCAL_URL": "Adresse d'Ollama refusée : TRACE n'appelle qu'un Ollama local (localhost, 127.0.0.1 ou ::1), "
                      "aucune donnée ne quitte cet ordinateur.",
     "OLLAMA_TIMEOUT": "Le modèle local n'a pas répondu dans le délai imparti (TRACE_OLLAMA_TIMEOUT).",
+    "PROMPT_TOO_LONG": "Requête plus longue que la fenêtre de contexte maximale (TRACE_OLLAMA_NUM_CTX) : elle serait "
+                       "tronquée par Ollama ; augmentez TRACE_OLLAMA_NUM_CTX (rien n'est envoyé tronqué).",
     "OLLAMA_ERROR": "Erreur renvoyée par Ollama.",
     "UNEXPECTED_ERROR": "Erreur inattendue pendant le traitement de la réponse de l'agent.",
 }
 # Erreurs du runtime (et non de la réponse) : jamais de nouvelle tentative, jamais de repli.
-RUNTIME_ERROR_CODES = ("OLLAMA_UNAVAILABLE", "MODEL_NOT_FOUND", "NON_LOCAL_URL", "OLLAMA_TIMEOUT", "OLLAMA_ERROR")
+RUNTIME_ERROR_CODES = ("OLLAMA_UNAVAILABLE", "MODEL_NOT_FOUND", "NON_LOCAL_URL", "OLLAMA_TIMEOUT", "OLLAMA_ERROR",
+                       "PROMPT_TOO_LONG")
 
 
 class LLMError(Exception):

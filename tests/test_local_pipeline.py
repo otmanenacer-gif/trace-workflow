@@ -66,7 +66,7 @@ def test_stage3_runs_locally_without_any_key_and_writes_the_usual_outputs(tmp_pa
         assert call["payload"]["messages"][0]["content"] == spec.system_prompt
         assert call["payload"]["format"] == spec.output_schema
     manifest = load(run, "practice_manifest.json", si.INTERVIEW_ID)
-    assert manifest["model"] == "qwen2.5:14b" and manifest["api_calls"] == 0 and manifest["billed_this_run"] is False
+    assert manifest["model"] == "qwen2.5:7b" and manifest["api_calls"] == 0 and manifest["billed_this_run"] is False
     assert manifest["status"] == "SUCCESS" and manifest["request_id"].startswith(f"{si.INTERVIEW_ID}__practice")
     journal = Path(run["output_dir"]) / "local_runs" / "stage3"
     assert len(list(journal.glob(f"{si.INTERVIEW_ID}__*.json"))) == 2 and (journal / "status.json").is_file()
@@ -112,7 +112,7 @@ def test_missing_model_is_a_clear_error_and_nothing_is_written(tmp_path, monkeyp
     run = si.make_ingested_run(tmp_path)
     with pytest.raises(LLMError) as info:
         lp.run_until(run, "5")
-    assert info.value.code == "MODEL_NOT_FOUND" and "ollama pull qwen2.5:14b" in info.value.user_message
+    assert info.value.code == "MODEL_NOT_FOUND" and "ollama pull qwen2.5:7b" in info.value.user_message
     assert not analysis_dir(run, si.INTERVIEW_ID).exists()
 
 
@@ -133,7 +133,7 @@ def test_the_validator_is_never_bypassed_when_the_model_keeps_an_error(tmp_path,
     fabricated = si.with_fabricated_quote(si.GOOD_PRACTICES, "practices")
     ollama = use_fake_runtime(monkeypatch, {**GOOD, PRACTICE: lambda p: text_response(fabricated)})
     run = lp.run_stage("3", si.make_ingested_run(tmp_path))["metadata"]
-    assert len(ollama.calls_for(PRACTICE)) == 3  # 1 + 2 corrections locales, jamais plus
+    assert len(ollama.calls_for(PRACTICE)) == 2  # 1 + 1 correction méthodologique locale (défaut), jamais plus
     document = load(run, "practice_extractor.json", si.INTERVIEW_ID)
     assert document["status"] == "SUCCESS_WITH_WARNINGS"  # la citation inventée reste signalée par TRACE
     assert load(run, config.EVIDENCE_VALIDATION_FILENAME, si.INTERVIEW_ID)["total_invalid_evidence"] == 1
@@ -192,7 +192,7 @@ def test_stage4_runs_locally_and_equals_the_reference_pipeline(tmp_path, monkeyp
     assert episodes_comparable(local) == episodes_comparable(
         load(reference, config.ACCOUNTABILITY_EPISODES_FILENAME, S4.INTERVIEW_ID))
     manifest = load(result["metadata"], config.ACCOUNTABILITY_MANIFEST_FILENAME, S4.INTERVIEW_ID)
-    assert manifest["api_calls"] == 0 and manifest["model"] == "qwen2.5:14b" and manifest["llm_called"] is True
+    assert manifest["api_calls"] == 0 and manifest["model"] == "qwen2.5:7b" and manifest["llm_called"] is True
 
 
 def test_stage4_without_stage3_is_blocked_and_calls_nothing(tmp_path, monkeypatch):
@@ -247,7 +247,7 @@ def test_stage5_runs_locally_and_equals_the_reference_pipeline(tmp_path, monkeyp
     a, b = (load(r, config.STUDENT_TRAJECTORY_FILENAME, S4.INTERVIEW_ID) for r in (run, reference))
     assert trajectory_comparable(a) == trajectory_comparable(b) and a["status"] == "SUCCESS"
     manifest = load(run, config.STUDENT_TRAJECTORY_MANIFEST_FILENAME, S4.INTERVIEW_ID)
-    assert manifest["api_calls"] == 0 and manifest["billed_this_run"] is False and manifest["model"] == "qwen2.5:14b"
+    assert manifest["api_calls"] == 0 and manifest["billed_this_run"] is False and manifest["model"] == "qwen2.5:7b"
 
 
 def test_run_until_5_never_replays_completed_stages_and_redoes_only_stale_ones(tmp_path, monkeypatch):
@@ -343,7 +343,7 @@ def test_stage6_runs_locally_on_two_interviews_and_equals_the_reference(tmp_path
     for name in STAGE6_FILES[:2]:
         assert comparison_comparable(local[name]) == comparison_comparable(reference[name]), name
     manifest = local[config.CROSS_INTERVIEW_MANIFEST_FILENAME]
-    assert manifest["api_calls"] == 0 and manifest["model"] == "qwen2.5:14b" and manifest["llm_called"] is True
+    assert manifest["api_calls"] == 0 and manifest["model"] == "qwen2.5:7b" and manifest["llm_called"] is True
     assert (Path(result["corpus_dir"]) / "local_runs" / "stage6" / "status.json").is_file()
 
 
@@ -364,7 +364,7 @@ def test_an_invented_identifier_is_sent_back_for_correction_then_rejected_as_bef
     uploads = S6.uploads(S6.IDS_4)
     ollama = use_fake_runtime(monkeypatch, comparator(mutate=invent))
     local = outputs(lp.run_stage6(uploads, base_dir=tmp_path / "local")["corpus_dir"])
-    assert len(ollama.calls) == 3 and "UNKNOWN_OBJECT_ID" in ollama.calls[1]["params"]["history"][1]["content"]
+    assert len(ollama.calls) == 2 and "UNKNOWN_OBJECT_ID" in ollama.calls[1]["params"]["history"][1]["content"]
     reference = reference_stage6(tmp_path, uploads, comparator(mutate=invent))
     assert comparison_comparable(local[config.CROSS_INTERVIEW_COMPARISON_FILENAME]) == comparison_comparable(
         reference[config.CROSS_INTERVIEW_COMPARISON_FILENAME])  # mêmes rejets que le validateur habituel

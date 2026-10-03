@@ -66,7 +66,7 @@ _purge_stale_project_modules()
 
 from core import accountability, analysis, config, stage3_restore, stage4_restore, trajectory  # noqa: E402
 from core import cross_interview, cross_interview_corpus  # noqa: E402
-from core import local_pipeline  # noqa: E402
+from core import local_jobs, local_pipeline  # noqa: E402
 from core.ingestion import ingest_run  # noqa: E402
 from core.llm_client import LLMError, LLMSettings  # noqa: E402
 from core.run_manager import TraceError, get_extension, init_run, list_runs, load_metadata  # noqa: E402
@@ -391,30 +391,174 @@ def show_flash(key: str) -> None:
         (st.warning if flash[0] == "warning" else st.success)(flash[1])
 
 
+def _runtime_ready() -> bool:
+    """Ollama et le modèle sont-ils prêts ? Sinon, erreur claire tout de suite (rien n'est lancé, aucun repli)."""
+    settings = local_pipeline.runtime_settings()
+    try:
+        local_pipeline.make_runner(settings).require_ready()
+    except LLMError as exc:
+        st.session_state.runtime_refresh = True
+        st.error(exc.user_message)
+        return False
+    return True
+
+
 def run_local_stage(stage: str, run: dict, selected: list[str]) -> None:
-    """Bouton d'une étape : TRACE exécute lui-même les agents avec le modèle local, valide et enregistre."""
-    if not st.button(STAGE_RUN_LABEL.format(stage), type="primary", key=f"run_stage{stage}"):
+    """Bouton d'une étape : TRACE lance l'étape EN ARRIÈRE-PLAN (processus indépendant de cette page), puis la page
+    en affiche la progression. Fermer ou rafraîchir la page n'interrompt rien."""
+    job = local_jobs.read_job(local_jobs.run_job_dir(run["output_dir"]))
+    busy = bool(job and job["alive"])
+    if busy:
+        st.caption("Une exécution locale est en cours pour ce run : voir « Exécution locale » plus haut.")
+    if not st.button(STAGE_RUN_LABEL.format(stage), type="primary", key=f"run_stage{stage}", disabled=busy):
         return
-    model = local_pipeline.runtime_settings().model
-    with st.spinner(f"Étape {stage} en cours avec le modèle local {model} (Ollama) : cela peut prendre plusieurs "
-                    "minutes…"):
-        try:
-            result = local_pipeline.run_stage(stage, run, selected)
-        except LLMError as exc:  # Ollama arrêté, modèle absent… : erreur claire, rien n'est écrit, aucun repli
-            st.session_state.runtime_refresh = True
-            st.error(exc.user_message)
-            return
-        except (OSError, ValueError, KeyError) as exc:
-            logging.error("Étape %s interrompue : %s", stage, type(exc).__name__)
-            st.error(f"Étape {stage} interrompue ({type(exc).__name__}) : vérifiez les fichiers du run.")
-            return
-    st.session_state.last_run = result["metadata"]
-    status = result["status"]
-    st.session_state[f"local{stage}_flash"] = (
-        ("success", f"Étape {stage} terminée (exécution locale, modèle {status['model']}, 0 appel API).")
-        if status["status"] == local_pipeline.STAGE_COMPLETE else
-        ("warning", f"Étape {stage} : {local_pipeline.STATUS_LABELS[status['status']]} — voir ci-dessous."))
+    if not _runtime_ready():
+        return
+    try:
+        local_jobs.start_run_job(Path(run["output_dir"]), stage, selected)
+    except local_jobs.JobAlreadyRunning as exc:
+        st.warning(str(exc))
+        return
+    except OSError as exc:
+        logging.error("Étape %s non lancée : %s", stage, type(exc).__name__)
+        st.error(f"Étape {stage} non lancée ({type(exc).__name__}) : vérifiez les fichiers du run.")
+        return
     st.rerun()
+
+
+def _fmt_seconds(seconds) -> str:
+    seconds = int(seconds or 0)
+    return f"{seconds // 60} min {seconds % 60:02d} s" if seconds >= 60 else f"{seconds} s"
+
+
+def render_job_details(job: dict) -> None:
+    """Liste des appels (✓ validé, ⏳ en cours, ○ à faire) et mesures de chaque appel au modèle local."""
+    items = job.get("checklist") or []
+    if items:
+        lines = []
+        for item in items:
+            extra = []
+            if item.get("duration_seconds") is not None:
+                extra.append(_fmt_seconds(item["duration_seconds"]))
+            if item.get("attempts") and item["attempts"] > 1:
+                extra.append(f"{item['attempts']} tentatives")
+            if item["status"] in (local_jobs.CACHED, local_jobs.NOT_NEEDED, local_jobs.CALL_FAILED,
+                                  local_jobs.ISSUES, local_jobs.NOT_RUN):
+                extra.append(local_jobs.ITEM_LABELS[item["status"]])
+            where = item["interview_id"]
+            lines.append(f"{local_jobs.ITEM_ICONS[item['status']]} {item['agent_label']} — {where}"
+                         + (f" ({', '.join(extra)})" if extra else ""))
+        st.markdown("\n".join(f"- {line}" for line in lines))
+    rows = local_jobs.summary_rows(job)
+    if rows:
+        st.dataframe(rows, hide_index=True)
+        st.caption("Tokens comptés par Ollama (entrée : tokens lus, hors préfixe déjà en mémoire ; sortie : tokens "
+                   "générés, toutes tentatives). Mesures complètes par tentative : "
+                   "local_runs/stage<N>/<appel>.json et job.log.")
+
+
+def render_job_progress(job: dict) -> None:
+    items = job.get("checklist") or []
+    finished = sum(i["status"] in (local_jobs.DONE, local_jobs.ISSUES, local_jobs.CACHED, local_jobs.NOT_NEEDED)
+                   for i in items)
+    st.markdown(f"**Exécution locale en cours — étape {job.get('stage')}** · {_fmt_seconds(job['elapsed_seconds'])} "
+                f"écoulées · {finished}/{len(items) or '?'} appel(s) terminé(s)")
+    current = job.get("current")
+    if current:
+        st.info(f"**{current['agent_label']}** — {current['label']} — tentative {current['attempt']} — "
+                f"{_fmt_seconds(current.get('elapsed_seconds'))} — {current.get('output_tokens') or 0} tokens générés "
+                f"— contexte {current.get('num_ctx')} (≈ {current.get('estimated_input_tokens')} tokens en entrée)",
+                icon="⏳")
+    else:
+        st.info("Préparation (lecture des entretiens, reprise des résultats déjà validés)…", icon="⏳")
+    if items:
+        st.progress(finished / len(items))
+    render_job_details(job)
+    st.caption("Vous pouvez rafraîchir ou fermer cette page : l'exécution continue en arrière-plan et chaque résultat "
+               "validé est enregistré immédiatement (jamais recalculé). Rouvrez TRACE pour suivre la progression.")
+
+
+def _job_fragment(job_dir: str) -> None:
+    job = local_jobs.read_job(Path(job_dir))
+    if not job or not job["alive"]:
+        st.rerun(scope="app")  # fin du travail : la page entière se met à jour (résultats, message)
+        return
+    render_job_progress(job)
+    if job.get("mode") == "subprocess" and st.button("Arrêter l'exécution", key=f"job_stop_{job['job_id']}"):
+        local_jobs.stop(Path(job_dir))
+        st.rerun(scope="app")
+
+
+live_job_panel = st.fragment(run_every=2)(_job_fragment)
+
+
+def render_job_panel(job_dir: Path, restart) -> None:
+    """Exécution locale en arrière-plan : progression en direct, reprise après interruption, mesures du dernier
+    travail. `restart()` relance le même travail (reprise : les résultats validés sont repris du cache)."""
+    job = local_jobs.read_job(job_dir)
+    if not job:
+        return
+    st.subheader("Exécution locale")
+    if job["alive"]:
+        live_job_panel(str(job_dir))
+        return
+    state = job["state"]
+    validated = sum(i["status"] in (local_jobs.DONE, local_jobs.ISSUES, local_jobs.CACHED)
+                    for i in job.get("checklist") or [])
+    if state in (local_jobs.INTERRUPTED, local_jobs.STOPPED, local_jobs.ERROR):
+        reason = {local_jobs.INTERRUPTED: "interrompue (le processus ne donne plus signe de vie)",
+                  local_jobs.STOPPED: "arrêtée", local_jobs.ERROR: "en erreur"}[state]
+        st.warning(f"Dernière exécution (étape {job.get('stage')}) {reason} après "
+                   f"{_fmt_seconds(job['elapsed_seconds'])} — {validated} appel(s) validé(s) conservé(s). "
+                   "« Reprendre » repart du premier appel non terminé ; aucun résultat validé n'est recalculé.")
+        if job.get("message"):
+            st.error(job["message"])
+        if st.button("Reprendre l'exécution", type="primary", key=f"job_resume_{job['job_id']}"):
+            if _runtime_ready():
+                try:
+                    restart(job)
+                except local_jobs.JobAlreadyRunning as exc:
+                    st.warning(str(exc))
+                    return
+                st.rerun()
+        tail = local_jobs.job_log_tail(job_dir)
+        if tail:
+            with st.expander("Journal de l'exécution (job.log)"):
+                st.code(tail)
+    with st.expander(f"Mesures de la dernière exécution locale (étape {job.get('stage')}, "
+                     f"{local_jobs.JOB_LABELS.get(state, state)}, {_fmt_seconds(job['elapsed_seconds'])})"):
+        render_job_details(job)
+
+
+def finish_run_job(run: dict) -> dict:
+    """Fin d'un travail pas encore prise en compte : métadonnées relues sur le disque, message affiché une fois."""
+    job_dir = local_jobs.run_job_dir(run["output_dir"])
+    job = local_jobs.read_job(job_dir)
+    if not job or job["state"] not in local_jobs.FINAL or job.get("acknowledged"):
+        return run
+    try:
+        run = load_metadata(Path(run["output_dir"]))
+    except (TraceError, OSError, ValueError):
+        return run
+    st.session_state.last_run = run
+    stage = job.get("stage") or (job.get("spec") or {}).get("stage")
+    status = job.get("result") or {}
+    if job["state"] == local_jobs.COMPLETE:
+        st.session_state[f"local{stage}_flash"] = (
+            "success", f"Étape {stage} terminée (exécution locale, modèle {status.get('model')}, 0 appel API).")
+    elif job["state"] in (local_jobs.FAILED, local_jobs.BLOCKED):
+        st.session_state[f"local{stage}_flash"] = (
+            "warning", f"Étape {stage} : {job.get('message')} — voir ci-dessous.")
+    local_jobs.acknowledge(job_dir)
+    return run
+
+
+def restart_run_job(run: dict):
+    def restart(job: dict) -> None:
+        spec = job["spec"]
+        local_jobs.start_run_job(Path(spec["run_dir"]), spec["stage"], spec.get("interview_ids"),
+                                 single=spec.get("single", True), force=False)
+    return restart
 
 
 def render_local_state(run: dict, stage: str) -> None:
@@ -879,25 +1023,20 @@ def render_stage6_workflow(files: list[tuple[str, bytes]], prepared) -> None:
         st.warning(f"Représentation au-delà du seuil d'un appel unique ({cross_interview.SINGLE_CALL_MAX_INPUT_TOKENS} "
                    "tokens) : requête unique conservée, signalée (PAYLOAD_OVER_THRESHOLD) ; vérifiez la fenêtre de "
                    "contexte du modèle local (TRACE_OLLAMA_NUM_CTX).")
-    if st.button(STAGE_RUN_LABEL.format(6), type="primary", key="run_stage6"):
-        model = local_pipeline.runtime_settings().model
-        with st.spinner(f"Étape 6 en cours avec le modèle local {model} (Ollama)…"):
-            try:
-                result = local_pipeline.run_stage6(files)
-            except LLMError as exc:
-                st.session_state.runtime_refresh = True
-                st.error(exc.user_message)
-                return
-            except (OSError, ValueError, KeyError) as exc:
-                logging.error("Étape 6 interrompue : %s", type(exc).__name__)
-                st.error(f"Étape 6 interrompue ({type(exc).__name__}).")
-                return
-        st.session_state.stage6_last = result["manifest"]
-        status = result["status"]
-        st.session_state.local6_flash = (
-            ("success", f"Étape 6 terminée (exécution locale, modèle {status['model']}, 0 appel API).")
-            if status["status"] == local_pipeline.STAGE_COMPLETE
-            else ("warning", f"Étape 6 : {local_pipeline.STATUS_LABELS[status['status']]} — voir ci-dessous."))
+    job = local_jobs.read_job(local_jobs.stage6_job_dir())
+    busy = bool(job and job["alive"])
+    if st.button(STAGE_RUN_LABEL.format(6), type="primary", key="run_stage6", disabled=busy):
+        if not _runtime_ready():
+            return
+        try:
+            local_jobs.start_stage6_job(files)
+        except local_jobs.JobAlreadyRunning as exc:
+            st.warning(str(exc))
+            return
+        except OSError as exc:
+            logging.error("Étape 6 non lancée : %s", type(exc).__name__)
+            st.error(f"Étape 6 non lancée ({type(exc).__name__}).")
+            return
         st.rerun()
     state = local_pipeline.read_corpus_status(cross_interview.corpus_dir_for(prepared))
     if not state:
@@ -1004,6 +1143,26 @@ def render_stage6_results(last: dict | None, current_corpus_id: str | None = Non
                                 mime="application/json", key=f"dl_stage6_{key}")
 
 
+def finish_stage6_job() -> None:
+    """Fin d'un travail de l'étape 6 pas encore prise en compte : résultats relus sur le disque, message une fois."""
+    job_dir = local_jobs.stage6_job_dir()
+    job = local_jobs.read_job(job_dir)
+    if not job or job["state"] not in local_jobs.FINAL or job.get("acknowledged"):
+        return
+    result = job.get("result") or {}
+    corpus_dir = result.get("corpus_dir_abs")
+    if corpus_dir:
+        outputs = cross_interview.read_outputs(Path(corpus_dir))
+        if outputs.get("manifest"):
+            st.session_state.stage6_last = {**json.loads(outputs["manifest"]), "corpus_dir": corpus_dir}
+    if job["state"] == local_jobs.COMPLETE:
+        st.session_state.local6_flash = (
+            "success", f"Étape 6 terminée (exécution locale, modèle {result.get('model')}, 0 appel API).")
+    elif job["state"] in (local_jobs.FAILED, local_jobs.BLOCKED):
+        st.session_state.local6_flash = ("warning", f"Étape 6 : {job.get('message')} — voir ci-dessous.")
+    local_jobs.acknowledge(job_dir)
+
+
 def render_stage6_section(run: dict | None) -> None:
     st.header("Étape 6 — Comparaison inter-entretiens")
     st.markdown(
@@ -1020,6 +1179,10 @@ def render_stage6_section(run: dict | None) -> None:
         "par leur contenu, regroupés par `interview_id` et vérifiés (versions, analyse complète, aucune erreur de "
         "validation, empreintes et comptes cohérents, aucune altération, pas de doublon ambigu). Un entretien invalide "
         "est exclu avec sa raison sans bloquer les autres. **Aucun appel API** pour cet import.")
+    finish_stage6_job()
+    render_job_panel(local_jobs.stage6_job_dir(), lambda job: local_jobs.start_stage6_job(
+        [(p.name.split("__", 1)[1], p.read_bytes())
+         for p in sorted((local_jobs.stage6_job_dir() / local_jobs.INPUTS_SUBDIR).iterdir())]))
     files = _stage6_uploads(run)
     prepared = None
     if not files:
@@ -1137,8 +1300,27 @@ if st.button("Lancer l'analyse", type="primary"):
 
 # 7. Résultats
 st.header("Résultats")
+if not st.session_state.get("last_run"):
+    # Après un refresh ou une réouverture : le run de l'adresse (?run=…), sinon celui dont une exécution est en cours.
+    restored, active = None, None
+    wanted = st.query_params.get("run")
+    if wanted and (config.OUTPUTS_DIR / wanted / config.METADATA_FILENAME).is_file():
+        restored = config.OUTPUTS_DIR / wanted
+    else:
+        restored = active = local_jobs.find_active_run_job()
+    if restored is not None:
+        try:
+            st.session_state.last_run = load_metadata(restored)
+            if active is not None:
+                st.info(f"Exécution locale en cours détectée : run `{restored.name}` rouvert.")
+        except (TraceError, OSError, ValueError):
+            pass
 run = st.session_state.get("last_run")
 if run:
+    if st.query_params.get("run") != run["run_id"]:
+        st.query_params["run"] = run["run_id"]  # un refresh de la page rouvre ce run
+    run = finish_run_job(run)
+    render_job_panel(local_jobs.run_job_dir(run["output_dir"]), restart_run_job(run))
     st.markdown(f"**Identifiant du run :** `{run['run_id']}`")
     st.markdown(f"**Date / heure :** {run['created_at']}")
     st.markdown(f"**Nombre de fichiers :** {run['file_count']}")

@@ -63,7 +63,7 @@ def test_full_flow_stage3_stage4_stage5_then_no_replay(tmp_path, fake_agents):
 
     at.button(key="run_stage5").click().run()
     assert not at.exception and agents(fake_agents)[before:] == [TRAJECTORY]
-    assert "Étape 5 terminée (exécution locale, modèle qwen2.5:14b, 0 appel API)." in texts(at.success)
+    assert "Étape 5 terminée (exécution locale, modèle qwen2.5:7b, 0 appel API)." in texts(at.success)
     table = stage5_table(at)
     assert list(table["Étape 5"]) == ["✅ SUCCESS"] and list(table["Statut étape 4"]) == ["disponible"]
     assert list(table["Configuration"]) == ["configuration contextuelle"]
