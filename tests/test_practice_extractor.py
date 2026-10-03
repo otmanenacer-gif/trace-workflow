@@ -254,13 +254,25 @@ def test_past_use_and_current_non_use_are_two_practices(tmp_path):
 
 def test_inconsistent_non_use_reason_is_flagged_not_corrected(tmp_path):
     output = copy.deepcopy(si.NON_USE_PRACTICES)
-    output["practices"][0]["non_use_reason"] = "preference"   # un usage n'a pas de raison de non-usage
-    output["practices"][1]["non_use_reason"] = None           # un non-usage doit en avoir une
+    output["practices"][0]["non_use_reason"] = "preference"   # un usage n'a pas de raison de non-usage : signalé
     summary, document = run_practices(tmp_path, output, si.NON_USE_FILES)
     assert summary["status"] == "SUCCESS_WITH_WARNINGS"
-    for practice in document["practices"][:2]:
-        assert "NON_USE_REASON_MISMATCH" in practice["review_reasons"]
-    assert document["practices"][0]["non_use_reason"] == "preference"  # rien n'est corrigé
+    assert "NON_USE_REASON_MISMATCH" in document["practices"][0]["review_reasons"]
+    assert document["practices"][0]["non_use_reason"] == "preference"  # une vraie raison n'est jamais modifiée
+
+
+def test_purely_formal_non_use_reason_values_are_normalized(tmp_path):
+    output = copy.deepcopy(si.NON_USE_PRACTICES)
+    assert output["practices"][0]["use_status"] == "use" and output["practices"][1]["use_status"] in ("non_use",
+                                                                                                         "refusal")
+    output["practices"][0]["non_use_reason"] = "not_stated"   # valeur parasite : « aucune raison » sur un usage
+    output["practices"][1]["non_use_reason"] = None           # non-usage sans raison formulée : not_stated
+    summary, document = run_practices(tmp_path, output, si.NON_USE_FILES)
+    first, second = document["practices"][:2]
+    assert first["non_use_reason"] is None and second["non_use_reason"] == "not_stated"
+    assert "NON_USE_REASON_MISMATCH" not in first["review_reasons"] + second["review_reasons"]
+    normalized = document["practice_selectivity"]["non_use_reason_normalized"]
+    assert [(n["from"], n["to"]) for n in normalized] == [("not_stated", None), (None, "not_stated")]
 
 
 def test_personal_practices_are_kept(tmp_path):

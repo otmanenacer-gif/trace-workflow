@@ -49,7 +49,7 @@ from typing import Callable
 from agents import interaction_signal_reader, practice_extractor
 from agents.base import AgentSpec, build_agent_input, render_user_message, serialize_agent_input, sha256_text
 from core import config, evidence_validator, interaction_chunking, interpretation_guard, practice_chunking
-from core import signal_selectivity
+from core import practice_selectivity, signal_selectivity
 from core import speaker_attribution_auditor as speaker_audit
 from core.analysis_cache import AnalysisCache, compute_cache_key, write_json_atomic
 from core.llm_client import LLMError, LLMSettings
@@ -338,9 +338,16 @@ def postprocess_for(spec: AgentSpec, prepared: PreparedInterview) -> PostProcess
         return select
 
     def cues(items: list[dict]) -> tuple[list[dict], dict, dict]:
+        # normalisation formelle de non_use_reason et sélectivité (lien explicite avec une IAG), puis indices de
+        # non-usage sur les pratiques conservées
+        result = practice_selectivity.apply(items, prepared.transcript)
+        items = result["practices"]
         found = practice_chunking.non_use_cues(prepared.transcript, items)
-        return items, {"non_use_cues": found}, {"non_use_cues": {
-            "cue_turn_count": found["cue_turn_count"], "uncovered_count": len(found["uncovered_turn_ids"])}}
+        return items, {"non_use_cues": found, "practice_selectivity": result["summary"],
+                       "set_aside_practices": result["set_aside"]}, {
+            "non_use_cues": {"cue_turn_count": found["cue_turn_count"],
+                             "uncovered_count": len(found["uncovered_turn_ids"])},
+            "practice_selectivity": result["summary"]}
     return cues
 
 

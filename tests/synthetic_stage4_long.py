@@ -113,6 +113,7 @@ def _practices_by_turn() -> dict[int, list[dict]]:
                        academic_task=topic)]
     items.update({
         40: [_p(40, "Pour reformuler mes phrases oui", summary="L'étudiant indique lui faire reformuler ses phrases.",
+                ai_action=["reformule les phrases"],
                 academic_task="rédaction"),
              _p(40, "mais jamais pour écrire un paragraphe entier", summary="L'étudiant dit ne jamais lui faire écrire un paragraphe entier.",
                 use_status="refusal", non_use_reason="personal_rule", academic_task="rédaction", stated_frequency="jamais")],

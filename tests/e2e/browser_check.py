@@ -586,7 +586,10 @@ def stage6_upload(page, paths: list[Path]) -> None:
 
 
 def stage6_rows(page) -> list[list[str]]:
+    # un import de nombreux fichiers peut déclencher le rechargement APRÈS wait_idle : attendre le tableau du corpus
     table = page.locator("[data-testid=stTable]").filter(has_text="importé").last
+    expect(table.locator("tbody tr").first).to_be_visible(timeout=TIMEOUT_MS)
+    wait_idle(page)
     return [[c.strip() for c in row.locator("td").all_inner_texts()] for row in table.locator("tbody tr").all()]
 
 

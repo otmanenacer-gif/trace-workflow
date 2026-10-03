@@ -7,6 +7,8 @@
     python scripts/trace_local.py stage6 SOURCE [SOURCE ...]       # étape 6 sur les sorties de l'étape 5 (runs,
                                                                    # dossiers de JSON ou fichiers JSON)
     python scripts/trace_local.py status RUN                       # état du run
+    python scripts/trace_local.py refilter RUN [--interview ID]    # réapplique la sélectivité de l'étape 3 aux réponses
+                                                                   # déjà validées (cache), SANS aucun appel au modèle
     python scripts/trace_local.py job start RUN --until 5          # mêmes étapes EN ARRIÈRE-PLAN (processus détaché :
                                                                    # fermer le terminal ou Streamlit n'arrête rien)
     python scripts/trace_local.py job status RUN                   # progression : agent en cours, appels validés
@@ -197,6 +199,40 @@ def cmd_status(args) -> int:
     return 0
 
 
+def print_refilter(report: dict) -> None:
+    print(f"Run {report['run_id']} — resélection de l'étape 3 sans modèle ({report['model_calls']} appel au modèle)")
+    for i in report["interviews"]:
+        print(f"\n{i['interview_id']}")
+        print(f"  Pratiques : {i['practices_kept']} conservée(s) sur {i['practices_before']} auparavant ; "
+              f"{len(i['practices_set_aside'])} écartée(s)")
+        for row in i["previous_practices"]:
+            if row["fate"] != "kept":
+                print(f"    - {row['previous_id']} écartée ({row.get('reason') or row['fate']}) :{row['label']} "
+                      f"— « {' / '.join(q or '' for q in row['quotes'])[:160]} »")
+        print(f"  Signaux : {i['signals_kept']} conservé(s) sur {i['signals_before']} auparavant ; "
+              f"{len(i['signals_set_aside'])} écarté(s) au total (anciennes règles comprises)")
+        for row in i["previous_signals"]:
+            if row["fate"] != "kept":
+                print(f"    - {row['previous_id']} écarté ({row.get('reason') or row['fate']}) : {row['label']} "
+                      f"— {', '.join(row['turn_ids'])} — « {' / '.join(q or '' for q in row['quotes'])[:160]} »")
+        normalized = i["non_use_reason_normalized"]
+        print(f"  non_use_reason normalisés : {len(normalized)} "
+              + ", ".join(f"{n['use_status']} {n['from']} → {n['to']}" for n in normalized))
+        print(f"  NON_USE_REASON_MISMATCH restants : {', '.join(i['remaining_non_use_reason_mismatch']) or 'aucun'}")
+
+
+def cmd_refilter(args) -> int:
+    run_dir = resolve_run(args.run)
+    result = lp.refilter_stage3(load_metadata(run_dir), args.interview or None)
+    if args.json:
+        print(json.dumps(result["report"], ensure_ascii=False, indent=2))
+    else:
+        print_refilter(result["report"])
+        print(f"\nRapport : {lp.display_path(lp.stage_dir(result['metadata'], '3') / lp.REFILTER_REPORT_FILENAME)}. "
+              f"L'étape 4 sera rejouée par la garde habituelle ({CLI} run {run_dir.name} --until 4).")
+    return EXIT_CODES[result["status"]["status"]]
+
+
 def print_job(job: dict | None) -> None:
     if not job:
         print("Aucune exécution en arrière-plan pour ce run.")
@@ -267,6 +303,11 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("status", help="état du run")
     p.add_argument("run")
     p.set_defaults(func=cmd_status)
+    p = sub.add_parser("refilter", help="réapplique la sélectivité de l'étape 3 aux réponses du cache, sans modèle")
+    p.add_argument("run")
+    p.add_argument("--interview", action="append")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_refilter)
     p = sub.add_parser("job", help="étapes 3 → --until en arrière-plan (indépendant du terminal et de Streamlit)")
     p.add_argument("action", choices=("start", "status", "stop"))
     p.add_argument("run")

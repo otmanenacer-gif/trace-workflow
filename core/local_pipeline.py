@@ -265,6 +265,112 @@ def run_until(metadata: dict, until: str, interview_ids: list[str] | None = None
     return {**result, "stage": until}
 
 
+# --- Étape 3 : resélection sans modèle ------------------------------------------------------------------
+
+REFILTER_REPORT_FILENAME = "refilter_report.json"
+
+
+class NoModelClient:
+    """Client des agents qui refuse tout appel : la resélection n'utilise que les réponses déjà validées du cache."""
+
+    records: dict = {}
+
+    async def complete_json(self, **kwargs):
+        raise LLMError("UNEXPECTED_ERROR", "resélection de l'étape 3 : aucun appel au modèle n'est autorisé")
+
+    async def aclose(self) -> None:
+        return None
+
+
+def _read_analysis(info: dict, filename: str) -> dict | None:
+    path = Path(info["ingestion"]["output_dir"]) / config.ANALYSIS_SUBDIR / filename
+    return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else None
+
+
+def _object_key(item: dict) -> tuple:
+    """Identité d'un objet indépendante de sa numérotation : type, résumé ou forme, citations."""
+    evidence = tuple((e.get("turn_id"), e.get("quote")) for e in item.get("evidence", []))
+    return (item.get("signal_type") or item.get("summary"), evidence)
+
+
+def _fate(before: dict | None, after: dict | None, items_key: str, set_aside_key: str, id_key: str) -> list[dict]:
+    """Devenir de chaque objet de la sortie précédente : conservé (nouvel identifiant) ou écarté (raison)."""
+    if not before:
+        return []
+    kept = {_object_key(i): i for i in (after or {}).get(items_key, [])}
+    aside = {_object_key(i): i for i in (after or {}).get(set_aside_key, [])}
+    fates = []
+    for item in before.get(items_key, []):
+        key = _object_key(item)
+        row = {"previous_id": item.get(id_key), "label": (item.get("signal_type") or "") + (
+            f" « {item.get('surface_form')} »" if item.get("surface_form") else f" {item.get('summary', '')[:90]}"),
+               "turn_ids": item.get("turn_ids") or [e.get("turn_id") for e in item.get("evidence", [])],
+               "quotes": [e.get("quote") for e in item.get("evidence", [])]}
+        if key in kept:
+            row.update(fate="kept", new_id=kept[key].get(id_key))
+        elif key in aside:
+            row.update(fate="set_aside", reason=aside[key].get("set_aside_reason"))
+        else:
+            row.update(fate="absent")
+        fates.append(row)
+    return fates
+
+
+def refilter_stage3(metadata: dict, interview_ids: list[str] | None = None, *,
+                    settings: LLMSettings | None = None) -> dict:
+    """Réapplique à l'étape 3 le post-traitement déterministe actuel (sélectivité des pratiques et des signaux,
+    normalisations formelles) et la validation habituelle, à partir des réponses DÉJÀ VALIDÉES du cache TRACE, sans
+    aucun appel au modèle. Si une réponse manque au cache, rien n'est écrit (ValueError). Les sorties de l'étape 3 sont
+    réécrites dans leur format habituel ; l'étape 4 devient « périmée » et sera rejouée par la garde habituelle.
+    Renvoie {"metadata", "status", "report"} ; le rapport est aussi écrit dans local_runs/stage3/refilter_report.json."""
+    settings = settings or runtime_settings()
+    files = _selected_files(metadata, interview_ids)
+    ids = [f["ingestion"]["interview_id"] for f in files]
+    cache = AnalysisCache()
+    plan = analysis.plan_analysis(metadata, ids, settings, cache)
+    if plan["calls"]:
+        raise ValueError(f"Resélection impossible sans modèle : {plan['calls']} réponse(s) de l'étape 3 absente(s) du "
+                         f"cache TRACE pour le modèle {settings.model} (TRACE_LOCAL_MODEL doit être celui de l'exécution "
+                         "d'origine). Rien n'a été modifié.")
+    previous = {f["ingestion"]["interview_id"]: (_read_analysis(f, analysis.PRACTICE.output_filename),
+                                                _read_analysis(f, analysis.INTERACTION.output_filename)) for f in files}
+    started = time.monotonic()
+    metadata = analysis.analyze_run(metadata, ids, settings=settings, cache=cache, force=False, client=NoModelClient())
+    by_id = {f["ingestion"]["interview_id"]: f for f in analysis.eligible_files(metadata)}
+    interviews = []
+    for interview_id in ids:
+        info = by_id[interview_id]
+        practices = _read_analysis(info, analysis.PRACTICE.output_filename) or {}
+        signals = _read_analysis(info, analysis.INTERACTION.output_filename) or {}
+        old_practices, old_signals = previous[interview_id]
+        interviews.append({
+            "interview_id": interview_id,
+            "practices_before": len((old_practices or {}).get("practices", [])) if old_practices else None,
+            "practices_kept": len(practices.get("practices", [])),
+            "practices_set_aside": [{"reason": p.get("set_aside_reason"), "use_status": p.get("use_status"),
+                                     "summary": p.get("summary"), "quotes": [e.get("quote") for e in p["evidence"]]}
+                                    for p in practices.get("set_aside_practices", [])],
+            "non_use_reason_normalized": (practices.get("practice_selectivity") or {}).get(
+                "non_use_reason_normalized", []),
+            "signals_before": len((old_signals or {}).get("signals", [])) if old_signals else None,
+            "signals_kept": len(signals.get("signals", [])),
+            "signals_set_aside": [{"reason": s.get("set_aside_reason"), "signal_type": s.get("signal_type"),
+                                   "surface_form": s.get("surface_form"), "turn_ids": s.get("turn_ids"),
+                                   "quotes": [e.get("quote") for e in s["evidence"]]}
+                                  for s in signals.get("set_aside_signals", [])],
+            "previous_practices": _fate(old_practices, practices, "practices", "set_aside_practices", "practice_id"),
+            "previous_signals": _fate(old_signals, signals, "signals", "set_aside_signals", "signal_id"),
+            "remaining_non_use_reason_mismatch": [p["practice_id"] for p in practices.get("practices", [])
+                                                  if "NON_USE_REASON_MISMATCH" in p.get("review_reasons", [])],
+        })
+    status = _status(metadata, "3", ids, [], {}, settings, round(time.monotonic() - started, 1))
+    _record(metadata, status)
+    report = {"pipeline_version": PIPELINE_VERSION, "run_id": metadata.get("run_id"), "updated_at": _now(),
+              "model_calls": 0, "model": settings.model, "interviews": interviews}
+    write_json_atomic(stage_dir(metadata, "3") / REFILTER_REPORT_FILENAME, report)
+    return {"metadata": metadata, "status": status, "report": report}
+
+
 def _agent_statuses(info: dict, stage: str) -> dict:
     if stage == "3":
         summaries = (info.get("analysis") or {}).get("agents") or {}

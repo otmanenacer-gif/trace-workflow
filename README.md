@@ -112,6 +112,7 @@ python -m pytest tests/test_local_pipeline.py         # étapes 3 à 6 en local 
 python -m pytest tests/test_local_cli.py              # CLI locale
 python -m pytest tests/test_local_performance.py      # fenêtre de contexte par appel, mesures, corrections, ordre
 python -m pytest tests/test_local_jobs.py             # arrière-plan : processus détaché, refresh, reprise sans recalcul
+python -m pytest tests/test_stage3_selectivity.py     # étape 3 : pratiques liées à une IAG, contradictions démontrées
 python -m pytest tests/test_stage3_repair.py          # étape 3 : citations corrigées sans modèle, 1 réparation max
 python -m pytest tests/test_evidence_validator.py     # validation des citations
 python -m pytest tests/test_analysis_cache.py         # cache des analyses

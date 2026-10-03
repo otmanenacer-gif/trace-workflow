@@ -183,7 +183,8 @@ def _practices() -> dict[int, list[dict]]:
     items[230] = [_p(230, "Je lui demande des quiz.", academic_task="révisions par quiz")]
     items[280] = [_p(280, "J'utilise plutôt Gemini que ChatGPT pour les mails.", academic_task="mails",
                      ai_tool=["Gemini"])]
-    items[350] = [_p(350, "alors je réécris tout", academic_task="textes pour le tuteur")]
+    items[350] = [_p(350, "alors je réécris tout", academic_task="textes pour le tuteur",
+                     student_action_after=["réécrit tout"])]  # suite donnée au résultat de l'outil
     items[370] = [_p(370, SINGLES[370], use_status="refusal", non_use_reason="personal_rule", academic_task="mémoire")]
     for n, (task, action) in ORDINARY.items():
         items[n] = [_p(n, f"Pour {task}, je lui demande {action}.", academic_task=task)]

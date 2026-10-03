@@ -42,16 +42,86 @@ import re
 from core import evidence_validator, interpretation_guard
 from core.schemas import SPEAKER_INTERVIEWER
 
-SELECTIVITY_VERSION = "1.0"
+SELECTIVITY_VERSION = "1.1"  # 1.1 : contradiction entre tours démontrée (même objet, opposition identifiable)
 
 REASON_INTERVIEWER_ONLY = "INTERVIEWER_ONLY_EVIDENCE"
 REASON_MICRO_MARKER = "ISOLATED_MICRO_MARKER"
 REASON_REDUNDANT_MICRO = "REDUNDANT_MICRO_MARKER"
+REASON_CONTRADICTION_TURNS = "CONTRADICTION_NOT_TWO_TURNS"
+REASON_CONTRADICTION_OBJECT = "CONTRADICTION_NO_SHARED_OBJECT"
+REASON_CONTRADICTION_OPPOSITION = "CONTRADICTION_NO_OPPOSITION"
 SET_ASIDE_REASONS = {
     REASON_INTERVIEWER_ONLY: "Toutes les citations proviennent de tours de l'enquêteur (sans avertissement de locuteur).",
     REASON_MICRO_MARKER: "Micro-marqueur relevé seul (remplisseur ou adverbe de degré), sans autre signal sur le tour.",
     REASON_REDUNDANT_MICRO: "Micro-marqueur déjà compris dans la forme relevée d'un autre signal du même tour.",
+    REASON_CONTRADICTION_TURNS: "Contradiction entre tours appuyée sur moins de deux tours cités distincts.",
+    REASON_CONTRADICTION_OBJECT: "Contradiction non démontrée : les passages cités ne portent sur aucun objet commun "
+                                 "(aucun mot plein partagé, et pas tous deux sur l'usage de l'outil).",
+    REASON_CONTRADICTION_OPPOSITION: "Contradiction non démontrée : aucune opposition identifiable entre les passages "
+                                     "cités (négation, fréquence, exclusivité ou repère temporel d'un seul côté).",
 }
+
+# --- Contradiction entre tours : démontrable seulement si les passages cités portent sur le MÊME objet (un mot plein
+# partagé, ou l'usage de l'outil lui-même) ET marquent une opposition identifiable (négation, fréquence, exclusivité ou repère temporel présents
+# d'un côté et pas de l'autre). Une différence de sujet, une plaisanterie ou deux émotions éloignées ne suffisent pas.
+CONTRADICTION_TYPE = "cross_turn_contradiction"
+_STOPWORDS = frozenset("""
+avec pour dans sans mais donc alors comme quand parce puis tout tous toute toutes tres plus moins bien aussi meme
+encore juste vraiment enfin voila cette ceux celle celles cela elle elles nous vous leur leurs notre votre etre suis
+etait etaient sera serait avoir avais avait aurait faire fais fait faites faut fallait dire dis dit peux peut pouvait
+veux veut voulais vais sais sait savoir chose choses truc trucs genre devant derriere apres avant maintenant toujours
+jamais souvent parfois rarement fois normalement rien aucun aucune personne quelque quelques autre autres beaucoup
+trop assez ainsi depuis pendant entre chez vers selon voir vois voit aller allait mettre prendre donner donne
+quoi ouais bref style limite tellement carrement franchement clairement certain certains certaine certaines
+""".split())
+_AI_NAMES = frozenset({"chatgpt", "chat", "openai", "copilot", "gemini", "mistral", "perplexity", "deepl"})
+_MARKERS = {
+    "negation": r"\b(?:ne|n|pas|jamais|rien|aucun|aucune|non|sans|ni)\b",
+    "frequency": r"\b(?:toujours|jamais|souvent|parfois|rarement|une fois|normalement|d habitude|systematiquement|"
+                 r"tout le temps|chaque fois|des fois)\b",
+    "exclusivity": r"\b(?:moi meme|moi qui|tout seul|toute seule|seul|seule|que moi|personnellement)\b",
+    "temporal": r"\b(?:avant|maintenant|aujourd hui|au lycee|desormais|autrefois|a l epoque|plus maintenant)\b",
+}
+_MARKER_PATTERNS = {name: re.compile(pattern) for name, pattern in _MARKERS.items()}
+
+
+def _words(text: str) -> list[str]:
+    return _NON_WORD.sub(" ", interpretation_guard.fold(text or "").replace("'", " ")).split()
+
+
+def _content_stems(text: str) -> set[str]:
+    return {w[:4] for w in _words(text) if len(w) >= 4 and w not in _STOPWORDS and w not in _AI_NAMES}
+
+
+def _markers(text: str) -> set[str]:
+    folded = " ".join(_words(text))
+    return {f"{name}:{match}" for name, pattern in _MARKER_PATTERNS.items() for match in pattern.findall(folded)}
+
+
+def contradiction_problem(signal: dict) -> str | None:
+    """Raison d'écarter une contradiction entre tours (citations valides), ou None si elle est démontrée."""
+    by_turn: dict[str, list[str]] = {}
+    for evidence in signal.get("evidence", []):
+        by_turn.setdefault(evidence.get("turn_id"), []).append(evidence.get("quote") or "")
+    if len(by_turn) < 2:
+        return REASON_CONTRADICTION_TURNS
+    sides = [" ".join(quotes) for quotes in by_turn.values()]
+    pairs = [(a, b) for i, a in enumerate(sides) for b in sides[i + 1:]]
+    same = [(a, b) for a, b in pairs if _same_object(a, b)]
+    if not same:
+        return REASON_CONTRADICTION_OBJECT
+    if not any(_markers(a) != _markers(b) for a, b in same):
+        return REASON_CONTRADICTION_OPPOSITION
+    return None
+
+
+def _same_object(a: str, b: str) -> bool:
+    """Objet commun : un mot plein partagé, ou l'usage de l'outil lui-même (les deux passages nomment une IAG ou
+    s'adressent à l'outil : « je ne l'utilise jamais… » / « je lui demande toujours… »)."""
+    from core.practice_selectivity import addresses_ai, names_ai
+    if _content_stems(a) & _content_stems(b):
+        return True
+    return all(names_ai(side) or addresses_ai(side) for side in (a, b))
 
 # Types sous lesquels un remplisseur relevé seul est typiquement codé (« enfin » seul en autocorrection,
 # « voilà » seul en `other`…). Un signal de ces types n'est écarté que si sa forme est un remplisseur nu.
@@ -127,6 +197,8 @@ def apply(signals: list[dict], transcript: dict, speaker_warnings: dict | None =
         if (checked and all(r["valid"] for r in checked)
                 and all(turns[t]["speaker"] == SPEAKER_INTERVIEWER and t not in speaker_warnings for t in cited)):
             reasons[i] = REASON_INTERVIEWER_ONLY
+        elif signal.get("signal_type") == CONTRADICTION_TYPE and checked and all(r["valid"] for r in checked):
+            reasons[i] = contradiction_problem(signal)  # citations exactes, mais contradiction démontrée ?
 
     candidates = [i for i, s in enumerate(completed)
                   if reasons[i] is None and is_bare_micro_marker(s) and not _needs_check(s, results[i])]

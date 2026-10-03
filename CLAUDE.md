@@ -16,6 +16,8 @@ servi par Ollama (voir `docs/local_runtime.md`).
 - Étape 3 : une réponse lisible n'est jamais régénérée en entier ; citations corrigées de façon déterministe
   (`core/citation_resolver.py`), au plus UNE réparation par le modèle et par objet pour les autres anomalies locales
   (`core/stage3_repair.py`, état persistant `local_runs/stage3/partial/`).
+- Sélectivité de l'étape 3 : `core/practice_selectivity.py` (lien explicite avec une IAG, `non_use_reason`) et
+  `core/signal_selectivity.py` (contradictions démontrées) ; `trace_local.py refilter` les réapplique sans modèle.
 - Tests : `python -m pytest` (aucun modèle réel, aucun réseau : faux Ollama derrière le vrai runner local).
 - Test navigateur (à la main) : `python tests/e2e/browser_check.py` (Playwright + Chromium).
 - Pas d'étape 7 sans demande explicite.

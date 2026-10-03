@@ -285,6 +285,31 @@ Une citation est valide si elle est une **sous-chaîne exacte** du texte du tour
 cité ; seule la normalisation Unicode NFC est appliquée (même texte, encodage
 canonique différent).
 
+### 6 bis. Sélectivité déterministe renforcée (`core/practice_selectivity.py`, `core/signal_selectivity.py` 1.1)
+
+Après la réponse du modèle et avant la validation des preuves, sans aucun appel au modèle ni citation modifiée :
+
+- **`non_use_reason`, normalisation formelle** : `use` / `past_use` / `hypothetical` avec `not_stated` (valeur
+  parasite) → `null` ; `non_use` / `refusal` sans raison → `not_stated`. Une vraie raison n'est jamais modifiée
+  (incohérence signalée : `NON_USE_REASON_MISMATCH`). Bilan : `practice_selectivity.non_use_reason_normalized`.
+- **Pratique : lien explicite avec une IAG.** Établi par : un statut `non_use` / `refusal` ; un champ défini par
+  rapport à l'outil (`ai_tool`, `ai_action`, `student_action_after`, `verification_or_control`) ; la phrase citée,
+  qui nomme une IAG ou s'adresse à l'outil (« je lui demande », « je l'utilise », « il me donne »…) ; sa première
+  phrase répondant à une question de l'enquêteur sur l'IAG ; une reprise explicite (« aussi », « pareil »,
+  « sauf »…) du reste du tour ou de la réponse précédente, liés à une IAG. Sinon : `NO_AI_LINK`, pratique écartée
+  (`set_aside_practices`, avec la vérification de ses citations), jamais transmise à l'étape 4.
+- **Contradiction entre tours** (`cross_turn_contradiction`) : démontrée seulement si les passages cités de deux
+  tours portent sur le **même objet** (un mot plein partagé, ou l'usage de l'outil lui-même) **et** marquent une
+  **opposition** identifiable (négation, fréquence, exclusivité ou repère temporel d'un seul côté). Sinon :
+  `CONTRADICTION_NO_SHARED_OBJECT`, `CONTRADICTION_NO_OPPOSITION` ou `CONTRADICTION_NOT_TWO_TURNS`, signal écarté
+  (`set_aside_signals`).
+- Un objet dont une citation est invalide n'est jamais écarté : le validateur le signale.
+
+Réappliquer ce filtre à un run existant, à partir des réponses déjà validées du cache TRACE, sans aucun appel au
+modèle : `python scripts/trace_local.py refilter <run> [--interview ID]` (rapport : objets conservés, écartés et leur
+règle, ancien identifiant → devenir, normalisations ; `local_runs/stage3/refilter_report.json`). Si une réponse
+manque au cache, rien n'est modifié. L'étape 4 est ensuite rejouée par la garde habituelle.
+
 ## 7. Garde-fou contre le vocabulaire interprétatif (`core/interpretation_guard.py`)
 
 Les champs rédigés par l'agent (jamais les citations) sont comparés, sans
