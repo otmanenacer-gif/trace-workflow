@@ -8,11 +8,14 @@ preuves), sur le modèle de core/signal_selectivity.py. Aucun appel au modèle, 
    validateur (NON_USE_REASON_MISMATCH).
 2. Pertinence : une pratique doit avoir un lien EXPLICITE avec une IAG (usage, non-usage / refus / limite d'usage,
    vérification d'une sortie, délégation, interaction avec l'outil), démontrable à partir des champs déjà produits ou
-   du texte cité. Le lien est établi si l'un des éléments suivants est présent :
-   - statut non_use ou refusal (par définition, un non-usage ou un refus d'une IAG) ;
+   du texte cité. Le statut seul (non_use, refusal…) ne suffit JAMAIS : « je travaille à la bibliothèque » codé
+   non_use n'est pas un non-usage d'une IAG. Le lien est établi si l'un des éléments suivants est présent :
    - un champ défini par rapport à l'outil est renseigné : outil nommé (`ai_tool`), ce que l'outil produit
      (`ai_action`), ce que l'enquêté·e fait du résultat (`student_action_after`), contrôles sur le résultat
      (`verification_or_control`) ;
+   - non-usage ou refus : la phrase citée s'oppose explicitement à l'usage (« moi-même », « je ne veux pas »,
+     « jamais », « je préfère »…) dans un tour qui parle par ailleurs de l'outil, ou en réponse à une série de
+     questions de l'enquêteur centrée sur une IAG (« Tu utilises ChatGPT… ? » puis « Et pour les plans ? ») ;
    - la phrase citée nomme une IAG (IA, ChatGPT, Copilot…, ou l'outil déclaré) ou s'adresse à l'outil (« je lui
      demande », « je lui fais traduire », « je l'utilise », « je m'en sers », « il me donne »…), ou, première phrase
      du tour, elle répond à une question de l'enquêteur qui le fait, ou elle reprend explicitement ce qui précède (« aussi », « pareil »,
@@ -39,7 +42,7 @@ AI_FIELDS = ("ai_tool", "ai_action", "student_action_after", "verification_or_co
 
 REASON_NO_AI_LINK = "NO_AI_LINK"
 SET_ASIDE_REASONS = {
-    REASON_NO_AI_LINK: "Aucun lien explicite avec une IAG : ni non-usage / refus, ni champ défini par rapport à l'outil "
+    REASON_NO_AI_LINK: "Aucun lien explicite avec une IAG (le statut seul ne suffit pas) : ni champ défini par rapport à l'outil "
                        "(outil, action de l'outil, suite donnée au résultat, contrôle du résultat), ni tour cité qui "
                        "nomme une IAG ou s'adresse à l'outil (routine sans lien démontré).",
 }
@@ -53,7 +56,7 @@ _ADDRESSED = re.compile(
     r"\b(?:lui (?:\w+ ){0,3}?(?:demand|fai[st]|fait|pos|donn|envoi|envoy|coll|soum|di[st]|ecri|tradu|"
     r"corrig|redig|reformul|resum|cherch|genere)\w*|l (?:\w+ ){0,2}?utilis\w*|m en (?:sers|servais|servir|suis servi\w*)|"
     r"me sers d\w*|(?:il|elle|ca) m(?:e|) (?:donn|propos|sort|gener|fai|ecri|corrig|repon|redig|resum|conseill|aid|"
-    r"expliqu|sugger|recommand|montr|indiqu|tradu|reformul)\w*)\b")
+    r"expliqu|sugger|recommand|montr|indiqu|tradu|reformul)\w*|(?:il|elle) (?:\w+ ){0,4}?a ma place)\b")
 
 
 def _fold(text: str) -> str:
@@ -111,18 +114,60 @@ def turn_linked_to_ai(position: int, ordered: list[dict], tools: list[str] | Non
     return False
 
 
+# Non-usage / refus : opposition explicite à l'usage dans la phrase citée (texte replié).
+_OPPOSITION = re.compile(r"\b(?:ne|n|pas|jamais|non|sans|moi meme|par moi meme|tout seul|toute seule|prefere|"
+                         r"preferes|refuse|interdit)\b")
+# Question de l'enquêteur qui prolonge la précédente (« Et pour les plans ? », « Et ensuite ? », « Concrètement ? »…)
+_ELLIPTIC_QUESTION = re.compile(r"^(?:d accord |ok |bon |oui )?et\b|\b(?:ensuite|concretement|en dire plus|"
+                                r"ca se passe|par exemple|c est a dire|comment ca)\b")
+QUESTION_CHAIN = 6
+
+
+def _linked(text: str, tools) -> bool:
+    return names_ai(text, tools) or addresses_ai(text)
+
+
+def question_series_on_ai(position: int, ordered: list[dict], tools=None) -> bool:
+    """Le tour répond à une question de l'enquêteur centrée sur une IAG : la question elle-même, ou une série de
+    relances (« Et pour… ? », « Et ensuite ? », « Tu peux m'en dire plus ? »…) qui remonte à une question ou à une
+    réponse de la même série qui nomme l'outil ou s'adresse à lui (au plus QUESTION_CHAIN questions en arrière)."""
+    index = position - 1
+    for _ in range(QUESTION_CHAIN):
+        while index >= 0 and ordered[index]["speaker"] != SPEAKER_INTERVIEWER:
+            if index < position - 1 and _linked(ordered[index]["text"], tools):
+                return True  # réponse de la même série de relances, sur l'outil
+            index -= 1
+        if index < 0:
+            return False
+        question = ordered[index]["text"]
+        if _linked(question, tools):
+            return True
+        if not _ELLIPTIC_QUESTION.search(_fold(question)):
+            return False  # nouvelle question, sans lien avec une IAG : la série s'arrête
+        index -= 1
+    return False
+
+
 def relevance_problem(practice: dict, turns: dict, ordered: list[dict]) -> str | None:
     """Raison d'écarter la pratique, ou None si son lien avec une IAG est établi. Le passage examiné est la PHRASE
-    citée (une routine citée dans une autre phrase d'un tour qui parle de l'outil n'y est pas rattachée)."""
-    if practice.get("use_status") in NON_USE_STATUSES or any(practice.get(field) for field in AI_FIELDS):
+    citée (une routine citée dans une autre phrase d'un tour qui parle de l'outil n'y est pas rattachée).
+    Le statut seul (non_use, refusal…) ne suffit jamais."""
+    if any(practice.get(field) for field in AI_FIELDS):
         return None
+    non_use = practice.get("use_status") in NON_USE_STATUSES
     for evidence in practice.get("evidence", []):
         turn = turns.get(evidence.get("turn_id"))
         if turn is None:
             continue
         # la phrase du tour qui contient la citation (comme le validateur pour la référence à sa propre parole)
         sentence = " ".join(evidence_validator.quoted_sentences(evidence.get("quote") or "", turn["text"]))
-        if turn_linked_to_ai(turn["position"], ordered, practice.get("ai_tool"), text=sentence):
+        tools = practice.get("ai_tool")
+        if turn_linked_to_ai(turn["position"], ordered, tools, text=sentence):
+            return None
+        # non-usage : opposition explicite à l'usage (« moi-même », « je ne veux pas », « jamais »…) dans un tour qui
+        # parle par ailleurs de l'outil, ou en réponse à une série de questions centrée sur une IAG
+        if non_use and _OPPOSITION.search(f" {_fold(sentence)} ") and (
+                _linked(turn["text"], tools) or question_series_on_ai(turn["position"], ordered, tools)):
             return None
     return REASON_NO_AI_LINK
 

@@ -292,9 +292,15 @@ Après la réponse du modèle et avant la validation des preuves, sans aucun app
 - **`non_use_reason`, normalisation formelle** : `use` / `past_use` / `hypothetical` avec `not_stated` (valeur
   parasite) → `null` ; `non_use` / `refusal` sans raison → `not_stated`. Une vraie raison n'est jamais modifiée
   (incohérence signalée : `NON_USE_REASON_MISMATCH`). Bilan : `practice_selectivity.non_use_reason_normalized`.
-- **Pratique : lien explicite avec une IAG.** Établi par : un statut `non_use` / `refusal` ; un champ défini par
+- **Pratique : lien explicite avec une IAG.** Le statut seul (`non_use`, `refusal`…) ne suffit **jamais** : une
+  routine (« je travaille sur le campus, à la bibliothèque ») codée `non_use` est écartée. Pour un non-usage ou un
+  refus, la phrase citée doit s'opposer explicitement à l'usage (« moi-même », « je ne veux pas », « jamais »,
+  « je préfère ») dans un tour qui parle par ailleurs de l'outil, ou en réponse à une série de questions de
+  l'enquêteur centrée sur une IAG (« Tu utilises ChatGPT… ? » puis « Et pour les plans ? »). Sinon, le lien est établi
+  comme pour tout statut par : un champ défini par
   rapport à l'outil (`ai_tool`, `ai_action`, `student_action_after`, `verification_or_control`) ; la phrase citée,
-  qui nomme une IAG ou s'adresse à l'outil (« je lui demande », « je l'utilise », « il me donne »…) ; sa première
+  qui nomme une IAG ou s'adresse à l'outil (« je lui demande », « je l'utilise », « il me donne », « qu'il écrive à
+  ma place »…) ; sa première
   phrase répondant à une question de l'enquêteur sur l'IAG ; une reprise explicite (« aussi », « pareil »,
   « sauf »…) du reste du tour ou de la réponse précédente, liés à une IAG. Sinon : `NO_AI_LINK`, pratique écartée
   (`set_aside_practices`, avec la vérification de ses citations), jamais transmise à l'étape 4.

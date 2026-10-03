@@ -101,14 +101,54 @@ def test_routines_without_an_explicit_ai_link_are_set_aside_others_are_kept(tmp_
         rp(6, "Je fais du foot le mercredi.", use_status="use"),                       # routine
         rp(8, "Pour mes mails oui, souvent.", use_status="use"),                       # réponse à une question sur l'IAG
         rp(6, "Je fais du foot le mercredi.", use_status="use", ai_action=["propose un programme"]),  # champ déclaré
-        rp(6, "Je fais du foot le mercredi.", use_status="non_use", non_use_reason="not_stated"),    # non-usage
+        rp(6, "Je fais du foot le mercredi.", use_status="non_use", non_use_reason="not_stated"),    # statut seul
     ]
     result = practice_selectivity.apply(practices, transcript)
     aside = [(p["evidence"][0]["quote"], p["set_aside_reason"]) for p in result["set_aside"]]
     assert aside == [("le soir je révise à la bibliothèque avec mes amis", practice_selectivity.REASON_NO_AI_LINK),
+                     ("Je fais du foot le mercredi.", practice_selectivity.REASON_NO_AI_LINK),
                      ("Je fais du foot le mercredi.", practice_selectivity.REASON_NO_AI_LINK)]
-    assert len(result["practices"]) == 5 and result["summary"]["set_aside_by_reason"] == {"NO_AI_LINK": 2}
+    assert len(result["practices"]) == 4 and result["summary"]["set_aside_by_reason"] == {"NO_AI_LINK": 3}
     assert all(p["evidence"][0]["validation"]["valid"] for p in result["set_aside"])  # citations intactes, vérifiées
+
+
+CAMPUS_TEXT = ("Enquêteur : Tu utilises ChatGPT pour réviser ?\n"
+               "Enquêté : Oui, je lui demande des fiches.\n"
+               "Enquêteur : Et tes dissertations ?\n"
+               "Enquêté : Non, mes dissertations je les écris moi-même.\n"
+               "Enquêteur : Et pour les plans, tu lui demandes ?\n"
+               "Enquêté : Je ne veux pas qu'il réfléchisse à ma place.\n"
+               "Enquêteur : Tu travailles où, d'habitude ?\n"
+               "Enquêté : Je travaille surtout sur le campus, à la bibliothèque, je ne travaille pas chez moi.\n"
+               "Enquêteur : Et le week-end ?\n"
+               "Enquêté : Le week-end je vais à la bibliothèque municipale.\n")
+
+
+def test_a_campus_routine_coded_non_use_without_any_ai_link_is_set_aside(tmp_path):
+    """Cas observé sur OTMANE_NACER : routine de travail (campus, bibliothèque) codée non_use, sans outil, sans
+    mention d'une IAG ni dans la citation ni dans le contexte immédiat → NO_AI_LINK. Le statut seul ne suffit pas."""
+    run = si.make_ingested_run(tmp_path, [("Entretien_campus.txt", CAMPUS_TEXT.encode("utf-8"))])
+    transcript = json.loads((Path(run["files"][0]["ingestion"]["output_dir"]) / config.STRUCTURED_TRANSCRIPT_FILENAME)
+                            .read_text(encoding="utf-8"))
+
+    def cp(number: int, quote: str, **fields) -> dict:
+        tid = f"ENTRETIEN_CAMPUS_T{number:04d}"
+        return si.practice(summary="Pratique.", turn_start=tid, turn_end=tid, ai_tool=[], ai_action=[],
+                           evidence=[{"turn_id": tid, "quote": quote}], **fields)
+
+    campus = cp(8, "Je travaille surtout sur le campus, à la bibliothèque", use_status="non_use",
+                non_use_reason="not_stated")
+    weekend = cp(10, "Le week-end je vais à la bibliothèque municipale.", use_status="non_use",
+                 non_use_reason="preference")  # même avec une raison, toujours sans lien avec une IAG
+    written = cp(4, "mes dissertations je les écris moi-même", use_status="non_use", non_use_reason="not_stated")
+    refusal = cp(6, "Je ne veux pas qu'il réfléchisse à ma place.", use_status="refusal",
+                 non_use_reason="personal_rule")
+    result = practice_selectivity.apply([campus, weekend, written, refusal], transcript)
+    assert [(p["evidence"][0]["quote"], p["set_aside_reason"]) for p in result["set_aside"]] == [
+        (campus["evidence"][0]["quote"], practice_selectivity.REASON_NO_AI_LINK),
+        (weekend["evidence"][0]["quote"], practice_selectivity.REASON_NO_AI_LINK)]
+    # vrais non-usages : réponse à une question sur l'outil, ou pronom qui le désigne (« qu'il réfléchisse à ma place »)
+    assert result["practices"] == [written, refusal]
 
 
 def test_a_practice_with_an_invalid_quote_is_never_set_aside_the_validator_reports_it(tmp_path):

@@ -73,6 +73,9 @@ WARNED_TEXTS = {
     201: "Moi personnellement j'utilise ChatGPT pour mes exposés, mais je préfère faire les diapos moi-même.",
     241: "Moi personnellement je lui demande des plans pour mes cours, jamais de texte entier.",
 }
+# Questions de l'enquêteur centrées sur l'outil, juste avant une réponse de non-usage (sinon rien ne rattache
+# « je préfère écrire moi-même… » à une IAG : core/practice_selectivity.py).
+KEY_QUESTIONS = {39: "Et tu lui demandes d'écrire tes dissertations ?"}
 # Question de l'enquêteur qu'un lecteur qui surcode transforme à tort en signal de l'enquêté·e.
 LEADING_QUESTION_TURN = 79
 LEADING_QUESTION = "Tu as peur que tes profs le voient ?"
@@ -97,6 +100,8 @@ def turn_text(number: int) -> str:
         return WARNED_TEXTS[number]
     if number == LEADING_QUESTION_TURN:
         return LEADING_QUESTION
+    if number in KEY_QUESTIONS:
+        return KEY_QUESTIONS[number]
     if number % 2:
         return _QUESTIONS[k % len(_QUESTIONS)].format(topic=topic)
     if number in KEY_TURNS:
