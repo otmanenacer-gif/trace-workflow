@@ -11,7 +11,9 @@ Règles :
   les proxys HTTP de l'environnement ne sont jamais utilisés ;
 - aucun fournisseur externe, aucune clé, aucun repli : Ollama absent, modèle absent ou délai dépassé donnent une
   erreur claire (`OLLAMA_UNAVAILABLE`, `MODEL_NOT_FOUND`, `OLLAMA_TIMEOUT`), jamais un autre modèle ;
-- une réponse non conforme donne lieu à de nouvelles tentatives LOCALES : JSON invalide ou hors schéma, au plus
+- étape 3 (Practice Extractor, Interaction Reader, longue distance) : une réponse lisible n'est jamais régénérée en
+  entier ; seuls les objets fautifs sont réparés, un par un, avec un contexte minimal (core/stage3_repair.py) ;
+- sinon, une réponse non conforme donne lieu à de nouvelles tentatives LOCALES : JSON invalide ou hors schéma, au plus
   `max_corrections` ; anomalie bloquante du validateur de l'étape, au plus `max_method_corrections`. Le modèle reçoit
   sa réponse et la liste des erreurs, et renvoie l'objet complet corrigé. Une réponse tronquée (réponse maximale
   atteinte) est redemandée en entier, avec une réserve doublée, sans être renvoyée au modèle. Le validateur n'est jamais contourné : une réponse conforme au schéma qui garde une
@@ -44,7 +46,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
+from pydantic import ValidationError
+
 from agents.base import AgentSpec, canonical_json, sha256_text
+from core import stage3_repair
 from core.analysis_cache import write_json_atomic
 from core.llm_client import (CTX_BUCKETS, RUNTIME_ERROR_CODES, LLMError, LLMResult, LLMSettings, parse_json_output,
                              usage_to_dict)
@@ -359,6 +364,8 @@ class LocalAgentRunner:
     (comptés par Ollama), vitesses, chargement du modèle, taille de la réponse, motif de la correction.
     """
 
+    item_repair = True  # étape 3 : réparation ciblée des seuls objets fautifs (core/stage3_repair.py)
+
     def __init__(self, settings: LLMSettings, *, transport=None, checker: Callable | None = None,
                  journal_dir: Path | None = None, specs: tuple[AgentSpec, ...] = (),
                  on_event: Callable[[dict], None] | None = None):
@@ -432,55 +439,32 @@ class LocalAgentRunner:
         reply: dict = {}
         text = last_valid_text = ""
         budget = {"format": self.settings.max_corrections, "method": self.settings.max_method_corrections}
+        repair = (self.item_repair and spec is not None and hasattr(self.checker, "repairable")
+                  and self.checker.repairable(spec, label))
+        state_file = stage3_repair.state_path(self.journal_dir, call_id) if repair else None
         try:
+            state = stage3_repair.load_state(state_file, call_id, self.settings.model) if repair else None
+            if state is not None:  # reprise : génération initiale et réparations terminées conservées
+                logger.info("%s — %s : reprise des réparations (%s objet(s) à traiter)", record["agent_label"], label,
+                            sum(i["status"] == stage3_repair.PENDING for i in state["items"]))
+                return await self._repair_items(spec, label, system_prompt, user_content, response_model, None,
+                                                record, attempts, started, tokens, {}, state_file, state=state)
             number = 0
             while True:
                 number += 1
-                attempt: dict = {"attempt": number}
-
-                def prepare(_attempt=attempt, _messages=messages, _reserve=reserve) -> tuple[int, int]:
-                    # au moment où l'appel obtient le modèle : la fenêtre tient compte de celle déjà chargée
-                    prompt_tokens = estimate_prompt_tokens(_messages, self._chars_per_token)
-                    num_ctx, num_predict = context_plan(prompt_tokens, _reserve, self.settings.num_ctx,
-                                                        self._ctx_floor)
-                    self._ctx_floor = max(self._ctx_floor, num_ctx)
-                    _attempt.update(started_at=_now(), prompt_chars=sum(len(m["content"]) for m in _messages),
-                                    estimated_input_tokens=prompt_tokens, num_ctx=num_ctx, num_predict=num_predict,
-                                    _clock=time.monotonic())
-                    record.update(num_ctx=num_ctx, num_predict=num_predict,
-                                  started_at=record["started_at"] or _attempt["started_at"])
-                    self._emit({"type": "call_started", "label": label, "agent": agent,
-                                "agent_label": record["agent_label"], "attempt": _attempt["attempt"],
-                                "num_ctx": num_ctx, "estimated_input_tokens": prompt_tokens, "at": time.time()})
-                    return num_ctx, num_predict
-
-                def progress(produced: int, _number=number) -> None:
-                    self._emit({"type": "tokens", "label": label, "attempt": _number, "output_tokens": produced,
-                                "at": time.time()})
-
-                reply = await self._chat(messages, output_schema, prepare, progress)
-                attempt_started = attempt.pop("_clock")
-                text = (reply.get("message") or {}).get("content") or ""
-                prompt_eval, evals = int(reply.get("prompt_eval_count") or 0), int(reply.get("eval_count") or 0)
-                tokens["input_tokens"] += prompt_eval
-                tokens["output_tokens"] += evals
-                attempt.update(finished_at=_now(), duration_seconds=round(time.monotonic() - attempt_started, 2),
-                               done_reason=reply.get("done_reason"), prompt_eval_count=reply.get("prompt_eval_count"),
-                               prompt_eval_seconds=_seconds(reply.get("prompt_eval_duration")),
-                               prompt_tokens_per_second=_rate(prompt_eval, reply.get("prompt_eval_duration")),
-                               eval_count=reply.get("eval_count"), eval_seconds=_seconds(reply.get("eval_duration")),
-                               tokens_per_second=_rate(evals, reply.get("eval_duration")),
-                               load_seconds=_seconds(reply.get("load_duration")), response_chars=len(text))
-                record["generation_seconds"] = round(record["generation_seconds"] + (attempt["eval_seconds"] or 0), 2)
-                record["load_seconds"] = round(record["load_seconds"] + (attempt["load_seconds"] or 0), 2)
-                if prompt_eval > attempt["estimated_input_tokens"]:  # Ollama compte plus qu'estimé : estimation durcie
-                    self._chars_per_token = min(self._chars_per_token,
-                                                attempt["prompt_chars"] / prompt_eval * 0.95)
+                reply, text, attempt = await self._generate(messages, output_schema, reserve, record, tokens,
+                                                            number=number)
                 kind = None
                 if reply.get("done_reason") == "length":
                     last_error = LLMError("TRUNCATED")
                     kind, problems = "truncated", [last_error.user_message]
                     attempts.append({**attempt, "status": "invalid", "problems": problems})
+                elif repair and (split := stage3_repair.split_response(text, spec, response_model)) is not None:
+                    # réponse lisible : seuls les objets fautifs seront redemandés (jamais toute la réponse)
+                    attempts.append({**attempt, "status": "split", "problems": [], "phase": "initial"})
+                    self._log_attempt(record, attempts[-1], None)
+                    return await self._repair_items(spec, label, system_prompt, user_content, response_model, split,
+                                                    record, attempts, started, tokens, reply, state_file)
                 else:
                     try:
                         data = parse_json_output(text, response_model, max_problems=20)
@@ -533,6 +517,163 @@ class LocalAgentRunner:
         finally:
             record["attempts"] = len(attempts)
 
+    async def _generate(self, messages: list[dict], output_schema: dict, reserve: int, record: dict, tokens: dict, *,
+                        number: int, phase: str = "initial", item_index: int | None = None) -> tuple[dict, str, dict]:
+        """UNE génération (réponse complète ou réparation d'un objet), mesurée. → (réponse d'Ollama, texte, mesures)."""
+        label, agent = record["label"], record["agent"]
+        attempt: dict = {"attempt": number, "phase": phase}
+        if item_index is not None:
+            attempt["item_index"] = item_index
+
+        def prepare() -> tuple[int, int]:
+            # au moment où l'appel obtient le modèle : la fenêtre tient compte de celle déjà chargée
+            prompt_tokens = estimate_prompt_tokens(messages, self._chars_per_token)
+            num_ctx, num_predict = context_plan(prompt_tokens, reserve, self.settings.num_ctx, self._ctx_floor)
+            self._ctx_floor = max(self._ctx_floor, num_ctx)
+            attempt.update(started_at=_now(), prompt_chars=sum(len(m["content"]) for m in messages),
+                           estimated_input_tokens=prompt_tokens, num_ctx=num_ctx, num_predict=num_predict,
+                           _clock=time.monotonic())
+            record.update(num_ctx=num_ctx, started_at=record["started_at"] or attempt["started_at"])
+            if phase != "repair":
+                record["num_predict"] = num_predict
+            self._emit({"type": "call_started", "label": label, "agent": agent, "agent_label": record["agent_label"],
+                        "attempt": number, "phase": phase, "item_index": item_index, "num_ctx": num_ctx,
+                        "estimated_input_tokens": prompt_tokens, "at": time.time()})
+            return num_ctx, num_predict
+
+        def progress(produced: int) -> None:
+            self._emit({"type": "tokens", "label": label, "attempt": number, "output_tokens": produced,
+                        "at": time.time()})
+
+        reply = await self._chat(messages, output_schema, prepare, progress)
+        attempt_started = attempt.pop("_clock")
+        text = (reply.get("message") or {}).get("content") or ""
+        prompt_eval, evals = int(reply.get("prompt_eval_count") or 0), int(reply.get("eval_count") or 0)
+        tokens["input_tokens"] += prompt_eval
+        tokens["output_tokens"] += evals
+        attempt.update(finished_at=_now(), duration_seconds=round(time.monotonic() - attempt_started, 2),
+                       done_reason=reply.get("done_reason"), prompt_eval_count=reply.get("prompt_eval_count"),
+                       prompt_eval_seconds=_seconds(reply.get("prompt_eval_duration")),
+                       prompt_tokens_per_second=_rate(prompt_eval, reply.get("prompt_eval_duration")),
+                       eval_count=reply.get("eval_count"), eval_seconds=_seconds(reply.get("eval_duration")),
+                       tokens_per_second=_rate(evals, reply.get("eval_duration")),
+                       load_seconds=_seconds(reply.get("load_duration")), response_chars=len(text))
+        record["generation_seconds"] = round(record["generation_seconds"] + (attempt["eval_seconds"] or 0), 2)
+        record["load_seconds"] = round(record["load_seconds"] + (attempt["load_seconds"] or 0), 2)
+        if prompt_eval > attempt["estimated_input_tokens"]:  # Ollama compte plus qu'estimé : estimation durcie
+            self._chars_per_token = min(self._chars_per_token, attempt["prompt_chars"] / prompt_eval * 0.95)
+        return reply, text, attempt
+
+    async def _repair_items(self, spec: AgentSpec, label: str, system_prompt: str, user_content: str,
+                            response_model, split: dict | None, record: dict, attempts: list, started: float,
+                            tokens: dict, reply: dict, state_file, state: dict | None = None) -> LLMResult:
+        """Réparation CIBLÉE (core/stage3_repair.py) : objets valides conservés, chaque objet fautif redemandé seul
+        avec son contexte minimal, fusion dans l'ordre d'origine, puis validation complète habituelle."""
+        if state is None:
+            initial = [a for a in attempts if a.get("phase", "initial") == "initial"]
+            state = {"state_version": stage3_repair.STATE_VERSION, "call_id": record["call_id"],
+                     "model": self.settings.model, "agent": spec.name, "label": label, "root": split["root"],
+                     "initial": {"generations": len(initial),
+                                 "output_tokens": sum(int(a.get("eval_count") or 0) for a in initial),
+                                 "input_tokens": sum(int(a.get("prompt_eval_count") or 0) for a in initial),
+                                 "seconds": round(sum(a.get("duration_seconds") or 0 for a in initial), 2)},
+                     "items": []}
+            for index, item in enumerate(split["items"]):
+                schema_problems = split["schema_problems"].get(index)
+                checked = (self.checker.item_check(spec, label, item) if not schema_problems
+                           else {"problems": schema_problems, "invalid_citations": 0, "citations": 0})
+                if schema_problems and isinstance(item, dict) and isinstance(item.get("evidence"), list):
+                    try:  # citations d'un objet hors schéma, pour le bilan
+                        checked["invalid_citations"] = self.checker.item_check(spec, label, item)["invalid_citations"]
+                    except Exception:  # noqa: BLE001 — objet trop malformé pour être lu : aucune citation comptée
+                        pass
+                state["items"].append({
+                    "index": index, "original": item, "object": item,
+                    "status": stage3_repair.PENDING if checked["problems"] else stage3_repair.VALID,
+                    "schema_ok": not schema_problems, "problems": checked["problems"],
+                    "invalid_citations_initial": checked["invalid_citations"],
+                    "invalid_citations": checked["invalid_citations"], "repairs": 0, "reason": None})
+            stage3_repair.save_state(state_file, state)  # objets validés enregistrés avant toute réparation
+        else:
+            reply = {"model": self.settings.model}
+        total = len(state["items"])
+        reserve = stage3_repair.REPAIR_RESERVE.get(spec.name, 1024)
+        schema = stage3_repair.repair_schema(spec)
+        budget = max(1, self.settings.max_corrections)
+        number = len(attempts)
+        for entry in state["items"]:
+            while entry["status"] == stage3_repair.PENDING:
+                if entry["repairs"] >= budget:
+                    # non réparable : l'objet d'origine conforme au schéma est conservé tel quel et signalé par le
+                    # validateur habituel ; hors schéma, il ne peut pas figurer dans la sortie
+                    if stage3_repair.item_schema_problems(entry["original"], state["root"], spec, response_model):
+                        entry["status"] = stage3_repair.DROPPED
+                    else:  # jamais une réparation ratée (tour ou citation inventés) : l'objet d'origine, signalé
+                        entry.update(status=stage3_repair.UNRESOLVED, object=entry["original"],
+                                     invalid_citations=entry["invalid_citations_initial"])
+                    break
+                number += 1
+                entry["repairs"] += 1
+                turns_json = self.checker.repair_turns(spec, label, user_content, entry["object"])
+                message = stage3_repair.repair_message(spec, entry["index"], total, entry["object"], entry["problems"],
+                                                       turns_json)
+                _, text, attempt = await self._generate(
+                    [{"role": "system", "content": system_prompt}, {"role": "user", "content": message}], schema,
+                    reserve, record, tokens, number=number, phase="repair", item_index=entry["index"])
+                parsed = stage3_repair.parse_repair(text, spec, state["root"], response_model)
+                if attempt.get("done_reason") == "length":
+                    parsed = {"decision": "invalid", "object": None, "reason": None,
+                              "problems": ["TRUNCATED — réparation tronquée"]}
+                if parsed["decision"] == "withdrawn":
+                    entry.update(status=stage3_repair.WITHDRAWN, reason=parsed["reason"])
+                    status, problems = "withdrawn", []
+                elif parsed["decision"] == "corrected":
+                    checked = self.checker.item_check(spec, label, parsed["object"])
+                    problems = checked["problems"]
+                    entry.update(object=parsed["object"], schema_ok=True, problems=problems,
+                                 invalid_citations=checked["invalid_citations"])
+                    if not problems:
+                        entry["status"] = stage3_repair.REPAIRED
+                    status = "repaired" if not problems else "blocking"
+                else:
+                    problems = parsed["problems"]
+                    status = "invalid"
+                    if not entry["schema_ok"]:
+                        entry["problems"] = problems
+                attempts.append({**attempt, "status": status, "problems": problems})
+                self._log_attempt(record, attempts[-1], "repair")
+                stage3_repair.save_state(state_file, state)  # chaque réparation terminée est conservée
+        stage3_repair.save_state(state_file, state)
+        output = stage3_repair.merged_output(state, spec)
+        try:
+            data = response_model.model_validate(output)
+        except ValidationError:
+            raise LLMError("SCHEMA_VALIDATION", "fusion des objets réparés") from None
+        final = self.checker(spec, label, user_content, data.model_dump(mode="json"))  # validation complète
+        statuses = [i["status"] for i in state["items"]]
+        repairs = [a for a in attempts if a.get("phase") == "repair"]
+        record.update(
+            outcome="accepted" if not final else "accepted_with_issues", remaining_issues=final,
+            full_generations=state["initial"]["generations"], repairs=len(repairs),
+            initial_output_tokens=state["initial"]["output_tokens"],
+            repair_output_tokens=sum(int(a.get("eval_count") or 0) for a in repairs),
+            repair_input_tokens=sum(int(a.get("prompt_eval_count") or 0) for a in repairs),
+            repair_seconds=round(sum(a.get("duration_seconds") or 0 for a in repairs), 2),
+            objects_total=total, objects_valid_initial=statuses.count(stage3_repair.VALID),
+            objects_repaired=statuses.count(stage3_repair.REPAIRED),
+            objects_rejected=statuses.count(stage3_repair.WITHDRAWN) + statuses.count(stage3_repair.DROPPED),
+            objects_unresolved=statuses.count(stage3_repair.UNRESOLVED),
+            rejected_objects=[{"index": i["index"], "status": i["status"], "reason": i["reason"],
+                               "problems": i["problems"]} for i in state["items"]
+                              if i["status"] in (stage3_repair.WITHDRAWN, stage3_repair.DROPPED)],
+            **stage3_repair.citation_summary(state))
+        if repairs:
+            record["correction_reasons"].append(f"réparation ciblée ({len(repairs)})")
+        text = json.dumps(output, ensure_ascii=False)
+        result = self._result(data, record, attempts, started, tokens, reply, text)
+        stage3_repair.drop_state(state_file)
+        return result
+
     def _finish(self, record: dict, attempts: list, started: float, tokens: dict, text: str) -> None:
         # durée passée sur le modèle (toutes tentatives), sans l'attente d'accès au modèle
         record.update(attempts=len(attempts), finished_at=_now(),
@@ -546,7 +687,8 @@ class LocalAgentRunner:
 
     def _log_attempt(self, record: dict, attempt: dict, kind: str | None) -> None:
         reason = {"truncated": "réponse tronquée", "format": "JSON ou schéma non conforme",
-                  "method": f"{len(attempt['problems'])} anomalie(s) bloquante(s) du validateur"}.get(kind)
+                  "method": f"{len(attempt['problems'])} anomalie(s) bloquante(s) du validateur",
+                  "repair": f"réparation ciblée de l'objet n° {(attempt.get('item_index') or 0) + 1}"}.get(kind)
         logger.info("%s — %s — tentative %s : %s (%s tokens lus, %s générés en %s s, contexte %s)%s",
                     record.get("agent_label") or record.get("agent"), record["label"], attempt["attempt"],
                     attempt["status"], attempt.get("prompt_eval_count"), attempt.get("eval_count"),

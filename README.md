@@ -112,6 +112,7 @@ python -m pytest tests/test_local_pipeline.py         # étapes 3 à 6 en local 
 python -m pytest tests/test_local_cli.py              # CLI locale
 python -m pytest tests/test_local_performance.py      # fenêtre de contexte par appel, mesures, corrections, ordre
 python -m pytest tests/test_local_jobs.py             # arrière-plan : processus détaché, refresh, reprise sans recalcul
+python -m pytest tests/test_stage3_repair.py          # étape 3 : réparation ciblée des seuls objets fautifs
 python -m pytest tests/test_evidence_validator.py     # validation des citations
 python -m pytest tests/test_analysis_cache.py         # cache des analyses
 python -m pytest tests/test_analysis_pipeline.py      # indépendance, agents en parallèle, échecs isolés
@@ -485,6 +486,7 @@ core/local_pipeline.py         étapes 3 à 6 en local : gardes, enchaînement 3
 core/local_agent_runner.py     LocalAgentRunner : Ollama local, JSON Schema, Pydantic, corrections locales, journal,
                                fenêtre de contexte par appel, mesures de chaque tentative
 core/local_jobs.py             exécution en arrière-plan (processus détaché, job.json, battement), reprise
+core/stage3_repair.py          étape 3 : réparation ciblée des seuls objets fautifs, état persistant, bilan des citations
 core/agent_checks.py           contrôle méthodologique d'une réponse (validateurs existants) avant correction
 core/analysis.py               étape 3 : deux agents en parallèle, sorties, manifests, statuts
 core/analysis_cache.py         cache déterministe des analyses

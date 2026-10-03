@@ -294,7 +294,9 @@ class JobReporter:
                                  event.get("agent_label") or event.get("agent") or "agent")
                     self.job["checklist"].append(item)
                 item.update(status=CALL_RUNNING, attempts=event["attempt"], num_ctx=event.get("num_ctx"))
-                self.job["current"] = {"label": event["label"], "agent_label": item["agent_label"],
+                phase = (f" — réparation ciblée de l'objet n° {event['item_index'] + 1}"
+                         if event.get("phase") == "repair" and event.get("item_index") is not None else "")
+                self.job["current"] = {"label": event["label"], "agent_label": item["agent_label"] + phase,
                                        "attempt": event["attempt"], "started_at": event["at"],
                                        "call_started_at": (self.job.get("current") or {}).get("call_started_at")
                                        if event["attempt"] > 1 else event["at"],
@@ -324,7 +326,12 @@ class JobReporter:
                                                 "input_tokens", "output_tokens", "duration_seconds",
                                                 "generation_seconds", "tokens_per_second", "load_seconds",
                                                 "response_chars", "correction_reasons", "started_at",
-                                                "finished_at", "error")})
+                                                "finished_at", "error", "full_generations", "repairs",
+                                                "initial_output_tokens", "repair_output_tokens",
+                                                "repair_input_tokens", "repair_seconds", "objects_total",
+                                                "objects_repaired", "objects_rejected", "objects_unresolved",
+                                                "citations_invalid_initial", "citations_repaired",
+                                                "citations_withdrawn", "citations_invalid_after_repair")})
                 self.job["current"] = None
                 self.save()
             elif kind == "stored":

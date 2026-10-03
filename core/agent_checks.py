@@ -21,8 +21,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from agents.base import AgentSpec, sha256_text
-from core import accountability, analysis, config, cross_interview, evidence_validator
+from agents.base import AgentSpec, build_agent_input, serialize_agent_input, sha256_text
+from core import accountability, analysis, config, cross_interview, evidence_validator, signal_selectivity
 from core import accountability_candidates as candidates_mod
 from core import accountability_episode_validator as episode_validator
 from core import cross_interview_material as cm
@@ -31,6 +31,7 @@ from core import speaker_attribution_auditor as speaker_audit
 from core import trajectory
 from core import trajectory_candidates as tc
 from core import trajectory_validator
+from core import stage3_repair
 
 # Agents sémantiques des étapes 3 à 6
 STAGE3_SPECS: tuple[AgentSpec, ...] = (analysis.AUDITOR, analysis.PRACTICE, analysis.INTERACTION,
@@ -66,6 +67,7 @@ class MethodChecker:
     def __init__(self, interview_dirs: dict[str, str] | None = None, corpus=None):
         self.interview_dirs = {k: Path(v) for k, v in (interview_dirs or {}).items()}
         self.corpus = corpus  # cross_interview.Stage6Input
+        self._contexts: dict[str, dict] = {}
 
     def __call__(self, spec: AgentSpec, label: str, user_content: str, output: dict) -> list[str]:
         return self.report(spec, label, user_content, output)["blocking"]
@@ -120,6 +122,95 @@ class MethodChecker:
             report["info"].append("Tours où l'enquêté·e semble évoquer un non-usage sans pratique correspondante : "
                                   + ", ".join(cues["uncovered_turn_ids"]) + " (à relire, sans rien inventer).")
         return validated["report"]["issues"]
+
+    # --- Étape 3 : contrôle et réparation d'UN objet (core/stage3_repair.py) ------------------------
+
+    def repairable(self, spec: AgentSpec | None, label: str) -> bool:
+        """Réparation ciblée possible : Practice Extractor, Interaction Reader ou lecture à longue distance, sur un
+        entretien dont le contexte est connu."""
+        return stage3_repair.repairable(spec) and label.split("/", 1)[0] in self.interview_dirs
+
+    def _context(self, label: str) -> dict:
+        interview_id = label.split("/", 1)[0]
+        if interview_id not in self._contexts:
+            interview_dir = self.interview_dirs[interview_id]
+            transcript = json.loads((interview_dir / config.STRUCTURED_TRANSCRIPT_FILENAME).read_text(encoding="utf-8"))
+            audit_path = interview_dir / config.ANALYSIS_SUBDIR / analysis.AUDITOR.output_filename
+            audit = json.loads(audit_path.read_text(encoding="utf-8")) if audit_path.is_file() else None
+            turns = evidence_validator.index_turns(transcript)
+            self._contexts[interview_id] = {
+                "transcript": transcript, "turns": turns,
+                "warnings": speaker_audit.agent_warnings(audit, transcript) if audit else {},
+                "position": {turn_id: info["position"] for turn_id, info in turns.items()}}
+        return self._contexts[interview_id]
+
+    def item_check(self, spec: AgentSpec, label: str, item: dict) -> dict:
+        """Anomalies BLOQUANTES d'un objet, par le validateur habituel (core/evidence_validator.validate_item, comme
+        pour la réponse entière : les anomalies « error » de l'étape 3 portent toutes sur un seul objet).
+        → {"problems", "invalid_citations", "citations"}."""
+        context = self._context(label)
+        kind = analysis.PRACTICE if spec.name == analysis.PRACTICE.name else analysis.INTERACTION
+        if kind is analysis.INTERACTION:
+            item = signal_selectivity.complete_turn_ids(item, context["position"])
+        results, issues = evidence_validator.validate_item(item, kind.name, context["turns"],
+                                                           context["transcript"]["interview_id"],
+                                                           context["warnings"])
+        problems = []
+        for issue in issues:
+            if issue["severity"] != evidence_validator.ERROR:
+                continue
+            where = []
+            if issue.get("evidence_index") is not None:
+                where.append(f"citation {issue['evidence_index'] + 1}")
+            if issue.get("field"):
+                where.append(issue["field"])
+            if issue.get("turn_id"):
+                where.append(f"tour {issue['turn_id']}")
+            problems.append(f"{issue['code']}{' — ' + ', '.join(where) if where else ''} : {issue['message']}")
+        return {"problems": problems, "invalid_citations": sum(not r["valid"] for r in results),
+                "citations": len(results)}
+
+    def repair_turns(self, spec: AgentSpec, label: str, user_content: str, item) -> str:
+        """Les seuls tours utiles à la réparation d'un objet, pris dans le matériau envoyé à l'agent (bloc ou
+        sélection) : tours cités, intervalle de la pratique, turn_ids du signal, tours où figure (à la forme près)
+        une citation fautive, et leurs voisins immédiats ; texte exact, présentation habituelle des agents."""
+        context = self._context(label)
+        turns, transcript = context["transcript"]["turns"], context["transcript"]
+        position = context["position"]
+        allowed = {i for i, t in enumerate(turns) if f'"{t["turn_id"]}"' in user_content} or set(range(len(turns)))
+        item = item if isinstance(item, dict) else {}
+        evidence = [e for e in item.get("evidence") or [] if isinstance(e, dict)]
+        cited = [position[e.get("turn_id")] for e in evidence if e.get("turn_id") in position]
+        listed = [position[t] for t in item.get("turn_ids") or [] if t in position]
+        span = []
+        if item.get("turn_start") in position and item.get("turn_end") in position:
+            first, last = sorted((position[item["turn_start"]], position[item["turn_end"]]))
+            span = list(range(first, min(last, first + 6) + 1))
+        located = []
+        for e in evidence:
+            quote = e.get("quote") or ""
+            if quote.strip() and not (e.get("turn_id") in position
+                                      and evidence_validator.match_quote(quote, turns[position[e["turn_id"]]]["text"])
+                                      == "exact"):
+                located += [i for i in sorted(allowed)
+                            if evidence_validator.match_quote(quote, turns[i]["text"]) != "not_found"]
+        core = list(dict.fromkeys(cited + located + listed + span))
+        neighbours = [j for i in core for j in (i - 1, i + 1, i - 2, i + 2)]
+        chosen: list[int] = []
+        size = 0
+        for i in dict.fromkeys(core + neighbours):
+            if i not in allowed or len(chosen) >= stage3_repair.REPAIR_MAX_TURNS:
+                continue
+            length = len(turns[i]["text"])
+            if chosen and size + length > stage3_repair.REPAIR_MAX_CHARS:
+                continue
+            chosen.append(i)
+            size += length
+        if not chosen:  # aucun repère exploitable : début du matériau envoyé
+            chosen = sorted(allowed)[:6]
+        sub = {"interview_id": transcript["interview_id"], "turns": [turns[i] for i in sorted(chosen)]}
+        warnings = {t["turn_id"]: w for t in sub["turns"] if (w := context["warnings"].get(t["turn_id"]))}
+        return serialize_agent_input(build_agent_input(sub, warnings))
 
     # --- Étape 4 -------------------------------------------------------------------------------
 

@@ -34,6 +34,8 @@ ACCOUNTABILITY = "accountability_episode_builder"  # étape 4 : épisodes d'acco
 TRAJECTORY = "trajectory_mapper"  # étape 5 : configuration et trajectoire intra-entretien
 COMPARATOR = "cross_interview_comparator"  # étape 6 : comparaison inter-entretiens
 
+REPAIR = "repair:"  # préfixe des réparations ciblées de l'étape 3 : "repair:practice_extractor", …
+
 FAKE_MODEL = "fake-model"  # étiquette du moteur dans les manifests des tests (champ « model »)
 
 
@@ -55,6 +57,14 @@ def agent_error(code: str = "SCHEMA_VALIDATION", detail: str | None = None) -> L
 
 def agent_of(params: dict) -> str:
     properties = params["output_schema"]["properties"]
+    if "decision" in properties and "object" in properties:  # réparation ciblée d'UN objet (core/stage3_repair.py)
+        item = properties["object"]["anyOf"][0]
+        if "$ref" in item:
+            item = params["output_schema"]["$defs"][item["$ref"].rsplit("/", 1)[1]]
+        if "use_status" in item["properties"]:
+            return REPAIR + PRACTICE
+        long_distance = params["system"][0]["text"].startswith("# Interaction Signal Reader — lecture à longue distance")
+        return REPAIR + (LONG_DISTANCE if long_distance else INTERACTION)
     if "assessments" in properties:
         return AUDITOR
     if "cross_case_claims" in properties:
@@ -118,6 +128,31 @@ class FakeAgents:
         return [c for c in self.calls if c["agent"] == agent]
 
 
+def repair_object(params: dict) -> dict:
+    """Objet à réparer, tel que TRACE l'envoie dans la tâche de réparation."""
+    content = params["messages"][0]["content"]
+    return json.loads(content.split("<objet>\n", 1)[1].split("\n</objet>", 1)[0])
+
+
+def repair_turns(params: dict) -> list[dict]:
+    """Tours de l'entretien fournis pour la réparation (texte exact)."""
+    content = params["messages"][0]["content"]
+    return json.loads(content.split("<tours>\n", 1)[1].split("\n</tours>", 1)[0])["turns"]
+
+
+def repaired(obj: dict) -> AgentReply:
+    return text_response({"decision": "corrected", "object": obj, "reason": None})
+
+
+def withdrawn(reason: str = "aucun passage ne soutient l'objet") -> AgentReply:
+    return text_response({"decision": "withdrawn", "object": None, "reason": reason})
+
+
+def unchanged_repair(params: dict) -> AgentReply:
+    """Réparation par défaut du faux modèle : il renvoie l'objet sans l'avoir corrigé (le validateur le signale)."""
+    return repaired(repair_object(params))
+
+
 def fake_settings(**overrides) -> LLMSettings:
     values = {"model": FAKE_MODEL}
     values.update(overrides)
@@ -173,7 +208,7 @@ class FakeOllama:
                   "history": messages[2:], "options": payload.get("options")}
         agent = agent_of(params)
         self.calls.append({"agent": agent, "params": params, "payload": payload})
-        handler = self.responders[agent]
+        handler = self.responders.get(agent, unchanged_repair) if agent.startswith(REPAIR) else self.responders[agent]
         if isinstance(handler, list):
             handler = handler.pop(0)
         result = _resolve(handler, params)

@@ -8,6 +8,8 @@
                                                            # bornée, 2 corrections méthodologiques) : « avant »
     python scripts/trace_benchmark.py run --compare-format # en plus : un même bloc avec le JSON Schema strict, puis
                                                            # avec le simple mode JSON (diagnostic seulement)
+    python scripts/trace_benchmark.py run --no-repair      # sans réparation ciblée de l'étape 3 (régénération
+                                                           # complète après une anomalie) : comparaison
 
 Entretien par défaut : benchmarks/entretien_synthetique_1h.txt (SYNTHÉTIQUE, ≈ 56 000 caractères, 349 tours, ≈ 1 h
 d'entretien). Autre fichier : `--file CHEMIN` (txt, docx, pdf).
@@ -54,6 +56,8 @@ KV_BYTES_PER_TOKEN = {"qwen2.5:7b": 57_344, "qwen2.5:14b": 196_608}  # cache K/V
 # --- Variantes du runner -----------------------------------------------------------------------------------
 
 class LegacyRunner(LocalAgentRunner):
+    item_repair = False
+
     """Réglage d'AVANT ce diagnostic : même fenêtre (TRACE_OLLAMA_NUM_CTX) pour tous les appels, génération non
     bornée, réponse d'un bloc (sans flux). Seuls les paramètres d'exécution diffèrent ; prompts, schémas et
     validateurs sont identiques."""
@@ -175,6 +179,62 @@ def totals(records: list[dict], status: dict) -> dict:
             "max_num_ctx": max((r["num_ctx"] or 0 for r in records), default=0)}
 
 
+def repair_summary(records: list[dict], run: dict) -> dict:
+    """Générations complètes, réparations ciblées, tokens, objets, citations (étape 3, core/stage3_repair.py).
+    Citations de la sortie finale : evidence_validation.json de l'entretien (fichier habituel)."""
+    out = {"logical_calls": len(records), "initial_generations": len(records), "full_regenerations": 0,
+           "targeted_repairs": 0, "initial_output_tokens": 0, "repair_output_tokens": 0, "repair_input_tokens": 0,
+           "repair_seconds": 0.0, "objects_total": 0, "objects_repaired": 0, "objects_rejected": 0,
+           "objects_unresolved": 0, "citations_invalid_initial": 0, "citations_repaired": 0,
+           "citations_withdrawn": 0, "citations_invalid_after_repair": 0}
+    for r in records:
+        if "repairs" in r:  # appel passé par la réparation ciblée
+            full = r["full_generations"]
+            out["initial_output_tokens"] += r["initial_output_tokens"]
+            for key in ("repair_output_tokens", "repair_input_tokens", "repair_seconds", "objects_total",
+                        "objects_repaired", "objects_rejected", "objects_unresolved", "citations_invalid_initial",
+                        "citations_repaired", "citations_withdrawn", "citations_invalid_after_repair"):
+                out[key] += r[key]
+            out["targeted_repairs"] += r["repairs"]
+        else:  # régénérations complètes (ancien mécanisme, ou erreur globale)
+            full = r["attempts"]
+            out["initial_output_tokens"] += r["output_tokens"] or 0
+        out["full_regenerations"] += max(0, full - 1)
+    out["repair_seconds"] = round(out["repair_seconds"], 1)
+    final = {"total_evidence": 0, "total_invalid_evidence": 0, "by_agent": {}}
+    for info in run["files"]:
+        path = Path(info["ingestion"]["output_dir"]) / config.ANALYSIS_SUBDIR / config.EVIDENCE_VALIDATION_FILENAME
+        if path.is_file():
+            document = json.loads(path.read_text(encoding="utf-8"))
+            final["total_evidence"] += document["total_evidence"]
+            final["total_invalid_evidence"] += document["total_invalid_evidence"]
+            for agent, values in document["agents"].items():
+                if values.get("available"):
+                    final["by_agent"][agent] = {"evidence": values["evidence_count"],
+                                                "invalid": values["invalid_evidence_count"]}
+    out["final_evidence"] = final
+    return out
+
+
+def print_repair_summary(summary: dict) -> None:
+    print(f"Générations initiales : {summary['initial_generations']} · régénérations complètes : "
+          f"{summary['full_regenerations']} · réparations ciblées : {summary['targeted_repairs']}")
+    print(f"Tokens générés : génération initiale (et régénérations) {summary['initial_output_tokens']} · "
+          f"réparations {summary['repair_output_tokens']} (entrée des réparations : {summary['repair_input_tokens']}, "
+          f"durée des réparations : {summary['repair_seconds']} s)")
+    print(f"Objets : {summary['objects_total']} reçus · {summary['objects_repaired']} réparés · "
+          f"{summary['objects_rejected']} retirés faute de preuve ou hors schéma · {summary['objects_unresolved']} "
+          "encore fautifs (conservés, signalés par le validateur)")
+    print(f"Citations initialement invalides : {summary['citations_invalid_initial']} · réparées (objet désormais "
+          f"appuyé par des citations valides) : {summary['citations_repaired']} · retirées faute de preuve : "
+          f"{summary['citations_withdrawn']} · encore invalides après réparation : "
+          f"{summary['citations_invalid_after_repair']}")
+    final = summary["final_evidence"]
+    agents = ", ".join(f"{a} {v['invalid']}/{v['evidence']}" for a, v in final["by_agent"].items())
+    print(f"Sortie finale (evidence_validation.json) : {final['total_invalid_evidence']} citation(s) invalide(s) sur "
+          f"{final['total_evidence']} ({agents})")
+
+
 def compare_format(first: dict, settings: LLMSettings) -> dict:
     """Un même bloc : JSON Schema strict (TRACE) puis mode JSON simple. Diagnostic : la seconde réponse est
     seulement validée contre le schéma (Pydantic), jamais utilisée."""
@@ -211,6 +271,12 @@ class CapturingRunner(LocalAgentRunner):
             CapturingRunner.first = {"system": kwargs["system_prompt"], "user": kwargs["user_content"],
                                      "schema": kwargs["output_schema"], "model": kwargs["response_model"]}
         return await super().complete_json(**kwargs)
+
+
+class NoRepairRunner(CapturingRunner):
+    """Comparaison : l'ancien mécanisme (régénération complète de la réponse après une anomalie bloquante)."""
+
+    item_repair = False
 
 
 def kv_cache_gb(model: str, num_ctx: int) -> float | None:
@@ -257,11 +323,13 @@ def cmd_run(args) -> int:
     try:
         run = _ingest(Path(args.file))
         info = run["files"][0]["ingestion"]
-        label = "AVANT (réglage d'origine)" if args.legacy else "APRÈS (contexte par appel, génération bornée)"
+        label = ("AVANT (réglage d'origine)" if args.legacy else
+                 "SANS réparation ciblée (régénération complète)" if args.no_repair else
+                 "APRÈS (contexte par appel, génération bornée, réparation ciblée)")
         print(f"Benchmark étape 3 — {label}")
         print(f"Entretien : {Path(args.file).name} — {info['turn_count']} tours · modèle {settings.model} · "
               f"Ollama {settings.ollama_url}\n")
-        runner_class = LegacyRunner if args.legacy else CapturingRunner
+        runner_class = LegacyRunner if args.legacy else NoRepairRunner if args.no_repair else CapturingRunner
         result, records = run_stage3(run, settings, runner_class)
         print_table(records)
         summary = totals(records, result["status"])
@@ -270,13 +338,15 @@ def cmd_run(args) -> int:
         print(f"Appels : {summary['calls']} · tentatives : {summary['attempts']} · appels corrigés : "
               f"{summary['corrected_calls']} · tokens générés : {summary['output_tokens']} · génération : "
               f"{summary['generation_seconds']} s · chargements du modèle : {summary['load_seconds']} s")
+        repairs = repair_summary(records, run)
+        print_repair_summary(repairs)
         n = args.interviews
         estimate = summary["stage3_seconds"] * n
         print(f"Estimation étape 3 pour {n} entretiens de cette longueur : {estimate / 3600:.1f} h "
               f"({estimate / 60:.0f} min), séquentiellement, modèle chargé en continu.")
         report = {"label": label, "legacy": args.legacy, "file": str(args.file), "turns": info["turn_count"],
                   "model": settings.model, "num_ctx_max": settings.num_ctx, "created_at": datetime.now().isoformat(),
-                  "summary": summary, "estimate_seconds": estimate, "interviews": n, "calls": records}
+                  "summary": summary, "repair_summary": repairs, "estimate_seconds": estimate, "interviews": n, "calls": records}
         if args.compare_format and CapturingRunner.first:
             print("\nCoût du JSON Schema strict (même bloc du Practice Extractor, diagnostic) :")
             comparison = compare_format(CapturingRunner.first, settings)
@@ -285,7 +355,8 @@ def cmd_run(args) -> int:
                       f"{values['tokens_per_second']} tok/s, conforme au schéma : {values['schema_valid']}")
             report["format_comparison"] = comparison
         RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-        out = RESULTS_DIR / f"benchmark_{'avant' if args.legacy else 'apres'}_{datetime.now():%Y%m%d_%H%M%S}.json"
+        kind = "avant" if args.legacy else "sans_reparation" if args.no_repair else "apres"
+        out = RESULTS_DIR / f"benchmark_{kind}_{datetime.now():%Y%m%d_%H%M%S}.json"
         out.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"\nRapport complet : {out}")
     finally:
@@ -304,6 +375,8 @@ def main(argv: list[str] | None = None) -> int:
         p.set_defaults(func=func)
         if name == "run":
             p.add_argument("--legacy", action="store_true", help="réglage d'origine (mesure « avant »)")
+            p.add_argument("--no-repair", action="store_true",
+                           help="sans réparation ciblée : régénération complète après une anomalie (comparaison)")
             p.add_argument("--compare-format", action="store_true", help="schéma strict contre mode JSON (diagnostic)")
             p.add_argument("--interviews", type=int, default=17)
     args = parser.parse_args(argv)
