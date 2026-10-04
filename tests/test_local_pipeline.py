@@ -397,11 +397,12 @@ def test_a_modified_corpus_is_a_new_analysis(tmp_path, monkeypatch):
     assert added["corpus_id"] != base and added["skipped"] is False and added["status"] == lp.STAGE_COMPLETE
 
 
-def test_fewer_than_two_usable_interviews_block_without_needing_ollama(tmp_path, monkeypatch):
+def test_a_single_usable_interview_is_not_applicable_without_needing_ollama(tmp_path, monkeypatch):
     ollama = use_fake_runtime(monkeypatch, comparator(), available=False)
     result = lp.run_stage6(S6.uploads(["ENT_A"]), base_dir=tmp_path)
-    assert result["status"]["status"] == lp.STAGE_BLOCKED and ollama.calls == []
-    assert "moins de deux entretiens exploitables" in result["status"]["reason"]
+    assert result["status"]["status"] == lp.STAGE_NOT_APPLICABLE == "NOT_APPLICABLE_SINGLE_INTERVIEW"
+    assert result["status"]["reason"] == "La comparaison inter-entretiens nécessite au moins deux entretiens exploitables."
+    assert ollama.calls == [] and result["status"]["n_usable"] == 1
 
 
 def test_stage6_with_ollama_stopped_is_a_clear_error(tmp_path, monkeypatch):

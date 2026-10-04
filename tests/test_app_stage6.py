@@ -80,9 +80,12 @@ def test_invalid_interview_is_excluded_with_its_reason(fake_agents):
     assert not at.exception and "N importés : **5** · N exploitables : **4**" in texts(at.markdown)
 
 
-def test_single_interview_blocks_stage6(fake_agents):
+def test_single_interview_makes_stage6_not_applicable(fake_agents):
     at = upload(app(), ["ENT_A"])
-    assert "Étape 6 bloquée" in texts(at.error)
+    message = texts(at.info)
+    assert "NOT_APPLICABLE_SINGLE_INTERVIEW" in message
+    assert "La comparaison inter-entretiens nécessite au moins deux entretiens exploitables." in message
+    assert "Étape 6 bloquée" not in texts(at.error)
     assert not [b for b in at.button if b.key == "run_stage6"] and fake_agents.calls == []
 
 

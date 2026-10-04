@@ -35,6 +35,7 @@ from core import cross_interview_material as cm
 from core import cross_interview_validator as cross_validator
 from core import trajectory
 from core import accountability_episode_validator as episode_validator
+from core.final_report import STAGE6_NOT_APPLICABLE, STAGE6_NOT_APPLICABLE_REASON
 from core.agent_checks import AGENT_SPECS, MethodChecker
 from core.analysis_cache import AnalysisCache, write_json_atomic
 from core.llm_client import LLMError, LLMSettings
@@ -52,10 +53,13 @@ STATUS_FILENAME = "status.json"
 STAGE_COMPLETE = "COMPLETE"
 STAGE_FAILED = "FAILED"
 STAGE_BLOCKED = "BLOCKED"   # étape précédente en échec, absente ou périmée (règles de accountability / trajectory)
+# Étape 6 avec un seul entretien exploitable : comparaison impossible par définition, ni erreur ni appel
+STAGE_NOT_APPLICABLE = STAGE6_NOT_APPLICABLE
 STATUS_LABELS = {
     STAGE_COMPLETE: "terminée",
     STAGE_FAILED: "échec ou analyse incomplète (voir les statuts des agents)",
     STAGE_BLOCKED: "bloquée (étape précédente en échec, absente ou périmée)",
+    STAGE_NOT_APPLICABLE: "non applicable : " + STAGE6_NOT_APPLICABLE_REASON,
 }
 PIPELINE_STEPS_BY_STAGE = {"3": (config.PRACTICE_STEP, config.INTERACTION_STEP), "4": (config.ACCOUNTABILITY_STEP,),
                            "5": (config.TRAJECTORY_STEP,)}
@@ -547,7 +551,8 @@ def run_stage6(uploads: list[tuple[str, bytes]], *, settings: LLMSettings | None
 def _corpus_status(prepared, corpus_dir: Path, records: dict, manifest: dict, settings: LLMSettings,
                    duration: float, skipped: bool = False) -> dict:
     if manifest.get("status") == cross_interview.STATUS_BLOCKED:
-        state = STAGE_BLOCKED
+        # un seul entretien exploitable : comparaison inter-entretiens impossible par définition (non applicable)
+        state = STAGE_NOT_APPLICABLE if prepared.checked["n_usable"] == 1 else STAGE_BLOCKED
     elif manifest.get("status") in cross_interview.DONE_STATUSES:
         state = STAGE_COMPLETE
     else:
@@ -564,12 +569,14 @@ def _corpus_status(prepared, corpus_dir: Path, records: dict, manifest: dict, se
         "pipeline_version": PIPELINE_VERSION, "stage": CORPUS_STAGE, "corpus_id": prepared.corpus_id,
         "corpus_dir": display_path(Path(corpus_dir)), "status": state, "updated_at": _now(),
         "duration_seconds": duration, **runtime_info(settings), "api_calls": 0, "skipped": skipped,
-        "phase": "déjà terminée — non rejouée" if skipped else "comparaison",
+        "phase": ("déjà terminée — non rejouée" if skipped else "non applicable — aucune comparaison"
+                  if state == STAGE_NOT_APPLICABLE else "comparaison"),
         "mode": checked["mode"], "n_total": checked["n_total"], "n_usable": checked["n_usable"],
         "rows": [{"interview_id": r["interview_id"], "status": r["status"], "reasons": r["reasons"]}
                  for r in checked["rows"]],
         "unrecognized": checked["unrecognized"], "estimated_input_tokens": estimated, "warnings": warnings,
-        "reason": (manifest.get("error") or {}).get("message") if state in (STAGE_BLOCKED, STAGE_FAILED) else None,
+        "reason": (STAGE6_NOT_APPLICABLE_REASON if state == STAGE_NOT_APPLICABLE else
+                   (manifest.get("error") or {}).get("message") if state in (STAGE_BLOCKED, STAGE_FAILED) else None),
         "manifest_status": manifest.get("status"),
         "call_count": len(calls), "corrected_calls": sum(c["attempts"] > 1 for c in calls), "calls": calls,
     }

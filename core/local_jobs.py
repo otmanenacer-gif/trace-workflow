@@ -407,7 +407,8 @@ def execute(job_dir: Path, log_to_file: bool = True) -> dict:
                                    progress=reporter.event)
             status = {**result["status"], "corpus_dir_abs": str(result["corpus_dir"])}
             reporter.stage_finished(lp.CORPUS_STAGE, status["status"])
-        final = {lp.STAGE_COMPLETE: COMPLETE, lp.STAGE_FAILED: FAILED, lp.STAGE_BLOCKED: BLOCKED}[status["status"]]
+        final = {lp.STAGE_COMPLETE: COMPLETE, lp.STAGE_FAILED: FAILED, lp.STAGE_BLOCKED: BLOCKED,
+                 lp.STAGE_NOT_APPLICABLE: COMPLETE}[status["status"]]
         reporter.finish(final, lp.STATUS_LABELS[status["status"]], _public_status(status))
     except LLMError as error:  # Ollama arrêté, modèle absent… : erreur claire, aucun repli
         logger.error("Travail interrompu : %s", error.user_message)

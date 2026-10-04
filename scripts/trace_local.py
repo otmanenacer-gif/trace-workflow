@@ -7,6 +7,8 @@
     python scripts/trace_local.py stage6 SOURCE [SOURCE ...]       # étape 6 sur les sorties de l'étape 5 (runs,
                                                                    # dossiers de JSON ou fichiers JSON)
     python scripts/trace_local.py status RUN                       # état du run
+    python scripts/trace_local.py report RUN                       # étape 7 : rapport final (Markdown + JSON) à partir
+                                                                   # des sorties validées, SANS aucun appel au modèle
     python scripts/trace_local.py refilter RUN [--interview ID]    # réapplique la sélectivité de l'étape 3 aux réponses
                                                                    # déjà validées (cache), SANS aucun appel au modèle
     python scripts/trace_local.py job start RUN --until 5          # mêmes étapes EN ARRIÈRE-PLAN (processus détaché :
@@ -45,7 +47,7 @@ from core.llm_client import LLMError  # noqa: E402
 from core.run_manager import TraceError, init_run, list_runs, load_metadata  # noqa: E402
 
 CLI = "python scripts/trace_local.py"
-EXIT_CODES = {lp.STAGE_COMPLETE: 0, lp.STAGE_FAILED: 5, lp.STAGE_BLOCKED: 6}
+EXIT_CODES = {lp.STAGE_COMPLETE: 0, lp.STAGE_FAILED: 5, lp.STAGE_BLOCKED: 6, lp.STAGE_NOT_APPLICABLE: 0}
 EXIT_RUNTIME = 7
 
 
@@ -185,6 +187,22 @@ def cmd_stage6(args) -> int:
     return EXIT_CODES[status["status"]]
 
 
+def cmd_report(args) -> int:
+    from core import final_report
+    result = final_report.generate(load_metadata(resolve_run(args.run)))
+    report = result["report"]
+    print(f"Run {report['run_id']} — étape 7, rapport final ({report['status']}, {report['interview_count']} entretien(s), "
+          "aucun appel au modèle)")
+    print(f"Étape 6 : {report['stage6']['status']}" + (f" — {report['stage6']['reason']}" if report["stage6"]["reason"]
+                                                         else ""))
+    for item in report["interviews"]:
+        if item["missing"]:
+            print(f"  {item['interview_id']} : étapes incomplètes — {' ; '.join(item['missing'])}")
+    print(f"Markdown : {lp.display_path(result['md_path'])}")
+    print(f"JSON : {lp.display_path(result['json_path'])}")
+    return 0
+
+
 def cmd_status(args) -> int:
     run_dir = resolve_run(args.run)
     metadata = load_metadata(run_dir)
@@ -303,6 +321,9 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("status", help="état du run")
     p.add_argument("run")
     p.set_defaults(func=cmd_status)
+    p = sub.add_parser("report", help="étape 7 : rapport final à partir des sorties validées (aucun appel)")
+    p.add_argument("run")
+    p.set_defaults(func=cmd_report)
     p = sub.add_parser("refilter", help="réapplique la sélectivité de l'étape 3 aux réponses du cache, sans modèle")
     p.add_argument("run")
     p.add_argument("--interview", action="append")

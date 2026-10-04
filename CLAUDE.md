@@ -20,4 +20,7 @@ servi par Ollama (voir `docs/local_runtime.md`).
   `core/signal_selectivity.py` (contradictions démontrées) ; `trace_local.py refilter` les réapplique sans modèle.
 - Tests : `python -m pytest` (aucun modèle réel, aucun réseau : faux Ollama derrière le vrai runner local).
 - Test navigateur (à la main) : `python tests/e2e/browser_check.py` (Playwright + Chromium).
-- Pas d'étape 7 sans demande explicite.
+- Étape 6 avec un seul entretien exploitable : `NOT_APPLICABLE_SINGLE_INTERVIEW`, aucune comparaison, aucun appel.
+- Étape 7 : rapport final DÉTERMINISTE (`core/final_report.py`, Markdown + JSON dans `<run>/final_report/`), assemblé à
+  partir des sorties validées des étapes 3 à 5, sans aucun appel au modèle ; Streamlit « Générer le rapport final »,
+  CLI `trace_local.py report RUN`. Pas d'étape 8 ou au-delà sans demande explicite.

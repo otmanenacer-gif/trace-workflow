@@ -66,7 +66,7 @@ _purge_stale_project_modules()
 
 from core import accountability, analysis, config, stage3_restore, stage4_restore, trajectory  # noqa: E402
 from core import cross_interview, cross_interview_corpus  # noqa: E402
-from core import local_jobs, local_pipeline  # noqa: E402
+from core import final_report, local_jobs, local_pipeline  # noqa: E402
 from core.ingestion import ingest_run  # noqa: E402
 from core.llm_client import LLMError, LLMSettings  # noqa: E402
 from core.run_manager import TraceError, get_extension, init_run, list_runs, load_metadata  # noqa: E402
@@ -1011,7 +1011,10 @@ def render_stage6_corpus(prepared) -> None:
         st.warning(f"Fichier ignoré — {item['file']} : {item['reason']}")
     for note in checked["notes"]:
         st.caption(note)
-    if checked["mode"] == cross_interview_corpus.MODE_BLOCKED:
+    if checked["mode"] == cross_interview_corpus.MODE_BLOCKED and checked["n_usable"] == 1:
+        st.info(f"Étape 6 : **{local_pipeline.STAGE_NOT_APPLICABLE}** — {final_report.STAGE6_NOT_APPLICABLE_REASON} "
+                "Aucune comparaison n'est produite, aucun appel au modèle. Le rapport final (étape 7) le signale.")
+    elif checked["mode"] == cross_interview_corpus.MODE_BLOCKED:
         st.error("Étape 6 bloquée : moins de deux entretiens exploitables. Importez au moins deux triplets valides.")
     elif checked["mode"] == cross_interview_corpus.MODE_EXPLORATORY:
         st.warning("Deux entretiens exploitables seulement : la comparaison sera marquée EXPLORATOIRE (« présent dans "
@@ -1170,6 +1173,41 @@ def finish_stage6_job() -> None:
     elif job["state"] in (local_jobs.FAILED, local_jobs.BLOCKED):
         st.session_state.local6_flash = ("warning", f"Étape 6 : {job.get('message')} — voir ci-dessous.", "job")
     local_jobs.acknowledge(job_dir)
+
+
+def render_stage7_section(run: dict) -> None:
+    st.header("Étape 7 — Rapport final")
+    st.markdown(
+        "Assemble les sorties **déjà validées** des étapes 3 à 5 (aucun recalcul, **aucun appel au modèle**) : résumé "
+        "exécutif, configuration et trajectoires, principaux épisodes d'accountability, pratiques et tensions, "
+        "citations exactes, éléments **à revoir** et limites méthodologiques. Une information absente est signalée, "
+        "jamais inventée. Avec un seul entretien, l'étape 6 est déclarée non applicable.")
+    if st.button("Générer le rapport final", key="final_report_generate", type="primary"):
+        try:
+            final_report.generate(run)
+            st.session_state.final_report_flash = "Rapport final généré (aucun appel au modèle)."
+        except OSError as exc:
+            st.error(f"Rapport impossible (écriture) : {exc}")
+    flash = st.session_state.pop("final_report_flash", None)
+    if flash:
+        st.success(flash)
+    existing = final_report.read_existing(run)
+    if not existing:
+        st.caption("Aucun rapport final pour ce run.")
+        return
+    report = existing["report"] or {}
+    st.markdown(f"**Statut :** {report.get('status')} · **généré le** {report.get('generated_at')} · "
+                f"**étape 6 :** {(report.get('stage6') or {}).get('status')}")
+    cols = st.columns(2)
+    cols[0].download_button("Télécharger le rapport (Markdown)", data=existing["markdown"],
+                            file_name=f"{run['run_id']}_{final_report.MD_FILENAME}", mime="text/markdown",
+                            key="final_report_md")
+    cols[1].download_button("Télécharger le rapport (JSON)",
+                            data=json.dumps(report, ensure_ascii=False, indent=2),
+                            file_name=f"{run['run_id']}_{final_report.JSON_FILENAME}", mime="application/json",
+                            key="final_report_json")
+    with st.expander("Rapport final — aperçu", expanded=True):
+        st.markdown(existing["markdown"])
 
 
 def render_stage6_section(run: dict | None) -> None:
@@ -1420,6 +1458,8 @@ if run:
     render_stage4_section(st.session_state.get("last_run") or run)
     # 10. Étape 5 — configuration et trajectoire intra-entretien (jamais automatique, après l'étape 4)
     render_stage5_section(st.session_state.get("last_run") or run)
+    # 10 bis. Étape 7 — rapport final (déterministe, aucun appel ; à partir des sorties validées)
+    render_stage7_section(st.session_state.get("last_run") or run)
 else:
     st.info("Aucun run lancé pendant cette session.")
 

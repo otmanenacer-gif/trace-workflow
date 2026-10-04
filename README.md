@@ -482,6 +482,18 @@ l'interface affiche « Stage 3 restauré depuis fichiers — 0 appel API » et l
 des sorties normales. Le cache de l'étape 3, lui, n'est pas reconstitué : relancer l'étape 3 sur cet
 entretien (`--force`) referait ses appels au modèle local.
 
+## Étape 7 — rapport final
+
+À partir des sorties **déjà validées** des étapes 3 à 5 (aucun recalcul, **aucun appel au modèle**), TRACE assemble un
+rapport par run : résumé exécutif, configuration et trajectoires (étape 5), principaux épisodes d'accountability
+(étape 4), pratiques et tensions, citations exactes de l'enquêté·e, éléments à revoir (`needs_review`) et limites
+méthodologiques ; une information absente est déclarée absente. Avec un seul entretien exploitable, l'étape 6 est
+`NOT_APPLICABLE_SINGLE_INTERVIEW` (« La comparaison inter-entretiens nécessite au moins deux entretiens
+exploitables. ») et un encadré le signale. Sorties : `<run>/final_report/final_report.md` et `final_report.json`.
+
+- Streamlit : section « Étape 7 — Rapport final », bouton **Générer le rapport final** (aperçu et téléchargements) ;
+- CLI : `python scripts/trace_local.py report RUN`.
+
 ## Architecture
 
 ```
@@ -517,6 +529,7 @@ core/trajectory_candidates.py  étape 5 : préparation déterministe (ancrages t
 core/trajectory_validator.py   étape 5 : validation déterministe (requalifications, propagation, vocabulaire)
 core/trajectory.py             étape 5 : orchestration, état de l'étape 4, cache, sorties
 core/stage4_restore.py         restauration validée de sorties de l'étape 4 téléchargées (0 appel)
+core/final_report.py           étape 7 : rapport final déterministe (Markdown + JSON), aucun appel au modèle
 core/cross_interview_corpus.py    étape 6 : import et contrôle des triplets de l'étape 5 (0 appel)
 core/cross_interview_material.py  étape 6 : préparation déterministe (index, représentation normalisée)
 core/cross_interview_validator.py étape 6 : validation déterministe (appuis, comptes, revues, cas négatifs)
