@@ -265,7 +265,8 @@ MIN_OUTPUT_TOKENS = 1024      # réponse minimale : en deçà, la requête est r
 # ≈ 330 tokens), un signal ≈ 460 caractères (10 champs, ≈ 150 tokens).
 OUTPUT_RESERVE = {"speaker_attribution_auditor": 2048, "practice_extractor": 8192,
                   "interaction_signal_reader": 6144, "interaction_signal_reader_long_distance": 3072,
-                  "accountability_episode_builder": 6144, "trajectory_mapper": 8192,
+                  "accountability_episode_builder": 6144, "episode_grounding_checker": 2048,
+                  "trajectory_mapper": 8192,
                   "cross_interview_comparator": 8192}
 DEFAULT_OUTPUT_RESERVE = 4096
 

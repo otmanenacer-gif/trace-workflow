@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from agents import episode_grounding_checker
 from agents.base import AgentSpec, build_agent_input, serialize_agent_input, sha256_text
 from core import accountability, analysis, config, cross_interview, evidence_validator, signal_selectivity
 from core import accountability_candidates as candidates_mod
@@ -39,7 +40,9 @@ STAGE3_SPECS: tuple[AgentSpec, ...] = (analysis.AUDITOR, analysis.PRACTICE, anal
 STAGE4_SPECS: tuple[AgentSpec, ...] = (accountability.SPEC,)
 STAGE5_SPECS: tuple[AgentSpec, ...] = (trajectory.SPEC,)
 STAGE6_SPECS: tuple[AgentSpec, ...] = (cross_interview.SPEC,)
-AGENT_SPECS = STAGE3_SPECS + STAGE4_SPECS + STAGE5_SPECS + STAGE6_SPECS
+# Agents de diagnostic (rapport seulement) : connus du runner (journal, réponse réservée), jamais contrôlés ici
+DIAGNOSTIC_SPECS: tuple[AgentSpec, ...] = (episode_grounding_checker.SPEC,)
+AGENT_SPECS = STAGE3_SPECS + STAGE4_SPECS + STAGE5_SPECS + STAGE6_SPECS + DIAGNOSTIC_SPECS
 STAGE_OF_AGENT = {**{spec.name: "3" for spec in STAGE3_SPECS}, **{spec.name: "4" for spec in STAGE4_SPECS},
                   **{spec.name: "5" for spec in STAGE5_SPECS}, **{spec.name: "6" for spec in STAGE6_SPECS}}
 
@@ -79,6 +82,8 @@ class MethodChecker:
     def report(self, spec: AgentSpec, label: str, user_content: str, output: dict) -> dict:
         report = {"agent": spec.name, "agent_label": spec.label, "ok": True, "blocking": [], "warnings": [],
                   "info": [], "counts": {}, "checked": False}
+        if spec.name in {s.name for s in DIAGNOSTIC_SPECS}:
+            return report  # diagnostic : sa réponse est un rapport, rien à valider
         if spec.name == cross_interview.SPEC.name:
             issues = self._comparison(user_content, output, report)
         else:

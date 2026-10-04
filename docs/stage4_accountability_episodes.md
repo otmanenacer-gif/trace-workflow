@@ -314,6 +314,29 @@ modèle. Une étape 4 validée par une autre version du validateur est périmée
 blocs du cache et ne demande que les réparations. Prévision sans appel :
 `python scripts/stage4_blocks_report.py repairs RUN`.
 
+### 4.4 — Contrôle sémantique (grounding), rapport seulement (core/stage4_grounding.py)
+
+Une citation exacte peut ne pas soutenir l'interprétation qu'on lui prête (E011 réel : routine campus / bibliothèque
+devenue « limitation de l'usage de Google »). L'**Episode Grounding Checker** (agents/episode_grounding_checker.py,
+prompts/episode_grounding_checker.md) vérifie, épisode par épisode (un appel, réponse en cache), chaque affirmation —
+question pratique, résumé, chaque opération (description et type), frontières, références au rôle et à autrui — au
+regard des seules citations : `supported`, `inferred` (inférence immédiate), `not_supported`, `contradicted` ; il signale
+aussi un récit sur des tiers présenté comme position de l'enquêté·e, une formulation de l'enquêteur attribuée à
+l'enquêté·e, et un statut trop fort ou trop faible. Il reçoit les définitions méthodologiques extraites du prompt de
+l'Accountability Episode Builder (une seule source), les champs de l'épisode, les citations exactes avec leur locuteur,
+le tour brut de chaque citation (citation coupée de son sens) et, marquée « contexte », la question de l'enquêteur qui
+précède — jamais les étiquettes, résumés ou descriptions de l'étape 3. Verdict d'épisode déterministe : `contradicted`,
+`unsupported` (aucune opération soutenue, récit sur des tiers, statut trop fort ; résumé non soutenu hors épisode
+d'accountability), `doubtful` (autre affirmation non soutenue, type hors définition, formulation de l'enquêteur,
+statut trop faible, affirmation sans verdict), `supported`. Défauts formels (question qui n'en est pas une ou qui
+répète le résumé, frontière qui n'est pas « A / B », chaîne « null », opération appuyée sur un tour de l'enquêteur) :
+avertissements seulement.
+
+Mode actuel : **rapport seulement** — aucune sortie de l'étape 4 n'est modifiée, aucune réparation, rien de bloquant.
+`python scripts/stage4_blocks_report.py grounding RUN --plan` (aucun appel : coût, avertissements) ;
+`python scripts/stage4_blocks_report.py grounding RUN [--solid …] [--doubtful …] [--false …]` (un appel par épisode,
+rapport `local_runs/stage4/grounding_report.json`, comparaison facultative avec un audit manuel).
+
 ## Étape 4.1 — stabilisation après le premier run réel
 
 Le premier run réel (OTMANE_NACER, 388 tours) a révélé trois problèmes ; correctifs ciblés, sans refonte :

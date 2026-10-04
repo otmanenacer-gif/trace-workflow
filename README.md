@@ -136,6 +136,7 @@ python -m pytest tests/test_stage3_refilter_restore.py # refilter canonique : r�
 python -m pytest tests/test_stage4_1.py               # étape 4.1 : proximité, fusions, requête normalisée
 python -m pytest tests/test_stage4_blocks.py          # étape 4.2 : blocs de 4 candidats, fusion, reprise, troncature
 python -m pytest tests/test_stage4_repair.py          # étape 4.3 : réparations ciblées (candidat, épisode, invariants)
+python -m pytest tests/test_stage4_grounding.py       # étape 4.4 : contrôle sémantique des épisodes (rapport seulement)
 python -m pytest tests/test_trajectory_candidates.py  # étape 5 : préparation déterministe, ancrages temporels
 python -m pytest tests/test_trajectory_validator.py   # étape 5 : validateur (requalifications, vocabulaire)
 python -m pytest tests/test_stage5_sociological.py    # étape 5 : cas A à H (temporalité, contexte, exception…)

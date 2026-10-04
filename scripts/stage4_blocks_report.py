@@ -6,6 +6,10 @@
     python scripts/stage4_blocks_report.py measure RUN
         # AUCUN appel : lit les journaux de la dernière exécution de l'étape 4 (local_runs/stage4/) — appels,
         # tokens d'entrée et de sortie réels par bloc, durée, tentatives, troncatures, réparations ciblées
+    python scripts/stage4_blocks_report.py grounding RUN [--plan] [--solid E007,…] [--doubtful …] [--false …]
+        # RAPPORT SEULEMENT : fondement de chaque épisode dans ses citations (Episode Grounding Checker, un appel par
+        # épisode, réponses en cache) ; --plan : aucun appel (coût et avertissements formels). Aucune sortie de
+        # l'étape 4 n'est modifiée ; comparaison facultative avec un audit manuel
     python scripts/stage4_blocks_report.py repairs RUN
         # AUCUN appel : réponses des blocs relues dans le cache TRACE ; identifiants étrangers retirés sans modèle et
         # réparations ciblées que la prochaine exécution demanderait (core/stage4_repair.py)
@@ -22,6 +26,7 @@ Estimation de la sortie : tokens par épisode mesurés sur le journal réel OTMA
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import sys
 from pathlib import Path
@@ -33,7 +38,7 @@ if str(ROOT) not in sys.path:
 from core import accountability, config  # noqa: E402
 from core import accountability_candidates as ac  # noqa: E402
 from core import local_pipeline as lp  # noqa: E402
-from core import stage4_repair  # noqa: E402
+from core import stage4_grounding, stage4_repair  # noqa: E402
 from core.analysis_cache import AnalysisCache, compute_cache_key  # noqa: E402
 from core.llm_client import LLMError  # noqa: E402
 from core.local_agent_runner import OUTPUT_RESERVE, context_plan, estimate_prompt_tokens  # noqa: E402
@@ -188,6 +193,85 @@ def cmd_repairs(args) -> int:
     return 0
 
 
+def _ids(value: str | None) -> list[str]:
+    return [v.strip() for v in (value or "").split(",") if v.strip()]
+
+
+def _turns(row: dict, quote_ids: list[str]) -> str:
+    by_id = {q["quote_id"]: q["turn_id"].rsplit("_", 1)[-1] for q in row["quotes"]}
+    return ", ".join(f"{q} ({by_id.get(q, '?')})" for q in quote_ids) or "—"
+
+
+def print_grounding(result: dict) -> None:
+    print(f"\n{result['interview_id']} : " + ", ".join(f"{k} {v}" for k, v in result["counts"].items() if v))
+    print("  épisode | verdict | problème | moves concernés | citations concernées | raison")
+    for row in result["rows"]:
+        short = row["episode_id"].rsplit("_", 1)[-1]
+        if row["verdict"] == stage4_grounding.NOT_CHECKED:
+            print(f"  {short} | non vérifié | {(row['error'] or {}).get('message', '')} | — | — | —")
+            continue
+        findings = row["findings"] or [{"problem": "—", "claim_ids": [], "quote_ids": [], "reason": ""}]
+        for n, finding in enumerate(findings):
+            moves = ", ".join(c for c in finding["claim_ids"] if c.startswith("M")) or "—"
+            head = f"{short} | {row['verdict']}" if n == 0 else "     |"
+            print(f"  {head} | {finding['problem']} | {moves} | {_turns(row, finding['quote_ids'])} | "
+                  f"{finding['reason'][:220]}")
+        if row["formal_warnings"]:
+            print(f"       | avertissements formels : {', '.join(row['formal_warnings'])}")
+
+
+def cmd_grounding(args) -> int:
+    metadata = load_metadata(resolve_run(args.run))
+    settings = lp.runtime_settings()
+    files = _files(metadata, args.interview)
+    dirs = [Path(f["ingestion"]["output_dir"]) for f in files]
+    manual = {k: _ids(v) for k, v in (("solide", args.solid), ("douteux", args.doubtful), ("faux", args.false))
+              if _ids(v)}
+    print(f"Run {metadata['run_id']} — étape 4, contrôle sémantique en RAPPORT SEULEMENT (modèle {settings.model}) : "
+          "aucune sortie de l'étape 4 n'est modifiée, aucune réparation")
+    if args.plan:
+        cache = AnalysisCache()
+        for directory in dirs:
+            planned = stage4_grounding.plan(directory)
+            transcript = stage4_grounding.read_episodes(directory)[0] if planned else None
+            todo = [p for p in planned if not cache.contains(stage4_grounding.SPEC.name, compute_cache_key(
+                stage4_grounding.cache_key_fields(transcript, settings, p["request"]["message"])))]
+            tokens = [estimate_prompt_tokens([{"content": stage4_grounding.SPEC.system_prompt},
+                                              {"content": p["request"]["message"]}]) for p in planned]
+            print(f"\n{directory.name} : {len(planned)} épisode(s), {len(todo)} appel(s) à faire (le reste en cache), "
+                  f"entrée ≈ {min(tokens, default=0)}–{max(tokens, default=0)} tokens par appel, réponse réservée "
+                  f"{OUTPUT_RESERVE[stage4_grounding.SPEC.name]}")
+            for item in planned:
+                if item["formal_warnings"]:
+                    print(f"  {item['episode_id'].rsplit('_', 1)[-1]} : {', '.join(item['formal_warnings'])}")
+        return 0
+    runner = lp.make_runner(settings, journal_dir=lp.stage_dir(metadata, "4") / "grounding")
+    runner.require_ready()
+
+    async def run_all() -> list[dict]:
+        try:
+            return [await stage4_grounding.check_interview(d, runner, settings) for d in dirs]
+        finally:
+            await runner.aclose()
+
+    results = asyncio.run(run_all())
+    document = stage4_grounding.report(metadata, results, settings, manual or None)
+    for result in results:
+        if result["available"]:
+            print_grounding(result)
+    comparison = document.get("manual_comparison")
+    if comparison:
+        print(f"\nComparaison avec l'audit manuel : {comparison['agreements']}/{comparison['compared']} en accord "
+              "(solide ↔ supported ; douteux ↔ doubtful ; faux ↔ unsupported ou contradicted)")
+        for line in comparison["lines"]:
+            print(f"  {line['episode_id']} : manuel {line['manual']}, automatique {line['automatic']}"
+                  f"{'' if line['agree'] else '  ← désaccord'}")
+        if comparison["missing"]:
+            print(f"  absents du run : {', '.join(comparison['missing'])}")
+    print(f"\nRapport : {lp.display_path(lp.stage_dir(metadata, '4') / stage4_grounding.REPORT_FILENAME)}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Coût des blocs de l'étape 4 (estimé ou mesuré), sans appel.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -201,6 +285,14 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("measure", help="mesure réelle d'après les journaux de la dernière étape 4")
     p.add_argument("run")
     p.set_defaults(func=cmd_measure)
+    p = sub.add_parser("grounding", help="contrôle sémantique des épisodes, rapport seulement")
+    p.add_argument("run")
+    p.add_argument("--interview", action="append")
+    p.add_argument("--plan", action="store_true", help="aucun appel : coût et avertissements formels")
+    p.add_argument("--solid", help="audit manuel : épisodes solides (E007,E010,…)")
+    p.add_argument("--doubtful", help="audit manuel : épisodes douteux")
+    p.add_argument("--false", help="audit manuel : épisodes faux")
+    p.set_defaults(func=cmd_grounding)
     p = sub.add_parser("repairs", help="réparations ciblées prévues, d'après les blocs en cache, sans appel")
     p.add_argument("run")
     p.set_defaults(func=cmd_repairs)
