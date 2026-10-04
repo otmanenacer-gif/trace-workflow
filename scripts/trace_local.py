@@ -2,6 +2,9 @@
 
     python scripts/trace_local.py runtime                          # état du runtime : Ollama, modèle, exécution locale
     python scripts/trace_local.py ingest FICHIER [FICHIER ...]     # crée un run et l'ingère (étapes 1-2)
+    python scripts/trace_local.py batch CORPUS --until 5           # LOT sans surveillance : ingestion puis étapes 3 → 5
+                                                                   # entretien par entretien ; reprise automatique,
+                                                                   # échec isolé, manifeste <run>/batch/batch_manifest.json
     python scripts/trace_local.py run RUN --until 5                # étapes 3 → 5 (chaque étape seulement si elle
                                                                    # n'est pas déjà complète et à jour)
     python scripts/trace_local.py stage6 SOURCE [SOURCE ...]       # étape 6 sur les sorties de l'étape 5 (runs,
@@ -188,6 +191,33 @@ def cmd_stage6(args) -> int:
     return EXIT_CODES[status["status"]]
 
 
+def cmd_batch(args) -> int:
+    from core import batch
+    try:
+        metadata = load_metadata(resolve_run(args.corpus))  # run existant : pas de nouvelle ingestion
+    except TraceError:
+        corpus = Path(args.corpus)
+        if not corpus.is_dir():
+            raise TraceError(f"Corpus introuvable : {args.corpus} (dossier d'entretiens .txt / .docx / .pdf, ou run).")
+        metadata = batch.open_corpus(corpus, args.problematique or "")
+    runner = batch.Batch(metadata, args.until, stage_retries=args.retries, runtime_wait=args.runtime_wait,
+                         runtime_retries=args.runtime_retries, log=lambda line: print(line, flush=True))
+    try:
+        manifest = runner.run()
+    except KeyboardInterrupt:
+        print(f"Manifeste : {lp.display_path(runner.path)}")
+        return 130
+    print()
+    for line in batch.summary_lines(manifest):
+        print(line)
+    print(f"Manifeste : {lp.display_path(runner.path)}")
+    if len(manifest.get("stage5_valid") or []) >= 2:
+        print(f"Étape 6 (entretiens dont l'étape 5 est valide) : {CLI} stage6 {manifest['run_id']}")
+    if manifest["state"] == "ABORTED":
+        return EXIT_RUNTIME
+    return 5 if manifest["counts"].get(batch.FAILED) else 0
+
+
 def cmd_report(args) -> int:
     from core import final_report
     result = final_report.generate(load_metadata(resolve_run(args.run)), args.verify)
@@ -317,6 +347,15 @@ def main(argv: list[str] | None = None) -> int:
                    help="rejouer même les étapes déjà complètes (rend les étapes suivantes périmées)")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_run)
+    p = sub.add_parser("batch", help="lot sans surveillance : ingestion puis étapes 3 → --until, entretien par "
+                                     "entretien, reprise automatique, échecs isolés, manifeste final")
+    p.add_argument("corpus", help="dossier des entretiens (.txt, .docx, .pdf) ou run existant")
+    p.add_argument("--until", choices=lp.STAGES, default="5")
+    p.add_argument("--problematique", default="")
+    p.add_argument("--retries", type=int, default=1, help="nouvelles tentatives d'une étape en échec (défaut 1)")
+    p.add_argument("--runtime-wait", type=float, default=60, help="attente si Ollama est injoignable, en s (défaut 60)")
+    p.add_argument("--runtime-retries", type=int, default=30, help="attentes successives avant arrêt (défaut 30)")
+    p.set_defaults(func=cmd_batch)
     p = sub.add_parser("stage6", help="étape 6 sur un corpus de sorties de l'étape 5 (corpus déjà analysé à "
                                       "l'identique : non rejoué)")
     p.add_argument("sources", nargs="+", help="runs (identifiant, « latest », dossier), dossiers ou fichiers JSON")

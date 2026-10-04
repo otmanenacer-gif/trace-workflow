@@ -482,6 +482,24 @@ l'interface affiche « Stage 3 restauré depuis fichiers — 0 appel API » et l
 des sorties normales. Le cache de l'étape 3, lui, n'est pas reconstitué : relancer l'étape 3 sur cet
 entretien (`--force`) referait ses appels au modèle local.
 
+## Lot sans surveillance (étapes 1 → 5)
+
+```
+python scripts/trace_local.py batch <corpus> --until 5
+```
+
+`<corpus>` : un dossier contenant les entretiens (`.txt`, `.docx`, `.pdf`, un fichier par entretien ; l'identifiant
+de l'entretien vient du nom du fichier ; les autres fichiers sont ignorés). Au premier lancement, TRACE crée un run et
+ingère tout (étapes 1-2, sans IA) ; ensuite, la même commande **reprend le même run** (après interruption, Ctrl+C ou
+redémarrage). Pour chaque entretien, les étapes 3, 4 et 5 s'enchaînent avec le modèle local (Ollama, `qwen2.5:7b`,
+0 API) : une étape déjà COMPLETE n'est jamais rejouée, les réponses validées sont reprises du cache,
+`SUCCESS_WITH_WARNINGS` est accepté ; une étape en échec est retentée une fois, puis l'erreur est enregistrée et le lot
+passe à l'entretien suivant ; si Ollama est injoignable, le lot attend et réessaie (`--runtime-wait 60`,
+`--runtime-retries 30`). Progression : `[N/17] entretien — étape — durée — écoulé — reste ≈`. Manifeste, réécrit après
+chaque étape : `<run>/batch/batch_manifest.json` (COMPLETE / WARNINGS / FAILED / PENDING par entretien, étapes,
+statuts des agents, durées, erreurs, liste `stage5_valid`). Les entretiens dont l'étape 5 est valide alimentent
+ensuite l'étape 6 : `python scripts/trace_local.py stage6 <run>`. Aucun contrôle expérimental n'est lancé.
+
 ## Étape 7 — rapport final
 
 À partir des sorties **déjà validées** des étapes 3 à 5 (aucun recalcul, **aucun appel au modèle**), TRACE assemble un
