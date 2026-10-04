@@ -34,6 +34,7 @@ from core import cross_interview_corpus as corpus
 from core import cross_interview_material as cm
 from core import cross_interview_validator as cross_validator
 from core import trajectory
+from core import accountability_episode_validator as episode_validator
 from core.agent_checks import AGENT_SPECS, MethodChecker
 from core.analysis_cache import AnalysisCache, write_json_atomic
 from core.llm_client import LLMError, LLMSettings
@@ -128,13 +129,30 @@ def stage5_state(interview_dir: Path) -> dict:
     return {"status": STAGE5_COMPLETE, "reasons": []}
 
 
+def stage4_guard_state(interview_dir: Path) -> dict:
+    """État de l'étape 4 pour la garde : celui de trajectory.stage4_state, et PÉRIMÉE si elle a été validée par une
+    autre version du validateur des épisodes (étape 4.3 : réparations ciblées, invariants bloquants) — la rejouer
+    reprend les blocs du cache et ne demande que les réparations ciblées."""
+    state = trajectory.stage4_state(interview_dir)
+    if state["status"] != trajectory.STAGE4_COMPLETE:
+        return state
+    document = trajectory._read_json(interview_dir / config.ANALYSIS_SUBDIR / config.ACCOUNTABILITY_EPISODES_FILENAME)
+    version = (document or {}).get("validator_version")
+    if version != episode_validator.VALIDATOR_VERSION:
+        return {**state, "status": trajectory.STAGE4_STALE, "reasons": [
+            f"Étape 4 périmée : validée par la version {version} du validateur des épisodes (actuelle : "
+            f"{episode_validator.VALIDATOR_VERSION}). Relancez l'étape 4 : blocs repris du cache, seules les "
+            "réparations ciblées sont demandées au modèle."]}
+    return state
+
+
 def stage_state(stage: str, info: dict) -> dict:
     """État d'une étape pour un entretien, lu sur le disque (règles existantes des étapes 4 et 5)."""
     interview_dir = Path(info["ingestion"]["output_dir"])
     if stage == "3":
         return accountability.stage3_state(interview_dir / config.ANALYSIS_SUBDIR)
     if stage == "4":
-        return trajectory.stage4_state(interview_dir)
+        return stage4_guard_state(interview_dir)
     return stage5_state(interview_dir)
 
 

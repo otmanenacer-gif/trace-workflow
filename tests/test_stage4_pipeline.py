@@ -268,6 +268,10 @@ def test_llm_failure_is_isolated_and_leaves_no_episodes(tmp_path):
 def test_invalid_model_output_is_kept_but_rejected(tmp_path):
     def inventing(params):
         output = S.scripted_output(params, S.REFERENCE_RULES)
+        if "RÉPARATION CIBLÉE" in params["messages"][0]["content"]:  # la réparation ciblée invente encore
+            for episode in output["episodes"]:
+                episode["evidence"] = [{"turn_id": S.tid(4), "quote": "Je ne veux jamais qu'il écrive."}]
+            return text_response(output)
         if S.sent_payload(params)["candidates"][0]["candidate_id"] != "C001":  # premier bloc seulement
             return text_response(output)
         output["episodes"][0]["evidence"] = [{"turn_id": S.tid(4), "quote": "Je ne veux jamais qu'il écrive."}]
@@ -282,6 +286,10 @@ def test_invalid_model_output_is_kept_but_rejected(tmp_path):
     assert doc["accountability_episode_count"] == 1  # seuls les épisodes non rejetés sont comptés
     reasons = {code for e in doc["episodes"] for code in e["review_reasons"]}
     assert {"QUOTE_NOT_FOUND", "UNKNOWN_PRACTICE_ID", "UNKNOWN_SIGNAL_ID"} <= reasons
+    # une réparation ciblée par épisode rejeté ; ratée, elle ne remplace jamais l'épisode d'origine (conservé, rejeté)
+    repairs = load(run, config.ACCOUNTABILITY_MANIFEST_FILENAME)["repairs"]
+    assert [(r["kind"], r["outcome"]) for r in repairs] == [("episode", "unresolved")] * 3
+    assert not any("trace_repair" in e for e in doc["episodes"])
 
 
 def test_interview_without_accountability_produces_no_forced_episode(tmp_path):

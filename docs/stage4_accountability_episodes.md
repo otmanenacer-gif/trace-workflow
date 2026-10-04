@@ -291,6 +291,29 @@ tentatives, 2 troncatures, 693 s).
   Estimation et mesure : `python scripts/stage4_blocks_report.py plan RUN` (sans appel) et
   `python scripts/stage4_blocks_report.py measure RUN` (journaux de la dernière étape 4).
 
+### 4.3 — Réparations ciblées (core/stage4_repair.py)
+
+Invariant : chaque candidat reçoit exactement une disposition (`accountability_episode`, `ordinary_practice`,
+`uncertain`) ; un épisode ne porte que les pratiques et signaux de ses candidats. Un bloc validé n'est jamais
+régénéré pour une anomalie locale (le contrôle méthodologique du runner ne redemande plus un bloc de l'étape 4) :
+
+- identifiant d'un autre candidat sans appui dans l'épisode (aucune citation ni opération sur un tour qui
+  n'appartient qu'à lui) : retiré sans modèle et noté (`removed_foreign_ids`, information `FOREIGN_ID_REMOVED`) ;
+  s'il appuie l'épisode, l'épisode est réparé ;
+- épisode avec une anomalie bloquante (ex. `NO_ACCOUNTING_MOVES`, citation absente, identifiant étranger utile) :
+  UNE réparation sur ses seuls candidats — l'épisode, les erreurs exactes, et la consigne de ne rien inventer
+  (une opération réellement appuyée, sinon `ordinary_practice` ou `uncertain`) ;
+- candidat sans disposition (`CANDIDATE_NOT_ADDRESSED`, désormais bloquant) : UNE demande sur ce seul candidat.
+
+Le message de réparation est le gabarit habituel de l'agent (prompt système et schéma inchangés) sur la
+représentation normalisée des seuls candidats concernés, suivi des consignes de réparation ; sa réponse validée est
+mise en cache comme un bloc. Une réparation n'est retenue que si elle traite chaque candidat demandé exactement une
+fois sans anomalie bloquante ; l'épisode réparé porte `trace_repair` (type, anomalies). Bilan dans le manifest et la
+validation (`repairs`). Les avertissements et informations (`SPEAKER_WARNING_PROPAGATED`…) n'appellent jamais le
+modèle. Une étape 4 validée par une autre version du validateur est périmée pour la garde : la relancer reprend les
+blocs du cache et ne demande que les réparations. Prévision sans appel :
+`python scripts/stage4_blocks_report.py repairs RUN`.
+
 ## Étape 4.1 — stabilisation après le premier run réel
 
 Le premier run réel (OTMANE_NACER, 388 tours) a révélé trois problèmes ; correctifs ciblés, sans refonte :
@@ -362,5 +385,7 @@ qualité d'un vrai modèle.**
 - Après une nouvelle exécution de l'étape 3, le résumé de l'étape 4 affiché reste celui de la dernière
   exécution de l'étape 4 jusqu'à ce qu'elle soit relancée (l'estimation des appels, elle, est à jour).
 - Une composante de plus de 4 candidats n'est jamais coupée : son bloc peut dépasser la réponse estimée.
+- Une réparation ciblée ratée laisse l'épisode d'origine (rejeté) ; un candidat toujours sans disposition laisse
+  l'étape 4 `PARTIAL` (une seule réparation par objet : la relance ne la redemande pas).
 - Hors périmètre (étapes 5+) : trajectoire de l'étudiant·e, typologie, comparaison entre entretiens,
   régimes d'accountability, rapport.

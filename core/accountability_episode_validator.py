@@ -23,7 +23,11 @@ Aucun LLM. Pour chaque épisode :
   un épisode doivent former un graphe CONNEXE de relations explicites (core.accountability_candidates.
   candidate_links) — sinon erreur `DISCONNECTED_MERGE` : l'épisode est rejeté et
   `usable_for_next_stages: false` (il reste dans le fichier, à revoir) ;
-- couverture : chaque candidat est traité par un épisode (sinon `CANDIDATE_NOT_ADDRESSED`).
+- couverture : chaque candidat est traité par un épisode (sinon `CANDIDATE_NOT_ADDRESSED`, bloquant : l'étape 4
+  n'est pas complète) ;
+- invariant (étape 4.3) : `practice_ids` ⊆ pratiques des `candidate_ids`, `signal_ids` ⊆ leurs signaux — sinon
+  `PRACTICE_NOT_IN_CANDIDATES` / `SIGNAL_NOT_IN_CANDIDATES`, bloquants ; un identifiant étranger retiré par TRACE
+  (core/stage4_repair.py, `removed_foreign_ids`) est signalé `FOREIGN_ID_REMOVED` (information).
 
 Rien n'est réécrit : l'épisode garde le texte du modèle ; TRACE ajoute `validation`, `needs_review`,
 `review_reasons` et `speaker_warnings`. Erreur → épisode `rejected` (conservé, exclu des comptes).
@@ -37,7 +41,8 @@ from core import evidence_validator, interpretation_guard
 from core.accountability_candidates import TRIGGER_SIGNAL_TYPES, connected_groups, normalize_task
 from core.schemas import SPEAKER_INTERVIEWER
 
-VALIDATOR_VERSION = "1.1"  # 1.1 : fusions déconnectées, vocabulaire élargi et sensible au locuteur
+VALIDATOR_VERSION = "1.2"  # 1.1 : fusions déconnectées, vocabulaire élargi et sensible au locuteur ; 1.2 : matériau
+# d'un autre candidat et candidat sans disposition bloquants (étape 4.3, core/stage4_repair.py)
 
 ERROR, WARNING, INFO = "error", "warning", "info"
 
@@ -66,8 +71,9 @@ ISSUE_CODES = {
     "BOUNDARY_WITHOUT_ACCOUNTABILITY": (WARNING, "Frontières (boundary_objects) hors d'un épisode d'accountability."),
     "MOVE_TURN_OUTSIDE_MATERIAL": (WARNING, "Opération appuyée sur un tour absent du matériau de l'épisode."),
     "EVIDENCE_OUTSIDE_RANGE": (WARNING, "Citation située hors de l'intervalle turn_start–turn_end."),
-    "PRACTICE_NOT_IN_CANDIDATES": (WARNING, "Pratique absente des candidats cités par l'épisode."),
-    "SIGNAL_NOT_IN_CANDIDATES": (WARNING, "Signal absent des candidats cités par l'épisode."),
+    "PRACTICE_NOT_IN_CANDIDATES": (ERROR, "Pratique absente des candidats cités par l'épisode."),
+    "SIGNAL_NOT_IN_CANDIDATES": (ERROR, "Signal absent des candidats cités par l'épisode."),
+    "FOREIGN_ID_REMOVED": (INFO, "Identifiant d'un autre candidat, sans appui dans l'épisode, retiré par TRACE."),
     # fusions
     "MERGED_DIFFERENT_TASKS": (WARNING, "Épisode réunissant des pratiques de tâches différentes sans candidat commun."),
     "MERGED_DIFFERENT_DOMAINS": (WARNING, "Épisode réunissant une pratique d'études et une pratique personnelle sans candidat commun."),
@@ -85,7 +91,7 @@ ISSUE_CODES = {
     "MODEL_FLAGGED_REVIEW": (INFO, "Le modèle demande une vérification humaine."),
     "SPEAKER_WARNING_PROPAGATED": (INFO, "L'épisode repose sur un tour dont l'attribution du locuteur est douteuse."),
     "CANDIDATE_IN_SEVERAL_EPISODES": (WARNING, "Candidat traité par plusieurs épisodes."),
-    "CANDIDATE_NOT_ADDRESSED": (WARNING, "Candidat traité par aucun épisode."),
+    "CANDIDATE_NOT_ADDRESSED": (ERROR, "Candidat traité par aucun épisode (aucune disposition)."),
     "PAYLOAD_OVER_THRESHOLD": (WARNING, "Représentation envoyée au-delà du seuil d'un appel unique."),
     "STAGE3_INCOMPLETE": (WARNING, "Sorties de l'étape 3 incomplètes : analyse de l'étape 4 incomplète."),
 }
@@ -219,6 +225,8 @@ def validate_episodes(episodes: list[dict], transcript: dict, practices: list[di
                 issues.append(make_issue("UNKNOWN_SIGNAL_ID", signal_id=sid))
             elif sid not in cand_signals:
                 issues.append(make_issue("SIGNAL_NOT_IN_CANDIDATES", signal_id=sid))
+        for object_id in episode.get("removed_foreign_ids", []):
+            issues.append(make_issue("FOREIGN_ID_REMOVED", object_id_removed=object_id))
 
         # intervalle
         span = None

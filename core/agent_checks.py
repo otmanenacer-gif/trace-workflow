@@ -70,6 +70,10 @@ class MethodChecker:
         self._contexts: dict[str, dict] = {}
 
     def __call__(self, spec: AgentSpec, label: str, user_content: str, output: dict) -> list[str]:
+        if spec.name == accountability.SPEC.name:
+            # étape 4 : une anomalie d'un épisode est réparée sur son seul candidat par l'orchestrateur
+            # (core/stage4_repair.py), jamais en redemandant tout le bloc
+            return []
         return self.report(spec, label, user_content, output)["blocking"]
 
     def report(self, spec: AgentSpec, label: str, user_content: str, output: dict) -> dict:

@@ -5,7 +5,10 @@
         # réponse maximale réservée, risque de troncature, durée estimée — pour chaque taille de bloc demandée
     python scripts/stage4_blocks_report.py measure RUN
         # AUCUN appel : lit les journaux de la dernière exécution de l'étape 4 (local_runs/stage4/) — appels,
-        # tokens d'entrée et de sortie réels par bloc, durée, tentatives, troncatures
+        # tokens d'entrée et de sortie réels par bloc, durée, tentatives, troncatures, réparations ciblées
+    python scripts/stage4_blocks_report.py repairs RUN
+        # AUCUN appel : réponses des blocs relues dans le cache TRACE ; identifiants étrangers retirés sans modèle et
+        # réparations ciblées que la prochaine exécution demanderait (core/stage4_repair.py)
 
 La mesure réelle s'obtient en exécutant d'abord l'étape 4 (`python scripts/trace_local.py run RUN --until 4`), puis
 `measure`. Ce script ne lance jamais le modèle.
@@ -30,6 +33,8 @@ if str(ROOT) not in sys.path:
 from core import accountability, config  # noqa: E402
 from core import accountability_candidates as ac  # noqa: E402
 from core import local_pipeline as lp  # noqa: E402
+from core import stage4_repair  # noqa: E402
+from core.analysis_cache import AnalysisCache, compute_cache_key  # noqa: E402
 from core.llm_client import LLMError  # noqa: E402
 from core.local_agent_runner import OUTPUT_RESERVE, context_plan, estimate_prompt_tokens  # noqa: E402
 from core.run_manager import load_metadata  # noqa: E402
@@ -137,6 +142,49 @@ def cmd_measure(args) -> int:
                   f"troncature(s) {truncated} | {journal.get('outcome')}")
         print(f"  Total : {totals['calls']} appel(s) au modèle, entrée {totals['input']} tokens, sortie "
               f"{totals['output']} tokens, {totals['seconds']:.0f} s, troncature(s) {totals['truncated']}")
+        for repair in manifest.get("repairs") or []:
+            print(f"  réparation {repair['kind']} {', '.join(repair['candidate_ids'])} : {repair['outcome']}"
+                  f"{' (cache)' if repair.get('cache_hit') else ''}{' — ' + repair['reason'] if repair.get('reason') else ''}")
+    return 0
+
+
+def cmd_repairs(args) -> int:
+    metadata = load_metadata(resolve_run(args.run))
+    settings = lp.runtime_settings()
+    cache = AnalysisCache()
+    print(f"Run {metadata['run_id']} — étape 4, réparations prévues SANS appel (modèle {settings.model})")
+    for info in _files(metadata, None):
+        prepared = accountability.prepare_stage4(info["ingestion"])
+        if prepared.blocked or not prepared.needs_llm:
+            continue
+        episodes, missing_blocks = [], []
+        for request in prepared.requests:
+            key = accountability.cache_key_fields(prepared, settings, request["user_message"])
+            entry = cache.load(key, accountability.SPEC.output_model)
+            if entry is None:
+                missing_blocks.append(request["chunk"])
+                continue
+            episodes += ac.expand_ids(entry["output"], prepared.interview_id)["episodes"]
+        print(f"\n{prepared.interview_id} : {prepared.candidate_count} candidats, {len(prepared.requests)} bloc(s)"
+              + (f", bloc(s) absent(s) du cache : {missing_blocks} (rejoué(s) en entier)" if missing_blocks else ""))
+        skip = {c for r in prepared.requests if r["chunk"] in missing_blocks for c in r["candidate_ids"]}
+        for episode in episodes:
+            cleaned, needed = stage4_repair.remove_foreign_ids(prepared, episode)
+            removed = cleaned.get("removed_foreign_ids") or []
+            if removed:
+                print(f"  {', '.join(episode['candidate_ids'])} : identifiant(s) étranger(s) retiré(s) sans modèle — "
+                      + ", ".join(removed))
+        cleaned = [stage4_repair.remove_foreign_ids(prepared, e)[0] for e in episodes]
+        tasks = stage4_repair.plan_repairs(prepared, cleaned, skip)
+        for task in tasks:
+            message = stage4_repair.repair_message(prepared, task)
+            key = compute_cache_key(accountability.cache_key_fields(prepared, settings, message))
+            done = cache.contains(accountability.SPEC.name, key)
+            print(f"  réparation {task['kind']} {', '.join(task['candidate_ids'])} "
+                  f"({'déjà en cache' if done else '1 appel'}, ≈ {ac.payload_estimate(message)} tokens) : "
+                  + " | ".join(task["problems"]))
+        if not tasks:
+            print("  aucune réparation")
     return 0
 
 
@@ -153,6 +201,9 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("measure", help="mesure réelle d'après les journaux de la dernière étape 4")
     p.add_argument("run")
     p.set_defaults(func=cmd_measure)
+    p = sub.add_parser("repairs", help="réparations ciblées prévues, d'après les blocs en cache, sans appel")
+    p.add_argument("run")
+    p.set_defaults(func=cmd_repairs)
     args = parser.parse_args(argv)
     config.load_env_file()
     return args.func(args)

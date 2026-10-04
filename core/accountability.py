@@ -41,6 +41,7 @@ from agents import accountability_episode_builder as builder
 from agents.base import sha256_text
 from core import accountability_candidates as candidates_mod
 from core import accountability_episode_validator as episode_validator
+from core import stage4_repair
 from core import config
 from core import speaker_attribution_auditor as speaker_audit
 from core.analysis import (PRACTICE, INTERACTION, AUDITOR, STATUS_CACHED, STATUS_FAILED, STATUS_PARTIAL,
@@ -276,6 +277,7 @@ async def _call(prepared: Stage4Input, request: dict, client, cache: AnalysisCac
     """UN message (bloc), repris du cache s'il existe. Ne lève pas d'exception : renvoie un bilan."""
     key_fields = cache_key_fields(prepared, settings, request["user_message"])
     record = {"chunk": request["chunk"], "candidate_count": len(request["candidate_ids"]),
+              "candidate_ids": request["candidate_ids"],
               "estimated_input_tokens": request["estimated_tokens"], "cache_key": compute_cache_key(key_fields),
               "cache_hit": False, "status": STATUS_PENDING, "api_calls": 0, "billed_this_run": False, "usage": None,
               "duration_seconds": None, "response_model": None, "request_id": None, "stop_reason": None,
@@ -358,6 +360,8 @@ async def run_stage4_interview(prepared: Stage4Input, client, cache: AnalysisCac
         "chunking_used": len(prepared.requests) > 1,
         "chunk_count": len(prepared.requests),
         "chunks": [],
+        "repair_version": stage4_repair.REPAIR_VERSION,
+        "repairs": [],
         "over_single_call_threshold": bool(oversized),
         "candidate_count": prepared.candidate_count,
         "component_count": (prepared.built or {}).get("summary", {}).get("component_count", 0),
@@ -418,10 +422,20 @@ async def run_stage4_interview(prepared: Stage4Input, client, cache: AnalysisCac
         # identifiants abrégés de la représentation normalisée : préfixe rétabli avant toute validation
         episodes = [e for r in ok for e in candidates_mod.expand_ids(r["output"], prepared.interview_id)["episodes"]]
         notes = [r["output"].get("builder_notes") for r in ok if r["output"].get("builder_notes")]
+        # réparations ciblées (épisode fautif, candidat sans disposition), jamais de régénération d'un bloc valide ;
+        # les candidats d'un bloc en échec ne sont pas réparés : le bloc entier est rejoué à la reprise
+        failed_candidates = {c for r in failed for c in r["candidate_ids"]}
+        repaired = await stage4_repair.repair_episodes(
+            prepared, episodes, lambda r: _call(prepared, r, client, cache, settings, force, label), failed_candidates)
+        episodes, repairs = repaired["episodes"], repaired["repairs"]
+        manifest.update(repairs=repairs, llm_called=manifest["llm_called"] or any(
+            r["status"] == STATUS_SUCCESS for r in repairs))
         validated = episode_validator.validate_episodes(
             episodes, prepared.transcript, prepared.practices, prepared.signals,
             prepared.built["candidates"], prepared.speaker_warnings)
         report = validated["report"]
+        unaddressed = [c for c in report["unaddressed_candidate_ids"] if c not in failed_candidates]
+        failed_repairs = [r for r in repairs if r["outcome"] == stage4_repair.FAILED]
         if oversized:
             report["issues"].append({"object_id": prepared.interview_id, **episode_validator.make_issue(
                 "PAYLOAD_OVER_THRESHOLD", estimated_input_tokens=estimated, chunks=oversized)})
@@ -430,13 +444,16 @@ async def run_stage4_interview(prepared: Stage4Input, client, cache: AnalysisCac
             report["issues"].append({"object_id": prepared.interview_id, **episode_validator.make_issue(
                 "STAGE3_INCOMPLETE", stage3_status=prepared.stage3["status"])})
             report["warning_count"] += 1
-        complete = complete and not failed
+        complete = complete and not failed and not unaddressed and not failed_repairs
         error = None
-        if failed:
+        if failed or unaddressed or failed_repairs:
+            parts = [f"bloc {r['chunk']} : {r['error']['message']}" for r in failed]
+            if unaddressed:
+                parts.append("candidat(s) sans disposition après réparation : " + ", ".join(unaddressed))
+            parts += [f"réparation de {', '.join(r['candidate_ids'])} : {r['reason']}" for r in failed_repairs]
             error = {"code": "PARTIAL_ANALYSIS", "status_code": None, "request_id": None, "message": (
-                f"Analyse INCOMPLÈTE : {len(ok)}/{len(records)} bloc(s) réussi(s). "
-                + " ; ".join(f"bloc {r['chunk']} : {r['error']['message']}" for r in failed)
-                + ". Relancez l'étape 4 pour ne refaire que les blocs manquants.")}
+                f"Analyse INCOMPLÈTE : {len(ok)}/{len(records)} bloc(s) réussi(s). " + " ; ".join(parts)
+                + ". Relancez l'étape 4 : seuls les blocs et réparations manquants sont refaits.")}
         counts = _counts(validated["episodes"])
         status = (STATUS_PARTIAL if not complete else STATUS_CACHED if all_cached
                   else STATUS_SUCCESS_WITH_WARNINGS if episode_validator.has_problems(report) else STATUS_SUCCESS)
@@ -471,7 +488,7 @@ async def run_stage4_interview(prepared: Stage4Input, client, cache: AnalysisCac
         }
         write_json_atomic(episodes_path, document)
         validation_doc.update(status=status, analysis_complete=complete, available=True,
-                              candidate_summary=prepared.built["summary"], **report)
+                              candidate_summary=prepared.built["summary"], repairs=repairs, **report)
         manifest.update(status=status, analysis_complete=complete, error=error, **counts,
                         validation_error_count=report["error_count"], validation_warning_count=report["warning_count"],
                         has_warnings=not complete or episode_validator.has_problems(report),
