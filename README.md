@@ -572,6 +572,25 @@ paragraphe exclu — aucune régénération. Sorties `<run>/stage9/stage9_valida
 `stage9_validated_report.json` (`validated: true`) et `stage9_validated_report.md`. Statut : COMPLETE,
 SUCCESS_WITH_WARNINGS (livrable) ou BLOCKED (étape 8 absente ou inutilisable).
 
+## Étape 10 — livraison finale
+
+```
+python scripts/trace_local.py stage10 <run_id>
+```
+
+Aucune analyse, aucun appel au modèle, aucun recalcul : prend le rapport validé de l'étape 9 et produit les
+livrables. Étape 9 COMPLETE ou SUCCESS_WITH_WARNINGS → livraison ; absente ou BLOCKED → BLOCKED. Les paragraphes
+validés sont recopiés mot pour mot et rangés dans 13 sections (titre, résumé exécutif, corpus, méthodologie,
+résultats, configurations et logiques d'usage, frontières et critères, variations et tensions, cas négatifs,
+discussion, limites, conclusion, annexe de traçabilité) ; un paragraphe exclu par l'étape 9 n'apparaît jamais.
+Ajouts uniquement déterministes : sommaire, encadré statistique lu dans les manifestes (entretiens prévus, ingérés,
+analysés jusqu'à l'étape 5, inclus, exclus ; propositions de l'étape 7 ; paragraphes de l'étape 8 ; PASS / WARN /
+FAIL / exclus ; citations ; avertissements non résolus), note de transparence (modèle local, appels API déclarés par
+les manifestes — « non vérifiable » quand un manifeste ne le dit pas —, étapes avec et sans modèle, citations exactes
+vs interprétations générées, statut expérimental) et annexe de provenance. Sorties `<run>/stage10/final_report.md`,
+`final_report.json` (provenance complète par paragraphe) et `delivery_manifest.json`. Statut : COMPLETE,
+SUCCESS_WITH_WARNINGS (pipeline réussi, avertissements à relire) ou BLOCKED. Relance idempotente.
+
 ## Rapport individuel expérimental
 
 À partir des sorties **déjà validées** des étapes 3 à 5 (aucun recalcul, **aucun appel au modèle**), TRACE assemble un

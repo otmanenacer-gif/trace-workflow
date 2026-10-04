@@ -36,5 +36,9 @@ servi par Ollama (voir `docs/local_runtime.md`).
 - Étape 9 : validation du brouillon (`core/stage9_validation.py`, agent `agents/report_validator.py`) — contrôles
   déterministes puis vérification sémantique légère par groupes, corrections déterministes ou exclusion, jamais de
   régénération ; `trace_local.py stage9 RUN` → `<run>/stage9/`.
+- Étape 10 : livraison finale (`core/stage10_delivery.py`, déterministe, aucun modèle, aucune analyse) — paragraphes
+  validés recopiés tels quels en 13 sections, statistiques lues dans les manifestes ; `trace_local.py stage10 RUN` →
+  `<run>/stage10/final_report.md`, `final_report.json`, `delivery_manifest.json`.
 - Rapport individuel expérimental (`core/final_report.py`, déterministe, Markdown + JSON dans `<run>/final_report/`) :
-  `trace_local.py report RUN`, Streamlit « Générer le rapport final ». Pas d'étape 10 ou au-delà sans demande explicite.
+  `trace_local.py report RUN`, Streamlit « Générer le rapport final ». Pas d'orchestrateur global ni d'étape 11 sans
+  demande explicite.

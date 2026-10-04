@@ -18,6 +18,9 @@
                                                                    # -> <run>/stage8/stage8_report_draft.json et .md
     python scripts/trace_local.py stage9 RUN                       # étape 9 : validation du brouillon (PASS / WARN / FAIL)
                                                                    # -> <run>/stage9/ (validation, rapport validé .json/.md)
+    python scripts/trace_local.py stage10 RUN                      # étape 10 : LIVRAISON finale (aucun modèle, aucune
+                                                                   # analyse) -> <run>/stage10/final_report.md/.json,
+                                                                   # delivery_manifest.json
     python scripts/trace_local.py report RUN [--verify E005,E009]  # rapport individuel expérimental (Markdown + JSON) à partir
                                                                    # des sorties validées, SANS aucun appel au modèle ;
                                                                    # --verify : épisodes « interprétation à vérifier »
@@ -278,6 +281,27 @@ def cmd_stage9(args) -> int:
     return EXIT_CODES["BLOCKED"] if validation["status"] == stage9_validation.BLOCKED else 0
 
 
+def cmd_stage10(args) -> int:
+    from core import stage10_delivery
+    metadata = load_metadata(resolve_run(args.run))
+    manifest = stage10_delivery.run(metadata, log=lambda line: print(line, flush=True))
+    out = stage10_delivery.paths(metadata)
+    if manifest["status"] == stage10_delivery.BLOCKED:
+        print("TRACE BLOCKED")
+        print(f"Run: {manifest['run_id']}")
+        print(f"Reason: {manifest['reason']}")
+        print(f"Manifest: {lp.display_path(out['manifest'])}")
+        return EXIT_CODES["BLOCKED"]
+    counts = manifest["interview_counts"]
+    print("TRACE COMPLETE")
+    print(f"Run: {manifest['run_id']}")
+    print(f"Interviews included: {counts['included_stage6']} / {counts['planned']}")
+    print(f"Result: {manifest['status']}")
+    print(f"Final report: {lp.display_path(out['md'])}")
+    print(f"Manifest: {lp.display_path(out['manifest'])}")
+    return 0
+
+
 def cmd_report(args) -> int:
     from core import final_report
     result = final_report.generate(load_metadata(resolve_run(args.run)), args.verify)
@@ -434,6 +458,9 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("stage9", help="étape 9 : validation du brouillon du rapport corpus (PASS / WARN / FAIL)")
     p.add_argument("run")
     p.set_defaults(func=cmd_stage9)
+    p = sub.add_parser("stage10", help="étape 10 : livraison finale (rapport validé -> rapport final, sans modèle)")
+    p.add_argument("run")
+    p.set_defaults(func=cmd_stage10)
     p = sub.add_parser("report", help="rapport individuel expérimental à partir des sorties validées (aucun appel)")
     p.add_argument("run")
     p.add_argument("--verify", help="épisodes dont l'interprétation est à vérifier (ex. E005,E006,E009,E011) ; "
