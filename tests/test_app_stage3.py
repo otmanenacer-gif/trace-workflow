@@ -121,8 +121,10 @@ def test_speaker_audit_is_shown_and_never_editable(tmp_path, monkeypatch):
     assert "Audit d'attribution des locuteurs — ENTRETIEN_LOCUTEURS — 2 tour(s) suspect(s), 2 à vérifier" in [
         e.label for e in at.expander]
     assert "Télécharger speaker_attribution_audit.json" in [b.label for b in at.get("download_button")]
-    # aucun champ de saisie ne permet de modifier la transcription (seule la problématique est éditable)
-    assert not at.text_input and [t.key for t in at.text_area] == ["problematique"]
+    # aucun champ de saisie ne permet de modifier la transcription (seule la problématique est éditable ; le seul
+    # champ texte est celui des épisodes signalés « interprétation à vérifier » du rapport final, étape 7)
+    assert [t.key for t in at.text_input] == ["final_report_to_verify"]
+    assert [t.key for t in at.text_area] == ["problematique"]
 
 
 @pytest.fixture

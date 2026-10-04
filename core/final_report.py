@@ -12,6 +12,11 @@ précédentes, signalés comme tels ; les citations sont exactes (validées mot 
 déclarée absente, jamais inventée. Étape 6 : avec moins de deux entretiens exploitables, la comparaison
 inter-entretiens est NON APPLICABLE et l'encadré méthodologique le dit.
 
+Rapport EXPÉRIMENTAL, assisté par modèle local, à relire qualitativement. Une relecture humaine peut signaler des
+épisodes dont l'interprétation est à vérifier (`to_verify` : identifiants E…) : ils portent alors une mention visible,
+sans que leur contenu soit modifié ; la liste est conservée avec le rapport (review_flags.json) et reprise à chaque
+régénération.
+
 Sorties : <run>/final_report/final_report.json et final_report.md.
 """
 
@@ -26,7 +31,10 @@ from core import analysis, config
 from core.analysis_cache import write_json_atomic
 from core.schemas import SPEAKER_INTERVIEWER
 
-REPORT_VERSION = "1.0"
+REPORT_VERSION = "1.1"  # 1.1 : rapport expérimental, interprétations à vérifier signalées
+TITLE = "Rapport final expérimental — résultats assistés par modèle local, à relire qualitativement"
+TO_VERIFY_LABEL = "interprétation à vérifier"
+FLAGS_FILENAME = "review_flags.json"
 REPORT_DIRNAME = "final_report"
 JSON_FILENAME = "final_report.json"
 MD_FILENAME = "final_report.md"
@@ -82,7 +90,7 @@ def _real(value):
 
 # --- Un entretien --------------------------------------------------------------------------------------------
 
-def interview_report(info: dict) -> dict:
+def interview_report(info: dict, to_verify: list[str] | None = None) -> dict:
     """Section d'un entretien, à partir de ses seules sorties validées sur le disque."""
     from core import local_pipeline as lp
     interview_dir = Path(info["ingestion"]["output_dir"])
@@ -139,10 +147,13 @@ def interview_report(info: dict) -> dict:
         "repaired_by_trace": "trace_repair" in e} for e in main]
     others = [{"episode_id": e["episode_id"], "status": e.get("episode_status"), "summary": e.get("episode_summary"),
                "needs_review": bool(e.get("needs_review"))} for e in usable if e not in main]
+    for row in episode_rows + others:  # relecture humaine : mention visible, contenu inchangé
+        row["interpretation_to_verify"] = _short(row["episode_id"]) in (to_verify or ())
     representative = []
     for e in main:
         for q in quotes_of(e, 1):
-            representative.append({**q, "episode_id": e["episode_id"]})
+            representative.append({**q, "episode_id": e["episode_id"],
+                                   "interpretation_to_verify": _short(e["episode_id"]) in (to_verify or ())})
     representative = representative[:MAX_QUOTES]
 
     # étape 5 : configuration et trajectoires
@@ -227,9 +238,22 @@ def stage6_box(n_usable: int) -> dict:
                     "exécutée séparément ; elle n'est pas intégrée à ce rapport minimal."}
 
 
-def build(metadata: dict) -> dict:
+def normalize_ids(values) -> list[str]:
+    """« E005, e9 ; OTMANE_NACER_E011 » → ['E005', 'E009', 'E011']."""
+    import re
+    out = []
+    for token in re.split(r"[\s,;]+", values if isinstance(values, str) else " ".join(values or [])):
+        match = re.search(r"E0*(\d+)$", token.strip(), re.IGNORECASE)
+        if match:
+            out.append(f"E{int(match.group(1)):03d}")
+    return list(dict.fromkeys(out))
+
+
+def build(metadata: dict, to_verify: list[str] | None = None) -> dict:
+    to_verify = normalize_ids(to_verify)
     files = analysis.eligible_files(metadata)
-    interviews = [interview_report(info) for info in files]
+    interviews = [interview_report(info, to_verify) for info in files]
+    known = {_short(e["episode_id"]) for i in interviews for e in i["accountability_episodes"] + i["other_episodes"]}
     n_usable = sum(i["stage_states"]["5"] == "COMPLETE" for i in interviews)
     limitations = [
         "Rapport assemblé sans aucun appel au modèle à partir des sorties validées des étapes 3 à 5 : aucune "
@@ -245,7 +269,12 @@ def build(metadata: dict) -> dict:
         limitations.append("Un seul entretien : aucun résultat de ce rapport n'est généralisable.")
     if any(i["missing"] for i in interviews):
         limitations.append("Certaines étapes ne sont pas complètes : les sections correspondantes le signalent.")
-    return {"report_version": REPORT_VERSION, "generated_at": _now(), "run_id": metadata.get("run_id"),
+    if to_verify:
+        limitations.append("Relecture humaine : l'interprétation des épisodes " + ", ".join(to_verify)
+                           + f" est à vérifier (mention « {TO_VERIFY_LABEL} ») ; leur contenu n'est pas modifié.")
+    return {"report_version": REPORT_VERSION, "title": TITLE, "experimental": True,
+            "interpretations_to_verify": to_verify, "unknown_episode_ids": sorted(set(to_verify) - known),
+            "generated_at": _now(), "run_id": metadata.get("run_id"),
             "status": STATUS_COMPLETE if interviews and all(not i["missing"] for i in interviews) else STATUS_PARTIAL,
             "llm_called": False, "interview_count": len(interviews), "stage5_usable_interview_count": n_usable,
             "stage6": stage6_box(n_usable), "limitations": limitations, "interviews": interviews}
@@ -254,7 +283,8 @@ def build(metadata: dict) -> dict:
 # --- Markdown ------------------------------------------------------------------------------------------------
 
 def to_markdown(report: dict) -> str:
-    out = [f"# TRACE — Rapport final", "",
+    flag = f" — ⚠ **{TO_VERIFY_LABEL}**"
+    out = [f"# TRACE — {report.get('title', TITLE)}", "",
            f"Run `{report['run_id']}` · généré le {report['generated_at']} · {report['interview_count']} entretien(s) · "
            f"statut **{report['status']}** · aucun appel au modèle pour ce rapport", ""]
     for item in report["interviews"]:
@@ -277,7 +307,8 @@ def to_markdown(report: dict) -> str:
         if not item["accountability_episodes"]:
             out += [f"- {MISSING}", ""]
         for e in item["accountability_episodes"]:
-            out += [f"**{_short(e['episode_id'])}** — {e['summary']}" + (" — *à revoir*" if e["needs_review"] else "")]
+            out += [f"**{_short(e['episode_id'])}** — {e['summary']}" + (" — *à revoir*" if e["needs_review"] else "")
+                    + (flag if e.get("interpretation_to_verify") else "")]
             if e["accountability_problem"]:
                 out.append(f"- Question pratique : {e['accountability_problem']}")
             for m in e["accounting_moves"]:
@@ -290,7 +321,7 @@ def to_markdown(report: dict) -> str:
         if item["other_episodes"]:
             out += ["Autres candidats examinés :", ""]
             out += [f"- {_short(e['episode_id'])} ({STATUS_LABELS.get(e['status'], e['status'])}) : {e['summary']}"
-                    for e in item["other_episodes"]]
+                    + (flag if e.get("interpretation_to_verify") else "") for e in item["other_episodes"]]
             out.append("")
         counts = item["counts"]
         out += ["### Pratiques et tensions", "",
@@ -303,6 +334,7 @@ def to_markdown(report: dict) -> str:
             out.append("- Frontières construites dans les épisodes : " + " ; ".join(item["boundary_objects"]))
         out += ["", "### Citations représentatives (validées)", ""]
         out += [f"- « {q['quote']} » — {_short(q['turn_id'])}, épisode {_short(q['episode_id'])}"
+                + (f" ({TO_VERIFY_LABEL})" if q.get("interpretation_to_verify") else "")
                 for q in item["representative_quotes"]] or [f"- {MISSING}"]
         out += ["", "### À revoir (`needs_review`)", ""]
         out += [f"- {r}" for r in item["needs_review"]] or ["- Aucun élément signalé."]
@@ -325,11 +357,20 @@ def report_dir(metadata: dict) -> Path:
     return Path(metadata["output_dir"]) / REPORT_DIRNAME
 
 
-def generate(metadata: dict) -> dict:
-    """Rapport du run : construit, écrit (JSON et Markdown), renvoyé avec ses chemins. Aucun appel au modèle."""
-    report = build(metadata)
+def saved_flags(metadata: dict) -> list[str]:
+    """Épisodes signalés lors de la dernière génération (relecture humaine), repris par défaut."""
+    return list((_read(report_dir(metadata) / FLAGS_FILENAME) or {}).get("interpretations_to_verify", []))
+
+
+def generate(metadata: dict, to_verify: list[str] | str | None = None) -> dict:
+    """Rapport du run : construit, écrit (JSON et Markdown), renvoyé avec ses chemins. Aucun appel au modèle.
+    `to_verify` : épisodes dont l'interprétation est à vérifier ; None reprend la liste enregistrée."""
+    to_verify = saved_flags(metadata) if to_verify is None else normalize_ids(to_verify)
+    report = build(metadata, to_verify)
     directory = report_dir(metadata)
     directory.mkdir(parents=True, exist_ok=True)
+    write_json_atomic(directory / FLAGS_FILENAME, {"interpretations_to_verify": report["interpretations_to_verify"],
+                                                   "updated_at": report["generated_at"]})
     write_json_atomic(directory / JSON_FILENAME, report)
     markdown = to_markdown(report)
     (directory / MD_FILENAME).write_text(markdown, encoding="utf-8")

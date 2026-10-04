@@ -491,8 +491,18 @@ méthodologiques ; une information absente est déclarée absente. Avec un seul 
 `NOT_APPLICABLE_SINGLE_INTERVIEW` (« La comparaison inter-entretiens nécessite au moins deux entretiens
 exploitables. ») et un encadré le signale. Sorties : `<run>/final_report/final_report.md` et `final_report.json`.
 
-- Streamlit : section « Étape 7 — Rapport final », bouton **Générer le rapport final** (aperçu et téléchargements) ;
-- CLI : `python scripts/trace_local.py report RUN`.
+Le rapport est **expérimental** (« Rapport final expérimental — résultats assistés par modèle local, à relire
+qualitativement »). Une relecture humaine peut signaler des épisodes dont l'interprétation est à vérifier : ils portent
+la mention visible « interprétation à vérifier », sans modification de leur contenu (liste conservée dans
+`final_report/review_flags.json` et reprise à chaque régénération).
+
+- Streamlit : section « Étape 7 — Rapport final », champ « Épisodes dont l'interprétation est à vérifier », bouton
+  **Générer le rapport final** (aperçu et téléchargements) ;
+- CLI : `python scripts/trace_local.py report RUN [--verify E005,E006,E009,E011]`.
+
+Hors périmètre de cette version (version 2) : amélioration du contrôle sémantique des épisodes (Grounding Checker,
+aujourd'hui expérimental et en rapport seulement), nettoyage de l'étape 3 (étiquettes et pratiques mal attribuées),
+comparaison multi-entretiens intégrée au rapport.
 
 ## Architecture
 

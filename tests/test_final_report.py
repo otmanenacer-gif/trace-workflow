@@ -100,3 +100,25 @@ def test_streamlit_button_generates_the_final_report(tmp_path, monkeypatch):
     labels = [b.label for b in at.get("download_button")]
     assert "Télécharger le rapport (Markdown)" in labels and "Télécharger le rapport (JSON)" in labels
     assert (Path(run["output_dir"]) / "final_report" / "final_report.md").is_file()
+
+
+def test_experimental_title_and_episodes_flagged_for_verification(tmp_path, capsys):
+    run = stage5_run(tmp_path)
+    assert trace_local.main(["report", run["output_dir"], "--verify", "E001, e3 ; E099"]) == 0
+    out = capsys.readouterr().out
+    assert "Interprétation à vérifier : E001, E003" in out and "inconnu(s) dans ce run (ignorés) : E099" in out
+    existing = final_report.read_existing(run)
+    report, markdown = existing["report"], existing["markdown"]
+    assert markdown.startswith("# TRACE — Rapport final expérimental — résultats assistés par modèle local, à relire "
+                               "qualitativement")
+    assert report["experimental"] is True and report["interpretations_to_verify"] == ["E001", "E003", "E099"]
+    [item] = report["interviews"]
+    flagged = {e["episode_id"].rsplit("_", 1)[-1] for e in item["accountability_episodes"] + item["other_episodes"]
+               if e["interpretation_to_verify"]}
+    assert flagged == {"E001", "E003"}
+    lines = [line for line in markdown.splitlines() if "⚠ **interprétation à vérifier**" in line]
+    assert len(lines) == 2 and all(("E001" in l) or ("E003" in l) for l in lines)
+    # régénération sans --verify (bouton Streamlit, CLI) : la liste enregistrée est reprise
+    again = final_report.generate(run)
+    assert again["report"]["interpretations_to_verify"] == ["E001", "E003", "E099"]
+    assert final_report.generate(run, "")["report"]["interpretations_to_verify"] == []  # liste vidée explicitement

@@ -7,8 +7,9 @@
     python scripts/trace_local.py stage6 SOURCE [SOURCE ...]       # étape 6 sur les sorties de l'étape 5 (runs,
                                                                    # dossiers de JSON ou fichiers JSON)
     python scripts/trace_local.py status RUN                       # état du run
-    python scripts/trace_local.py report RUN                       # étape 7 : rapport final (Markdown + JSON) à partir
-                                                                   # des sorties validées, SANS aucun appel au modèle
+    python scripts/trace_local.py report RUN [--verify E005,E009]  # étape 7 : rapport final (Markdown + JSON) à partir
+                                                                   # des sorties validées, SANS aucun appel au modèle ;
+                                                                   # --verify : épisodes « interprétation à vérifier »
     python scripts/trace_local.py refilter RUN [--interview ID]    # réapplique la sélectivité de l'étape 3 aux réponses
                                                                    # déjà validées (cache), SANS aucun appel au modèle
     python scripts/trace_local.py job start RUN --until 5          # mêmes étapes EN ARRIÈRE-PLAN (processus détaché :
@@ -189,12 +190,16 @@ def cmd_stage6(args) -> int:
 
 def cmd_report(args) -> int:
     from core import final_report
-    result = final_report.generate(load_metadata(resolve_run(args.run)))
+    result = final_report.generate(load_metadata(resolve_run(args.run)), args.verify)
     report = result["report"]
     print(f"Run {report['run_id']} — étape 7, rapport final ({report['status']}, {report['interview_count']} entretien(s), "
           "aucun appel au modèle)")
     print(f"Étape 6 : {report['stage6']['status']}" + (f" — {report['stage6']['reason']}" if report["stage6"]["reason"]
                                                          else ""))
+    if report["interpretations_to_verify"]:
+        print("Interprétation à vérifier : " + ", ".join(report["interpretations_to_verify"]))
+    if report["unknown_episode_ids"]:
+        print("Épisode(s) inconnu(s) dans ce run (ignorés) : " + ", ".join(report["unknown_episode_ids"]))
     for item in report["interviews"]:
         if item["missing"]:
             print(f"  {item['interview_id']} : étapes incomplètes — {' ; '.join(item['missing'])}")
@@ -323,6 +328,8 @@ def main(argv: list[str] | None = None) -> int:
     p.set_defaults(func=cmd_status)
     p = sub.add_parser("report", help="étape 7 : rapport final à partir des sorties validées (aucun appel)")
     p.add_argument("run")
+    p.add_argument("--verify", help="épisodes dont l'interprétation est à vérifier (ex. E005,E006,E009,E011) ; "
+                                    "par défaut, la liste de la génération précédente")
     p.set_defaults(func=cmd_report)
     p = sub.add_parser("refilter", help="réapplique la sélectivité de l'étape 3 aux réponses du cache, sans modèle")
     p.add_argument("run")

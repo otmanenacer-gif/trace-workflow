@@ -1177,14 +1177,17 @@ def finish_stage6_job() -> None:
 
 def render_stage7_section(run: dict) -> None:
     st.header("Étape 7 — Rapport final")
+    st.caption(final_report.TITLE)
     st.markdown(
         "Assemble les sorties **déjà validées** des étapes 3 à 5 (aucun recalcul, **aucun appel au modèle**) : résumé "
         "exécutif, configuration et trajectoires, principaux épisodes d'accountability, pratiques et tensions, "
         "citations exactes, éléments **à revoir** et limites méthodologiques. Une information absente est signalée, "
         "jamais inventée. Avec un seul entretien, l'étape 6 est déclarée non applicable.")
+    to_verify = st.text_input("Épisodes dont l'interprétation est à vérifier (relecture humaine, ex. E005, E009)",
+                              value=", ".join(final_report.saved_flags(run)), key="final_report_to_verify")
     if st.button("Générer le rapport final", key="final_report_generate", type="primary"):
         try:
-            final_report.generate(run)
+            final_report.generate(run, to_verify)
             st.session_state.final_report_flash = "Rapport final généré (aucun appel au modèle)."
         except OSError as exc:
             st.error(f"Rapport impossible (écriture) : {exc}")
