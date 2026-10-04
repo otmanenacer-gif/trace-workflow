@@ -719,7 +719,9 @@ def render_stage3_restore(run: dict, analyzed: list[dict]) -> None:
             "Si l'étape 3 de cet entretien a déjà été calculée et ses fichiers téléchargés, importez ici les "
             "**4 JSON** : `practice_extractor.json`, `interaction_signals.json`, `evidence_validation.json`, "
             "`speaker_attribution_audit.json`. Ils sont vérifiés (même entretien, même transcription, analyses "
-            "complètes, citations revérifiées) puis installés tels quels : **aucun appel API**, ni étape 3, "
+            "complètes, citations revérifiées) puis installés dans leur version canonique : la sélectivité actuelle "
+            "de l'étape 3 (celle de `refilter`) leur est réappliquée, si bien que des fichiers téléchargés avant un "
+            "`refilter` ne réintroduisent aucune pratique ni aucun signal écarté. **Aucun appel API**, ni étape 3, "
             "ni audit des locuteurs.")
         interview_id = st.selectbox("Entretien à restaurer", [f["ingestion"]["interview_id"] for f in missing],
                                     key="restore_interview")

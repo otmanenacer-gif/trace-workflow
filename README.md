@@ -132,6 +132,7 @@ python -m pytest tests/test_stage4_pipeline.py        # étape 4 : référence, 
 python -m pytest tests/test_stage4_long.py            # étape 4 : entretien long synthétique (320 tours)
 python -m pytest tests/test_app_stage4.py             # étape 4 : interface (AppTest)
 python -m pytest tests/test_stage3_restore.py         # restauration de sorties de l'étape 3 téléchargées
+python -m pytest tests/test_stage3_refilter_restore.py # refilter canonique : réouverture et restauration → étape 4
 python -m pytest tests/test_stage4_1.py               # étape 4.1 : proximité, fusions, requête normalisée
 python -m pytest tests/test_trajectory_candidates.py  # étape 5 : préparation déterministe, ancrages temporels
 python -m pytest tests/test_trajectory_validator.py   # étape 5 : validateur (requalifications, vocabulaire)
@@ -464,9 +465,13 @@ l'entretien). Le module `core/stage3_restore.py` :
   ne l'est plus → refus) et refuse un `evidence_validation.json` avec des anomalies critiques, des totaux
   incohérents ou plus de 10 % de citations invalides.
 
-Une fois validés, les fichiers sont recopiés **octet pour octet** dans `analysis/`, avec des manifests de
-restauration (`stage3_restore_manifest.json` : nom importé, SHA-256 et taille de chaque fichier) ; les
-sorties périmées de l'étape 4 sont retirées. Aucune étape 3, aucun audit des locuteurs, aucun appel :
+Une fois validés, les fichiers sont installés dans `analysis/` dans leur **version canonique** : la sélectivité
+déterministe actuelle de l'étape 3 (celle que réapplique `trace_local.py refilter`) et la validation des preuves
+sont réappliquées aux objets importés. Des fichiers téléchargés AVANT un `refilter` donnent donc exactement les
+objets du run refiltré : aucune pratique ni aucun signal écarté n'est réintroduit, et l'étape 4 reçoit la même
+étape 3. Des fichiers déjà à jour sont recopiés **octet pour octet**. Les manifests de restauration
+(`stage3_restore_manifest.json` : nom importé, SHA-256 importé et installé, taille, `reselected`, bilan de la
+resélection) en gardent la trace ; les sorties périmées de l'étape 4 sont retirées. Aucune étape 3, aucun audit des locuteurs, aucun appel :
 l'interface affiche « Stage 3 restauré depuis fichiers — 0 appel API » et l'étape 4 lit ces fichiers comme
 des sorties normales. Le cache de l'étape 3, lui, n'est pas reconstitué : relancer l'étape 3 sur cet
 entretien (`--force`) referait ses appels au modèle local.
