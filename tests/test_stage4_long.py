@@ -37,12 +37,12 @@ def test_long_interview_does_not_turn_every_practice_into_an_episode(tmp_path):
     doc = json.loads((out / config.ACCOUNTABILITY_EPISODES_FILENAME).read_text(encoding="utf-8"))
     manifest = json.loads((out / config.ACCOUNTABILITY_MANIFEST_FILENAME).read_text(encoding="utf-8"))
 
-    # Coût : UN appel pour tout l'entretien, sous le seuil d'un appel unique
-    assert len(t4.calls) == 1 and manifest["api_calls"] == 0
+    # Coût : un appel par bloc d'au plus 4 candidats (8 candidats : 2 appels), chacun sous le seuil d'un appel unique
+    assert len(t4.calls) == manifest["chunk_count"] == 2 and manifest["api_calls"] == 0
     assert manifest["over_single_call_threshold"] is False
     assert manifest["estimated_input_tokens"] < SINGLE_CALL_MAX_INPUT_TOKENS / 3
-    payload = sent_payload(t4.calls[0]["params"])
-    assert len(payload["turns_by_id"]) < 25  # jamais l'entretien entier
+    for call in t4.calls:
+        assert len(sent_payload(call["params"])["turns_by_id"]) < 25  # jamais l'entretien entier
 
     # Sélectivité : 31 pratiques, ≥ 70 signaux → 8 candidats → 5 épisodes + 3 pratiques ordinaires examinées
     summary = doc["candidates"]["summary"]

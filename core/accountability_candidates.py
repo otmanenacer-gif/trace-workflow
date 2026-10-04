@@ -45,7 +45,8 @@ Composantes (étape 4.1, `candidate_links` / `candidate_components`) : deux cand
 seulement par une relation EXPLICITE — pratique partagée, signal déclencheur partagé, mêmes tours
 cités ET même tâche, ou contradiction entre tours qui cite les tours de l'autre. Un épisode ne peut
 réunir que des candidats reliés (validé par core/accountability_episode_validator.py) ; un découpage
-de la requête en plusieurs appels ne coupe jamais une composante.
+de la requête en plusieurs appels ne coupe jamais une composante. Blocs (étape 4.2) : au plus
+BLOCK_MAX_CANDIDATES candidats par appel, pour que la réponse (citations recopiées) tienne dans la réserve de sortie.
 
 Représentation envoyée (format 2, `build_payload`) : NORMALISÉE — chaque citation, pratique, signal
 et tour figure une seule fois (`evidence_by_id`, `practices_by_id`, `signals_by_id`,
@@ -81,6 +82,13 @@ QUOTE_WINDOW_CHARS = 250
 # milieu d'une composante), chaque bloc restant sous ces seuils autant que possible.
 SINGLE_CALL_MAX_INPUT_TOKENS = 24_000
 SINGLE_CALL_MAX_CANDIDATES = 60
+# Taille d'un bloc bornée par la RÉPONSE (étape 4.2). Le modèle recopie mot pour mot les citations de chaque épisode :
+# sur OTMANE_NACER, `evidence` fait 77 % du JSON produit ; un épisode coûte ≈ 550 tokens en moyenne et jusqu'à
+# ≈ 1 100 (4 à 9 citations, souvent des tours entiers). 11-12 candidats en un appel ≈ 7 200 tokens : au-delà de la
+# réserve de sortie de l'agent (6 144, core/local_agent_runner.OUTPUT_RESERVE) → réponse tronquée, rejouée en entier.
+# 4 candidats par appel : ≈ 2 200 tokens en moyenne, ≈ 4 400 au pire, sous la réserve. Les blocs restent des
+# composantes entières (une composante plus grande forme seule son bloc, jamais coupée).
+BLOCK_MAX_CANDIDATES = 4
 
 TRIGGER_SIGNAL_TYPES = frozenset({
     "explicit_emotion", "reference_to_teacher_judgment", "reference_to_peer_judgment", "reference_to_rule",
@@ -674,11 +682,12 @@ def serialize_payload(payload: dict) -> str:
 def plan_payload_chunks(transcript: dict, built: dict, speaker_warnings: dict | None = None,
                         max_tokens: int | None = None, max_candidates: int | None = None,
                         overhead_tokens: int = 0) -> list[list[str]]:
-    """Blocs de candidats pour l'Accountability Episode Builder : UN seul si la représentation normalisée
-    tient sous les seuils ; sinon des composantes entières regroupées dans l'ordre de l'entretien (une
-    composante n'est jamais coupée, même si elle dépasse seule le seuil)."""
+    """Blocs de candidats pour l'Accountability Episode Builder : UN seul si la représentation normalisée tient sous
+    le seuil d'entrée et s'il n'y a pas plus de BLOCK_MAX_CANDIDATES candidats (réponse bornée) ; sinon des
+    composantes entières regroupées dans l'ordre de l'entretien, au plus `max_candidates` par bloc (une composante
+    n'est jamais coupée, même si elle dépasse seule un seuil). Chaque candidat figure dans exactement un bloc."""
     max_tokens = SINGLE_CALL_MAX_INPUT_TOKENS if max_tokens is None else max_tokens
-    max_candidates = SINGLE_CALL_MAX_CANDIDATES if max_candidates is None else max_candidates
+    max_candidates = BLOCK_MAX_CANDIDATES if max_candidates is None else max_candidates
     all_ids = [c["candidate_id"] for c in built["candidates"]]
     if not all_ids:
         return []

@@ -51,7 +51,7 @@ def test_stage4_full_flow_then_no_replay(tmp_path, fake_agents):
 
     at.button(key="run_stage4").click().run()
     assert not at.exception
-    assert agents(fake_agents)[stage3_calls:] == [ACCOUNTABILITY]
+    assert agents(fake_agents)[stage3_calls:] == [ACCOUNTABILITY] * 2  # 6 candidats : blocs de 4 et 2
     assert "Étape 4 terminée (exécution locale, modèle qwen2.5:7b, 0 appel API)." in texts(at.success)
     table = at.table[-1].value
     assert list(table["Étape 4"]) == ["✅ SUCCESS"] and list(table["Statut étape 3"]) == ["COMPLETE"]
@@ -68,7 +68,7 @@ def test_stage4_full_flow_then_no_replay(tmp_path, fake_agents):
 
     # Relance : l'étape 4 est complète et à jour, elle n'est pas rejouée
     at.button(key="run_stage4").click().run()
-    assert not at.exception and agents(fake_agents)[stage3_calls:] == [ACCOUNTABILITY]
+    assert not at.exception and agents(fake_agents)[stage3_calls:] == [ACCOUNTABILITY] * 2
     assert list(at.table[-1].value["Étape 4"]) == ["✅ SUCCESS"]
 
 

@@ -133,7 +133,8 @@ def otmane_run(tmp_path, mode="good", **settings):
 
 def test_otmane_regression_good_builder(tmp_path):
     run, doc, transport, _ = otmane_run(tmp_path)
-    assert len(transport.calls) == 1
+    prepared = accountability.prepare_stage4(run["files"][0]["ingestion"])
+    assert len(transport.calls) == len(prepared.requests) == doc["chunk_count"] > 1  # blocs d'au plus 4 candidats
     summary = doc["candidates"]["summary"]
     assert summary["practice_count"] == O.PRACTICE_COUNT == 50
     assert 70 <= summary["signal_count"] <= 80
@@ -173,7 +174,10 @@ def test_otmane_regression_adversarial_builder_is_caught(tmp_path):
     assert doc["usable_episode_count"] == doc["episode_count"] - len(O.PAIRS)
 
 
-def test_otmane_cost_normalized_payload(tmp_path):
+def test_otmane_cost_normalized_payload(tmp_path, monkeypatch):
+    # format de la représentation mesuré à découpage égal (un seul bloc) : le découpage de l'étape 4.2 est testé
+    # dans tests/test_stage4_blocks.py
+    monkeypatch.setattr(ac, "BLOCK_MAX_CANDIDATES", ac.SINGLE_CALL_MAX_CANDIDATES)
     run, doc, transport, cache = otmane_run(tmp_path)
     prepared = accountability.prepare_stage4(run["files"][0]["ingestion"])
     legacy = estimate_tokens(O.legacy_user_message(prepared.transcript, prepared.built, prepared.speaker_warnings))

@@ -187,7 +187,7 @@ def test_stage4_runs_locally_and_equals_the_reference_pipeline(tmp_path, monkeyp
     ollama = use_fake_runtime(monkeypatch, stage3_agents(S4.stage3_responders(), S4.REFERENCE_BUILDER))
     result = lp.run_until(si.make_ingested_run(tmp_path / "local", S4.FILES), "4")
     assert result["stage"] == "4" and result["status"]["status"] == lp.STAGE_COMPLETE
-    assert [c["agent"] for c in ollama.calls].count(ACCOUNTABILITY) == 1
+    assert [c["agent"] for c in ollama.calls].count(ACCOUNTABILITY) == 2  # 6 candidats : blocs de 4 et 2
     local = load(result["metadata"], config.ACCOUNTABILITY_EPISODES_FILENAME, S4.INTERVIEW_ID)
     reference, _ = S5.run_to_stage4(tmp_path / "ref", S4.FILES, S4.stage3_responders(), S4.REFERENCE_BUILDER)
     assert episodes_comparable(local) == episodes_comparable(
@@ -225,7 +225,7 @@ def test_restored_stage3_feeds_the_local_stage4(tmp_path, monkeypatch):
     ollama = use_fake_runtime(monkeypatch, {ACCOUNTABILITY: S4.REFERENCE_BUILDER})
     result = lp.run_until(run, "4")
     assert result["status"]["status"] == lp.STAGE_COMPLETE
-    assert [c["agent"] for c in ollama.calls] == [ACCOUNTABILITY]  # ni étape 3, ni audit
+    assert [c["agent"] for c in ollama.calls] == [ACCOUNTABILITY] * 2  # deux blocs ; ni étape 3, ni audit
     stage3 = lp.run_stage("3", result["metadata"])["status"]
     assert stage3["skipped"] == [S4.INTERVIEW_ID]  # étape 3 restaurée : complète, non rejouée
 

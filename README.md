@@ -134,6 +134,7 @@ python -m pytest tests/test_app_stage4.py             # étape 4 : interface (Ap
 python -m pytest tests/test_stage3_restore.py         # restauration de sorties de l'étape 3 téléchargées
 python -m pytest tests/test_stage3_refilter_restore.py # refilter canonique : réouverture et restauration → étape 4
 python -m pytest tests/test_stage4_1.py               # étape 4.1 : proximité, fusions, requête normalisée
+python -m pytest tests/test_stage4_blocks.py          # étape 4.2 : blocs de 4 candidats, fusion, reprise, troncature
 python -m pytest tests/test_trajectory_candidates.py  # étape 5 : préparation déterministe, ancrages temporels
 python -m pytest tests/test_trajectory_validator.py   # étape 5 : validateur (requalifications, vocabulaire)
 python -m pytest tests/test_stage5_sociological.py    # étape 5 : cas A à H (temporalité, contexte, exception…)
@@ -372,10 +373,11 @@ Documentation complète : [`docs/stage4_accountability_episodes.md`](docs/stage4
   avertissements de locuteur propagés, vocabulaire psychologisant interdit.
 - **Étape 3 incomplète** : FAILED → étape 4 `BLOCKED` (aucun appel) ; PARTIAL →
   étape 4 `PARTIAL`, `analysis_complete: false`.
-- **Appels au modèle local** : aucun sans candidat, sinon 1 par entretien (0 appel API) ; modifier l'étape 4 ne
-  relance qu'elle. Requête normalisée (chaque pratique, signal, citation et tour une seule fois, identifiants
-  abrégés) ; seuil d'un appel unique : 24 000 tokens estimés ou 60 candidats, au-delà découpage par
-  composantes entières de candidats (un appel par bloc).
+- **Appels au modèle local** : aucun sans candidat, sinon un par bloc d'au plus 4 candidats (composantes
+  entières ; la réponse, qui recopie les citations, reste sous la réserve de sortie) ; 0 appel API ; modifier
+  l'étape 4 ne relance qu'elle. Chaque bloc validé est mis en cache : une troncature ou un arrêt ne fait rejouer
+  que les blocs manquants. Requête normalisée (chaque pratique, signal, citation et tour une seule fois,
+  identifiants abrégés). Coût estimé ou mesuré : `python scripts/stage4_blocks_report.py plan|measure RUN`.
 - **Étape 4.1** : proximité mesurée dans le tour (≤ 200 caractères entre citations) ;
   fusion seulement entre candidats reliés explicitement (sinon `DISCONNECTED_MERGE`,
   épisode rejeté et non utilisable) ; affects et intentions jamais employés comme

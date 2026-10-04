@@ -78,10 +78,10 @@ def test_restored_stage3_feeds_stage4_without_any_stage3_call(tmp_path):
     assert set(manifest["files"]) == set(NAMES)
 
     plan = accountability.plan_stage4(run, [S.INTERVIEW_ID], fake_settings(), cache)
-    assert plan["blocked"] == 0 and plan["calls"] == 1 and plan["candidates"] == 6
+    assert plan["blocked"] == 0 and plan["calls"] == 2 and plan["candidates"] == 6  # blocs de 4 et 2
     transport = stage4_only_transport()
     run = accountability.analyze_run_stage4(run, settings=fake_settings(), client=transport, cache=cache)
-    assert [c["agent"] for c in transport.calls] == [ACCOUNTABILITY]  # aucune étape 3, aucun audit
+    assert [c["agent"] for c in transport.calls] == [ACCOUNTABILITY] * 2  # deux blocs ; ni étape 3, ni audit
     result = run["files"][0]["accountability"]
     assert result["status"] == "SUCCESS" and result["stage3_status"] == "COMPLETE"
     assert (result["accountability_episode_count"], result["ordinary_practice_count"], result["uncertain_count"],
@@ -208,5 +208,5 @@ def test_app_offers_restore_then_shows_restored_stage3_and_stage4(tmp_path, monk
     assert "Stage 3 restauré depuis fichiers — 0 appel API" in " ".join(str(s.value) for s in at.success)
     assert "Restaurer des résultats Stage 3 existants" not in [e.label for e in at.expander]
     at.button(key="run_stage4").click().run()
-    assert not at.exception and [c["agent"] for c in transport.calls] == [ACCOUNTABILITY]  # aucune étape 3
+    assert not at.exception and [c["agent"] for c in transport.calls] == [ACCOUNTABILITY] * 2  # deux blocs, aucune étape 3
     assert list(at.table[-1].value["Épisodes accountability"]) == [4]

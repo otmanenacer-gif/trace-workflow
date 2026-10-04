@@ -19,6 +19,7 @@ from tests.fake_llm import (ACCOUNTABILITY, AUDITOR, INTERACTION, PRACTICE, Fake
                             agent_error, text_response)
 
 ROOT = Path(__file__).resolve().parent.parent
+BLOCKS = 2  # 6 candidats, au plus BLOCK_MAX_CANDIDATES (4) par appel : blocs de 4 puis 2 candidats
 
 
 def stage3(tmp_path, files=S.FILES, responders=None):
@@ -66,7 +67,7 @@ def test_reference_interview_end_to_end(tmp_path):
     transcript_sha = hashlib.sha256(transcript.read_bytes()).hexdigest()
 
     run, t4 = stage4(run, cache)
-    assert [c["agent"] for c in t4.calls] == [ACCOUNTABILITY]  # 1 appel, l'étape 3 n'est jamais relancée
+    assert [c["agent"] for c in t4.calls] == [ACCOUNTABILITY] * BLOCKS  # un appel par bloc, jamais l'étape 3
     doc = load(run, config.ACCOUNTABILITY_EPISODES_FILENAME)
     assert doc["status"] == "SUCCESS" and doc["analysis_complete"] is True and doc["stage3_status"] == "COMPLETE"
     assert (doc["candidate_count"], doc["episode_count"], doc["accountability_episode_count"],
@@ -122,13 +123,13 @@ def test_reference_interview_end_to_end(tmp_path):
 def test_llm_receives_only_candidates_never_the_whole_interview(tmp_path):
     run, cache, _ = stage3(tmp_path)
     run, t4 = stage4(run, cache)
-    params = t4.calls[0]["params"]
-    payload = S.sent_payload(params)
-    sent_turns = {payload["id_prefix"] + t for t in payload["turns_by_id"]}  # identifiants abrégés dans la requête
+    payloads = [S.sent_payload(c["params"]) for c in t4.calls]
+    sent_turns = {p["id_prefix"] + t for p in payloads for t in p["turns_by_id"]}  # identifiants abrégés
     assert len(sent_turns) < len(S.TURNS) and S.tid(2) not in sent_turns and S.tid(18) not in sent_turns
-    assert params["system"][0]["text"].startswith("# Accountability Episode Builder")
-    assert len(params["messages"]) == 1
-    warned = {tid: t for tid, t in payload["turns_by_id"].items() if "speaker_warning" in t}
+    for call in t4.calls:
+        assert call["params"]["system"][0]["text"].startswith("# Accountability Episode Builder")
+        assert len(call["params"]["messages"]) == 1
+    warned = {tid: t for p in payloads for tid, t in p["turns_by_id"].items() if "speaker_warning" in t}
     assert list(warned) == ["T0022"] and warned["T0022"]["speaker"] == "enqueteur"
 
 
@@ -137,7 +138,7 @@ def test_llm_receives_only_candidates_never_the_whole_interview(tmp_path):
 def test_identical_interview_is_served_from_cache_with_zero_call(tmp_path):
     run, cache, _ = stage3(tmp_path)
     run, first = stage4(run, cache)
-    assert len(first.calls) == 1
+    assert len(first.calls) == BLOCKS
     assert accountability.plan_stage4(run, [S.INTERVIEW_ID], fake_settings(), cache)["calls"] == 0
     run, again = stage4(run, cache)
     assert again.calls == []
@@ -156,26 +157,26 @@ def test_stage4_version_or_prompt_change_invalidates_only_stage4(tmp_path, monke
     run, cache, _ = stage3(tmp_path)
     run, _ = stage4(run, cache)
     monkeypatch.setattr(accountability, "SPEC", dataclasses.replace(accountability.SPEC, version="9.9"))
-    assert accountability.plan_stage4(run, [S.INTERVIEW_ID], fake_settings(), cache)["calls"] == 1
+    assert accountability.plan_stage4(run, [S.INTERVIEW_ID], fake_settings(), cache)["calls"] == BLOCKS
     run, after_version = stage4(run, cache)
-    assert len(after_version.calls) == 1
+    assert len(after_version.calls) == BLOCKS
     assert load(run, config.ACCOUNTABILITY_MANIFEST_FILENAME)["agent_version"] == "9.9"
     changed_prompt = dataclasses.replace(accountability.SPEC, user_template=accountability.SPEC.user_template + " ")
     monkeypatch.setattr(accountability, "SPEC", changed_prompt)
     run, after_prompt = stage4(run, cache)
-    assert len(after_prompt.calls) == 1
+    assert len(after_prompt.calls) == BLOCKS
     # l'étape 3 reste entièrement en cache
     t3 = FakeAgents(S.stage3_responders())
     analyze_run(run, settings=fake_settings(), client=t3, cache=cache)
     assert t3.calls == []
-    assert len(list((tmp_path / "cache" / "accountability_episode_builder").glob("*.json"))) == 3
+    assert len(list((tmp_path / "cache" / "accountability_episode_builder").glob("*.json"))) == 3 * BLOCKS
 
 
 def test_force_ignores_the_cache(tmp_path):
     run, cache, _ = stage3(tmp_path)
     run, _ = stage4(run, cache)
     run, forced = stage4(run, cache, force=True)
-    assert len(forced.calls) == 1
+    assert len(forced.calls) == BLOCKS
 
 
 def test_changed_stage3_output_changes_the_stage4_request(tmp_path):
@@ -186,7 +187,7 @@ def test_changed_stage3_output_changes_the_stage4_request(tmp_path):
     document["signals"] = [s for s in document["signals"] if s["signal_type"] != "metadiscursive_self_evaluation"]
     path.write_text(json.dumps(document, ensure_ascii=False), encoding="utf-8")
     run, again = stage4(run, cache)
-    assert len(again.calls) == 1
+    assert len(again.calls) == 2  # 5 candidats renumérotés : les deux blocs (4 + 1) changent
     assert load(run, config.ACCOUNTABILITY_EPISODES_FILENAME)["candidate_count"] == 5
 
 
@@ -241,7 +242,7 @@ def test_stage3_partial_gives_a_partial_stage4_never_complete(tmp_path):
     run, cache, _ = stage3(tmp_path)
     simulate_partial(run)
     run, t4 = stage4(run, cache)
-    assert len(t4.calls) == 1
+    assert len(t4.calls) == BLOCKS
     doc = load(run, config.ACCOUNTABILITY_EPISODES_FILENAME)
     assert doc["status"] == "PARTIAL" and doc["analysis_complete"] is False and doc["stage3_status"] == "PARTIAL"
     validation = load(run, config.ACCOUNTABILITY_VALIDATION_FILENAME)
@@ -267,6 +268,8 @@ def test_llm_failure_is_isolated_and_leaves_no_episodes(tmp_path):
 def test_invalid_model_output_is_kept_but_rejected(tmp_path):
     def inventing(params):
         output = S.scripted_output(params, S.REFERENCE_RULES)
+        if S.sent_payload(params)["candidates"][0]["candidate_id"] != "C001":  # premier bloc seulement
+            return text_response(output)
         output["episodes"][0]["evidence"] = [{"turn_id": S.tid(4), "quote": "Je ne veux jamais qu'il écrive."}]
         output["episodes"][1]["practice_ids"].append(f"{S.INTERVIEW_ID}_P099")
         output["episodes"][2]["signal_ids"].append(f"{S.INTERVIEW_ID}_S099")
@@ -316,7 +319,7 @@ def test_several_interviews_one_blocked_others_continue(tmp_path):
     run, cache, _ = stage3(tmp_path, files=files, responders=responders)
     run, t4 = stage4(run, cache)
     statuses = {f["accountability"]["interview_id"]: f["accountability"]["status"] for f in run["files"]}
-    assert statuses == {S.INTERVIEW_ID: "SUCCESS", S.PLAIN_ID: "BLOCKED"} and len(t4.calls) == 1
+    assert statuses == {S.INTERVIEW_ID: "SUCCESS", S.PLAIN_ID: "BLOCKED"} and len(t4.calls) == BLOCKS
 
 
 def test_stage4_needs_no_key_nor_configuration(tmp_path):

@@ -152,8 +152,9 @@ class Stage4Input:
 
 
 def build_requests(transcript: dict, built: dict, warnings: dict) -> tuple:
-    """Messages envoyés au modèle : UN dans le cas normal ; plusieurs seulement si la représentation normalisée
-    dépasse les seuils d'un appel unique (blocs de composantes entières, voir plan_payload_chunks)."""
+    """Messages envoyés au modèle : un par bloc de composantes entières d'au plus BLOCK_MAX_CANDIDATES candidats (la
+    réponse doit tenir dans la réserve de sortie), et sous le seuil d'entrée (voir plan_payload_chunks). Chaque bloc
+    est un appel indépendant, mis en cache dès sa validation ; une reprise ne refait que les blocs manquants."""
     requests = []
     overhead = candidates_mod.payload_estimate(SPEC.user_template)  # consignes du message, hors données
     chunks = candidates_mod.plan_payload_chunks(transcript, built, warnings, overhead_tokens=overhead)
@@ -353,6 +354,7 @@ async def run_stage4_interview(prepared: Stage4Input, client, cache: AnalysisCac
         "estimated_input_tokens": estimated,
         "single_call_threshold_tokens": candidates_mod.SINGLE_CALL_MAX_INPUT_TOKENS,
         "single_call_max_candidates": candidates_mod.SINGLE_CALL_MAX_CANDIDATES,
+        "block_max_candidates": candidates_mod.BLOCK_MAX_CANDIDATES,
         "chunking_used": len(prepared.requests) > 1,
         "chunk_count": len(prepared.requests),
         "chunks": [],

@@ -247,8 +247,8 @@ avertissements) + nom, version, empreinte du prompt et du schéma de l'agent + m
 
 ## Coût futur
 
-- **0 appel** si un entretien n'a aucun candidat ; **1 appel** sinon (tous les candidats dans une seule
-  requête normalisée) ; 0 depuis le cache. Plusieurs appels seulement au-delà des seuils (voir 4.1).
+- **0 appel** si un entretien n'a aucun candidat ; sinon **un appel par bloc d'au plus 4 candidats**
+  (`BLOCK_MAX_CANDIDATES`, étape 4.2, ci-dessous) ; 0 depuis le cache.
 - Estimations d'entrée (longueur du message / 3,5 ; consignes système en plus, mises en cache par l'API) :
 
 | Entretien synthétique | Candidats | Format 1 (4.0) | Format 2 normalisé (4.1) | Réduction | Appels |
@@ -266,7 +266,30 @@ avertissements) + nom, version, empreinte du prompt et du schéma de l'agent + m
   composante), un appel et une entrée de cache par bloc ; un bloc en échec rend le résultat `PARTIAL`.
   Une composante qui dépasse seule le seuil part en un bloc et est signalée (`PAYLOAD_OVER_THRESHOLD`).
   `max_tokens` n'est jamais augmenté pour compenser.
-- Sortie : ≈ 250 tokens par épisode ; 60 candidats ≈ 15 000 tokens, sous `TRACE_LLM_MAX_TOKENS` (32 000).
+
+### 4.2 — Blocs bornés par la réponse
+
+Mesure réelle (OTMANE_NACER, qwen2.5:7b) : la réponse de l'Accountability Episode Builder est dominée par les
+citations recopiées mot pour mot (`evidence` : 77 % du JSON ; 4 à 9 citations par épisode, souvent des tours
+entiers) : ≈ 545 tokens par épisode en moyenne, ≈ 1 080 au plus. 12 à 15 candidats en un appel demandent
+≈ 7 000 tokens pour une réponse réservée de 6 144 (`OUTPUT_RESERVE`, core/local_agent_runner.py) : réponse tronquée,
+redemandée en entier, puis correction méthodologique renvoyant toute la réponse (journal du 2026-10-03 : 4
+tentatives, 2 troncatures, 693 s).
+
+- Découpage : **au plus `BLOCK_MAX_CANDIDATES = 4` candidats par appel** (≈ 2 200 tokens de sortie en moyenne,
+  ≈ 4 400 au pire, sous la réserve), en **composantes entières** dans l'ordre de l'entretien ; une composante
+  plus grande forme seule son bloc. Chaque candidat figure dans exactement un bloc ; chaque bloc reçoit la
+  représentation normalisée de ses seuls candidats et la consigne « Bloc i/n » du gabarit existant.
+- Persistance : la réponse validée d'un bloc est mise en cache dès sa validation (clé : le message exact du bloc).
+- Reprise : un bloc tronqué, en échec ou interrompu rend l'étape `PARTIAL` (épisodes des autres blocs conservés)
+  ; la relance ne refait que les blocs manquants.
+- Fusion : épisodes de tous les blocs réunis, puis validation habituelle sur l'ensemble (identifiants
+  `E001…` attribués dans l'ordre de l'entretien) : même document que l'appel unique.
+- Coût mesuré sur OTMANE_NACER (30 pratiques / 22 signaux, 12 candidats) : 3 appels au lieu de 1 ; entrée
+  ≈ 28 000 tokens au lieu de ≈ 20 000 (consignes répétées : quelques secondes de lecture) ; sortie inchangée
+  (≈ 6 500 tokens) ; durée estimée ≈ 207 s au lieu de ≈ 203 s sans troncature — contre 693 s mesurées avec.
+  Estimation et mesure : `python scripts/stage4_blocks_report.py plan RUN` (sans appel) et
+  `python scripts/stage4_blocks_report.py measure RUN` (journaux de la dernière étape 4).
 
 ## Étape 4.1 — stabilisation après le premier run réel
 
@@ -338,6 +361,6 @@ qualité d'un vrai modèle.**
   `valid` reste une proposition à relire.
 - Après une nouvelle exécution de l'étape 3, le résumé de l'étape 4 affiché reste celui de la dernière
   exécution de l'étape 4 jusqu'à ce qu'elle soit relancée (l'estimation des appels, elle, est à jour).
-- Pas de découpage par candidats au-delà du seuil (voir « Coût futur »).
+- Une composante de plus de 4 candidats n'est jamais coupée : son bloc peut dépasser la réponse estimée.
 - Hors périmètre (étapes 5+) : trajectoire de l'étudiant·e, typologie, comparaison entre entretiens,
   régimes d'accountability, rapport.
