@@ -332,6 +332,21 @@ statut trop faible, affirmation sans verdict), `supported`. Défauts formels (qu
 répète le résumé, frontière qui n'est pas « A / B », chaîne « null », opération appuyée sur un tour de l'enquêteur) :
 avertissements seulement.
 
+Version 1.1 (premier benchmark réel sur OTMANE_NACER : 3/12 en accord avec l'audit manuel ; le vérificateur 1.0
+déclarait « supported » en reformulant l'affirmation, verdict écrit avant toute analyse) : pour chaque affirmation, le
+vérificateur dit d'abord qui l'énonce dans les citations (`student`, `interviewer`, `third_party`, `previous_agent`),
+la proposition que les citations établissent (sans recopier l'affirmation), s'il y a changement de sujet
+(« des étudiants ont fait X » → « l'étudiant fait X ») et si le contexte limite ou inverse le sens, PUIS la relation
+(`equivalent`, `direct_paraphrase`, `immediate_inference`, `stronger_than_evidence`, `different`, `contradicted`,
+`ambiguous` — règle de prudence : plusieurs lectures → `ambiguous`) ; pour chaque opération, ce qu'exige la définition
+de son type et ce que font ses citations. TRACE DÉDUIT le verdict de cette analyse : une relation favorable reste
+non établie si l'affirmation n'est pas énoncée par l'enquêté·e, change de sujet ou si le contexte en limite le sens ;
+un contexte qui inverse le sens la contredit. Affirmations centrales : la question pratique et les opérations d'un
+épisode d'accountability (le résumé pour les autres statuts) ; P non établie ou aucune opération établie →
+`unsupported`, seules les affirmations secondaires non établies donnent `doubtful`. Une opération renvoie aux
+citations `Q…` de ses tours ; un identifiant de tour renvoyé à la place est ramené à ses citations.
+`--rescore` recalcule les verdicts d'un rapport existant avec l'agrégation actuelle, sans appel.
+
 Mode actuel : **rapport seulement** — aucune sortie de l'étape 4 n'est modifiée, aucune réparation, rien de bloquant.
 `python scripts/stage4_blocks_report.py grounding RUN --plan` (aucun appel : coût, avertissements) ;
 `python scripts/stage4_blocks_report.py grounding RUN [--solid …] [--doubtful …] [--false …]` (un appel par épisode,

@@ -6,9 +6,10 @@
     python scripts/stage4_blocks_report.py measure RUN
         # AUCUN appel : lit les journaux de la dernière exécution de l'étape 4 (local_runs/stage4/) — appels,
         # tokens d'entrée et de sortie réels par bloc, durée, tentatives, troncatures, réparations ciblées
-    python scripts/stage4_blocks_report.py grounding RUN [--plan] [--solid E007,…] [--doubtful …] [--false …]
+    python scripts/stage4_blocks_report.py grounding RUN [--plan | --rescore] [--solid E007,…] [--doubtful …] [--false …]
         # RAPPORT SEULEMENT : fondement de chaque épisode dans ses citations (Episode Grounding Checker, un appel par
-        # épisode, réponses en cache) ; --plan : aucun appel (coût et avertissements formels). Aucune sortie de
+        # épisode, réponses en cache) ; --plan : aucun appel (coût et avertissements formels) ; --rescore : aucun
+        # appel, verdicts recalculés avec l'agrégation actuelle sur les réponses du dernier rapport. Aucune sortie de
         # l'étape 4 n'est modifiée ; comparaison facultative avec un audit manuel
     python scripts/stage4_blocks_report.py repairs RUN
         # AUCUN appel : réponses des blocs relues dans le cache TRACE ; identifiants étrangers retirés sans modèle et
@@ -245,6 +246,20 @@ def cmd_grounding(args) -> int:
                 if item["formal_warnings"]:
                     print(f"  {item['episode_id'].rsplit('_', 1)[-1]} : {', '.join(item['formal_warnings'])}")
         return 0
+    if args.rescore:
+        path = lp.stage_dir(metadata, "4") / stage4_grounding.REPORT_FILENAME
+        if not path.is_file():
+            print("Aucun rapport de contrôle sémantique dans ce run : lancez d'abord le diagnostic.")
+            return 1
+        previous = json.loads(path.read_text(encoding="utf-8"))
+        print(f"Recalcul SANS appel : réponses du rapport existant (vérificateur {previous.get('agent_version')}), "
+              f"agrégation {stage4_grounding.GROUNDING_VERSION} ; le rapport n'est pas réécrit")
+        results = stage4_grounding.rescore(previous, dirs)
+        for result in results:
+            print_grounding(result)
+        if manual:
+            print_comparison(stage4_grounding.compare([r for x in results for r in x["rows"]], manual))
+        return 0
     runner = lp.make_runner(settings, journal_dir=lp.stage_dir(metadata, "4") / "grounding")
     runner.require_ready()
 
@@ -261,6 +276,13 @@ def cmd_grounding(args) -> int:
             print_grounding(result)
     comparison = document.get("manual_comparison")
     if comparison:
+        print_comparison(comparison)
+    print(f"\nRapport : {lp.display_path(lp.stage_dir(metadata, '4') / stage4_grounding.REPORT_FILENAME)}")
+    return 0
+
+
+def print_comparison(comparison: dict) -> None:
+    if comparison:
         print(f"\nComparaison avec l'audit manuel : {comparison['agreements']}/{comparison['compared']} en accord "
               "(solide ↔ supported ; douteux ↔ doubtful ; faux ↔ unsupported ou contradicted)")
         for line in comparison["lines"]:
@@ -268,8 +290,6 @@ def cmd_grounding(args) -> int:
                   f"{'' if line['agree'] else '  ← désaccord'}")
         if comparison["missing"]:
             print(f"  absents du run : {', '.join(comparison['missing'])}")
-    print(f"\nRapport : {lp.display_path(lp.stage_dir(metadata, '4') / stage4_grounding.REPORT_FILENAME)}")
-    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -289,6 +309,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("run")
     p.add_argument("--interview", action="append")
     p.add_argument("--plan", action="store_true", help="aucun appel : coût et avertissements formels")
+    p.add_argument("--rescore", action="store_true",
+                   help="aucun appel : verdicts recalculés avec l'agrégation actuelle sur le dernier rapport")
     p.add_argument("--solid", help="audit manuel : épisodes solides (E007,E010,…)")
     p.add_argument("--doubtful", help="audit manuel : épisodes douteux")
     p.add_argument("--false", help="audit manuel : épisodes faux")

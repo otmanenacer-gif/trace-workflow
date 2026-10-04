@@ -13,12 +13,21 @@ forme ; ce module vérifie le fond, sans rien modifier :
         descriptions de l'étape 3 (types de signaux, surface_form, summary…).
       → Episode Grounding Checker (agents/episode_grounding_checker.py), UN appel par épisode, modèle local, réponse
         mise en cache (clé : la requête exacte) : un nouveau diagnostic du même run ne rappelle pas le modèle
-      → verdict d'épisode déterministe (`episode_verdict`) :
-           contradicted  une affirmation est contredite par une citation ;
-           unsupported   aucune opération soutenue (épisode d'accountability), résumé non soutenu (autres statuts),
-                         récit sur des tiers présenté comme position de l'enquêté·e, ou statut trop fort ;
-           doubtful      une autre affirmation non soutenue, un type d'opération hors définition, une formulation de
-                         l'enquêteur attribuée à l'enquêté·e, un statut trop faible ;
+      → verdict de chaque affirmation DÉDUIT par TRACE (`claim_verdict`, version 1.1) de l'analyse du vérificateur
+        (qui l'affirme, proposition établie, changement de sujet, effet du contexte, relation) — jamais déclaré
+        directement par le modèle : equivalent / direct_paraphrase → supported ; immediate_inference → inferred ;
+        stronger_than_evidence / different → not_supported ; ambiguous → ambiguous ; contradicted, ou contexte qui
+        inverse le sens → contradicted ; une relation favorable devient not_supported si l'affirmation n'est pas
+        énoncée par l'enquêté·e lui-même, change de sujet, ou si le contexte en limite le sens
+      → verdict d'épisode déterministe (`episode_verdict`). Affirmations CENTRALES : la question pratique (P) et les
+        opérations (M…) d'un épisode d'accountability ; le résumé (S) des autres statuts. Les autres (S d'un épisode
+        d'accountability, B…, R, X) sont secondaires.
+           contradicted  une affirmation centrale contredite ;
+           unsupported   P non établie (épisode d'accountability), aucune opération établie, S non établi (autres
+                         statuts), récit sur des tiers présenté comme position de l'enquêté·e, statut trop fort ;
+           doubtful      une affirmation secondaire non établie ou contredite, une opération non établie à côté d'une
+                         autre établie, un type d'opération hors définition, une formulation de l'enquêteur attribuée
+                         à l'enquêté·e, un statut trop faible, une affirmation sans verdict ;
            supported     sinon (paraphrase et inférence immédiate admises).
       → défauts formels, déterministes, signalés comme avertissements (aucune réparation) : question pratique qui
         n'est pas une question ou qui répète le résumé, frontière qui n'est pas « A / B », chaîne « null »,
@@ -44,12 +53,19 @@ from core.llm_client import LLMError, LLMSettings
 from core.schemas import SPEAKER_INTERVIEWER
 
 SPEC = checker.SPEC
-GROUNDING_VERSION = "1.0"
+GROUNDING_VERSION = "1.1"  # 1.1 : verdicts déduits de l'analyse, affirmations centrales, citations Q… normalisées
 REPORT_FILENAME = "grounding_report.json"
 SUPPORTED, DOUBTFUL, UNSUPPORTED, CONTRADICTED = "supported", "doubtful", "unsupported", "contradicted"
 VERDICTS = (SUPPORTED, DOUBTFUL, UNSUPPORTED, CONTRADICTED)
 NOT_CHECKED = "not_checked"
 HOLDS = ("supported", "inferred")
+NOT_ESTABLISHED = ("not_supported", "ambiguous")
+RELATION_VERDICTS = {"equivalent": "supported", "direct_paraphrase": "supported", "immediate_inference": "inferred",
+                     "stronger_than_evidence": "not_supported", "different": "not_supported",
+                     "contradicted": "contradicted", "ambiguous": "ambiguous"}
+CLAIM_LABELS = {"not_supported": "non établi par les citations", "ambiguous": "ambigu (plusieurs lectures)",
+                "contradicted": "contredit par les citations", NOT_CHECKED: "non vérifié (sans verdict)"}
+TURN_TEXT_RATIO = 0.9  # tour complet montré sous une citation qui en couvre moins de 90 %
 # Sections du prompt de l'Accountability Episode Builder reprises telles quelles comme définitions
 DEFINITION_HEADINGS = ("## Ce que « accountability » veut dire ici", "## Les trois statuts",
                        "## Opérations (`accounting_moves`)", "## Frontières (`boundary_objects`)", "## L'enquêteur")
@@ -103,7 +119,7 @@ def quotes_of(transcript: dict, episode: dict) -> tuple[list[dict], list[dict]]:
         turn = turns[position[e["turn_id"]]] if e.get("turn_id") in position else None
         item = {"quote_id": f"Q{len(quotes) + 1}", "turn_id": e.get("turn_id"),
                 "speaker": turn["speaker"] if turn else "unknown", "text": e.get("quote", ""), "kind": "citation"}
-        if turn and turn["text"].strip() != item["text"].strip():  # tour brut : une citation coupée de son sens ?
+        if turn and len(item["text"].strip()) < TURN_TEXT_RATIO * len(turn["text"].strip()):  # citation coupée ?
             item["turn_text"] = excerpt(turn["text"], [item["text"]])
         quotes.append(item)
     quoted = {q["turn_id"] for q in quotes}
@@ -130,15 +146,21 @@ def checker_request(transcript: dict, episode: dict, builder_prompt: str | None 
     """Message de l'Episode Grounding Checker pour UN épisode, et ce qu'il contient (affirmations, citations)."""
     claims = claims_of(episode)
     quotes, contexts = quotes_of(transcript, episode)
+    short = lambda turn_id: (turn_id or "?").rsplit("_", 1)[-1]  # noqa: E731
+    shown_claims = []
+    for c in claims:
+        item = {k: v for k, v in c.items() if k in ("claim_id", "field", "move_type", "text")}
+        if "turn_ids" in c:  # une opération renvoie aux citations Q… de ses tours, jamais à des identifiants de tour
+            item["quote_ids"] = [q["quote_id"] for q in quotes if q["turn_id"] in c["turn_ids"]]
+        shown_claims.append(item)
     shown = {"episode_status": episode.get("episode_status"), "confidence": episode.get("confidence"),
-             "claims": [{k: v for k, v in c.items() if k in ("claim_id", "field", "move_type", "text", "turn_ids")}
-                        for c in claims]}
-    lines = [f'{q["quote_id"]} [{q["turn_id"]}, {q["speaker"]}{", " + q["kind"] if q["kind"] != "citation" else ""}] '
+             "claims": shown_claims}
+    lines = [f'{q["quote_id"]} [{short(q["turn_id"])}, {q["speaker"]}{", " + q["kind"] if q["kind"] != "citation" else ""}] '
              f'« {q["text"]} »' + (f'\n    tour complet de {q["quote_id"]} : « {q["turn_text"]} »'
                                    if q.get("turn_text") else "")
              for q in quotes]
-    lines += [f'contexte [{c["turn_id"]}, enqueteur, avant {c["before"]} — jamais une preuve] « {c["text"]} »'
-              for c in contexts]
+    lines += [f'contexte [{short(c["turn_id"])}, enqueteur, avant {short(c["before"])} — jamais une preuve] '
+              f'« {c["text"]} »' for c in contexts]
     message = SPEC.user_template.format(
         interview_id=transcript["interview_id"], episode_id=episode.get("episode_id"),
         definitions=definitions(builder_prompt), episode_json=json.dumps(shown, ensure_ascii=False, indent=1),
@@ -167,49 +189,87 @@ def formal_warnings(transcript: dict, episode: dict) -> list[str]:
     return warnings
 
 
-# --- Verdict d'épisode (déterministe) ----------------------------------------------------------------------
+# --- Verdicts (déterministes) -----------------------------------------------------------------------------
+
+def claim_verdict(claim: dict) -> str:
+    """Verdict d'UNE affirmation. Réponse 1.1 : déduit de l'analyse du vérificateur, jamais déclaré par lui ; réponse
+    1.0 (rapport antérieur) : le verdict déclaré."""
+    if "relation" not in claim:
+        return claim.get("verdict", NOT_CHECKED)
+    if claim.get("context_effect") == "reverses":
+        return "contradicted"
+    verdict = RELATION_VERDICTS.get(claim["relation"], NOT_CHECKED)
+    if verdict in HOLDS and (claim.get("asserted_by") != "student" or claim.get("subject_shift")
+                             or claim.get("context_effect") == "limits"):
+        return "not_supported"
+    return verdict
+
+
+def quote_ids(raw: list[str], request: dict) -> list[str]:
+    """Citations Q… : un identifiant de tour renvoyé à la place (réponse réelle fréquente) devient la ou les citations
+    de ce tour ; un identifiant inconnu est gardé, marqué « ? »."""
+    known = {q["quote_id"] for q in request["quotes"]}
+    by_turn: dict[str, list[str]] = {}
+    for q in request["quotes"]:
+        for key in (q["turn_id"], (q["turn_id"] or "").rsplit("_", 1)[-1]):
+            by_turn.setdefault(key, []).append(q["quote_id"])
+    out = []
+    for value in raw or []:
+        out += [value] if value in known else by_turn.get(value, [f"{value}?"])
+    return list(dict.fromkeys(out))
+
 
 def episode_verdict(episode: dict, request: dict, output: dict) -> dict:
-    """Verdict de l'épisode à partir de la réponse du vérificateur. Une affirmation sans verdict compte comme non
-    vérifiée (doubtful), jamais comme soutenue."""
+    """Verdict de l'épisode (voir l'en-tête du module). Une affirmation sans verdict n'est jamais comptée comme
+    établie (doubtful)."""
     by_id = {c["claim_id"]: c for c in output.get("claims", [])}
     types = {m["move_id"]: m for m in output.get("move_types", [])}
     claims = request["claims"]
-    verdict_of = {c["claim_id"]: (by_id.get(c["claim_id"]) or {}).get("verdict", NOT_CHECKED) for c in claims}
+    verdict_of = {c["claim_id"]: claim_verdict(by_id[c["claim_id"]]) if c["claim_id"] in by_id else NOT_CHECKED
+                  for c in claims}
     moves = [c["claim_id"] for c in claims if c["claim_id"].startswith("M")]
     is_episode = episode.get("episode_status") == "accountability_episode"
+    central = (["P"] if is_episode and "P" in verdict_of else []) + moves + ([] if is_episode else ["S"])
+    held = [m for m in moves if verdict_of[m] in HOLDS]
     findings = []
 
     def add(level: str, problem: str, claim_ids=(), reason: str = "") -> None:
-        quote_ids = sorted({q for cid in claim_ids for q in (by_id.get(cid) or {}).get("quote_ids", [])})
-        findings.append({"level": level, "problem": problem, "claim_ids": list(claim_ids), "quote_ids": quote_ids,
-                         "reason": reason or "; ".join((by_id.get(cid) or {}).get("reason", "") for cid in claim_ids)})
+        ids = sorted({q for cid in claim_ids for q in quote_ids((by_id.get(cid) or {}).get("quote_ids", []), request)})
+        reasons = [" — ".join(x for x in ((by_id.get(cid) or {}).get("evidence_proposition"),
+                                         (by_id.get(cid) or {}).get("reason")) if x) for cid in claim_ids]
+        findings.append({"level": level, "problem": problem, "claim_ids": list(claim_ids), "quote_ids": ids,
+                         "reason": reason or " | ".join(r for r in reasons if r)})
 
-    for cid, value in verdict_of.items():
-        if value == "contradicted":
-            add(CONTRADICTED, f"{cid} contredit par les citations", [cid])
-    held = [m for m in moves if verdict_of[m] in HOLDS]
-    if is_episode and moves and not held:
-        add(UNSUPPORTED, "aucune opération soutenue par les citations", [m for m in moves if verdict_of[m] != "contradicted"])
-    if not is_episode and verdict_of.get("S") == "not_supported":
-        add(UNSUPPORTED, "résumé non soutenu par les citations", ["S"])
+    for cid in central:
+        if verdict_of[cid] == "contradicted":
+            add(CONTRADICTED, f"{cid} {CLAIM_LABELS['contradicted']}", [cid])
+    if is_episode and "P" in central and verdict_of["P"] in NOT_ESTABLISHED:
+        add(UNSUPPORTED, f"P (question pratique) {CLAIM_LABELS[verdict_of['P']]}", ["P"])
+    if is_episode and not moves:
+        add(UNSUPPORTED, "épisode d'accountability sans opération", [])
+    elif is_episode and not held and any(verdict_of[m] in NOT_ESTABLISHED for m in moves):
+        add(UNSUPPORTED, "aucune opération établie par les citations",
+            [m for m in moves if verdict_of[m] in NOT_ESTABLISHED])
+    if not is_episode and verdict_of.get("S") in NOT_ESTABLISHED:
+        add(UNSUPPORTED, f"résumé (S) {CLAIM_LABELS[verdict_of['S']]}", ["S"])
     if output.get("third_party_as_student"):
-        add(UNSUPPORTED, "récit sur des tiers présenté comme position de l'enquêté·e", moves,
-            output.get("notes") or "")
+        add(UNSUPPORTED, "récit sur des tiers présenté comme position de l'enquêté·e", moves, output.get("notes") or "")
     if output.get("status_fit") == "too_strong":
         add(UNSUPPORTED, "statut trop fort pour le matériau", moves)
     for cid, value in verdict_of.items():
-        if value == "not_supported" and not (cid.startswith("M") and is_episode and not held) \
-                and not (cid == "S" and not is_episode):
-            add(DOUBTFUL, f"{cid} non soutenu par les citations", [cid])
-        elif value == NOT_CHECKED:
-            add(DOUBTFUL, f"{cid} non vérifié (absent de la réponse)", [cid], "affirmation sans verdict")
+        central_handled = cid in central and (value == "contradicted" or cid == "P" and value in NOT_ESTABLISHED
+                                              or cid == "S" and value in NOT_ESTABLISHED
+                                              or cid in moves and not held and value in NOT_ESTABLISHED)
+        if value not in HOLDS and not central_handled:
+            add(DOUBTFUL, f"{cid} {CLAIM_LABELS.get(value, value)}", [cid],
+                "affirmation sans verdict" if value == NOT_CHECKED else "")
     for mid in moves:
         check = types.get(mid)
         if check is None or not check.get("type_fits_definition"):
             move_type = next(c["move_type"] for c in claims if c["claim_id"] == mid)
-            add(DOUBTFUL, f"{mid} : type « {move_type} » hors définition", [mid],
-                (check or {}).get("reason", "type non vérifié"))
+            detail = " — ".join(x for x in ((check or {}).get("definition_requirement"),
+                                           (check or {}).get("evidence_shows"), (check or {}).get("reason")) if x)
+            add(DOUBTFUL, f"{mid} : type « {move_type} » hors définition", [mid], detail or "type non vérifié")
     if output.get("interviewer_framing_as_student"):
         add(DOUBTFUL, "formulation de l'enquêteur attribuée à l'enquêté·e", [], output.get("notes") or "")
     if output.get("status_fit") == "too_weak":
@@ -218,6 +278,31 @@ def episode_verdict(episode: dict, request: dict, output: dict) -> dict:
     verdict = max((f["level"] for f in findings), key=rank.get, default=SUPPORTED)
     return {"verdict": verdict, "findings": sorted(findings, key=lambda f: -rank[f["level"]]),
             "claim_verdicts": verdict_of}
+
+
+def rescore(document: dict, interview_dirs: list[Path]) -> list[dict]:
+    """Verdicts recalculés, SANS appel, à partir des réponses d'un rapport existant et de l'agrégation actuelle."""
+    by_interview = {r["interview_id"]: r for r in document.get("interviews", [])}
+    results = []
+    for directory in interview_dirs:
+        loaded = read_episodes(directory)
+        old = by_interview.get(loaded[0]["interview_id"]) if loaded else None
+        if old is None:
+            continue
+        planned = {p["episode_id"]: p for p in plan(directory)}
+        episodes = {e["episode_id"]: e for e in loaded[1]["episodes"]}
+        rows = []
+        for row in old["rows"]:
+            item = planned.get(row["episode_id"])
+            if item is None or row.get("checker_output") is None:
+                rows.append({**row, "verdict": NOT_CHECKED, "findings": []})
+                continue
+            rows.append({**row, **episode_verdict(episodes[row["episode_id"]], item["request"], row["checker_output"]),
+                         "quotes": [{k: q[k] for k in ("quote_id", "turn_id", "speaker", "kind")}
+                                    for q in item["request"]["quotes"]]})
+        results.append({**old, "rows": rows, "counts": {v: sum(r["verdict"] == v for r in rows)
+                                                        for v in (*VERDICTS, NOT_CHECKED)}})
+    return results
 
 
 # --- Comparaison avec un audit manuel ---------------------------------------------------------------------

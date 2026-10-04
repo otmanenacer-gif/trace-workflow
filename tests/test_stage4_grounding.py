@@ -8,6 +8,10 @@ Cas réels OTMANE_NACER (extraits de la transcription, comme tests/test_stage3_s
 Ces tests vérifient ce que le vérificateur reçoit (citations brutes, jamais les étiquettes de l'étape 3), le verdict
 déterministe tiré de sa réponse, le mode rapport seulement, le cache et la comparaison avec l'audit manuel. La
 qualité du jugement du modèle réel se mesure par le diagnostic sur un vrai run, pas ici.
+
+Version 1.1 (premier benchmark réel : 3/12) : le vérificateur répond d'abord aux questions de l'analyse (qui l'affirme,
+proposition établie, changement de sujet, effet du contexte), puis donne une relation ; TRACE en DÉDUIT le verdict. Les
+réponses « verdict » (1.0) restent lisibles (`--rescore` d'un rapport antérieur).
 """
 
 import asyncio
@@ -46,8 +50,21 @@ def episode(eid: str, status="accountability_episode", problem=None, summary="",
 
 def output(claims: dict[str, tuple[str, list[str]]], types: dict[str, bool], third_party=False, framing=False,
            status_fit="consistent") -> dict:
+    """Réponse au format 1.0 (verdict déclaré) : celle d'un rapport antérieur, relue par `--rescore`."""
     return {"claims": [{"claim_id": c, "verdict": v, "quote_ids": q, "reason": f"raison {c}"} for c, (v, q) in claims.items()],
             "move_types": [{"move_id": m, "type_fits_definition": ok, "reason": f"type {m}"} for m, ok in types.items()],
+            "third_party_as_student": third_party, "interviewer_framing_as_student": framing,
+            "status_fit": status_fit, "notes": None}
+
+
+def analysed(claims: dict[str, dict], types: dict[str, bool], third_party=False, framing=False,
+             status_fit="consistent") -> dict:
+    """Réponse au format 1.1 : l'analyse de chaque affirmation, sans verdict (TRACE le déduit)."""
+    base = {"asserted_by": "student", "quote_ids": ["Q1"], "evidence_proposition": "proposition établie",
+            "subject_shift": False, "context_effect": "none", "relation": "direct_paraphrase", "reason": "raison"}
+    return {"claims": [{"claim_id": c, **base, **fields} for c, fields in claims.items()],
+            "move_types": [{"move_id": m, "definition_requirement": "exigence", "evidence_shows": "constat",
+                            "type_fits_definition": ok, "reason": f"type {m}"} for m, ok in types.items()],
             "third_party_as_student": third_party, "interviewer_framing_as_student": framing,
             "status_fit": status_fit, "notes": None}
 
@@ -78,8 +95,10 @@ def test_e011_request_shows_only_raw_quotes_and_the_campus_routine_cannot_become
     message = request["message"]
     assert [c["claim_id"] for c in request["claims"]] == ["P", "S", "M1", "B1", "B2", "R"]
     assert "« C'est-à-dire comment est-ce que je travaille ? »" in message and "pour travailler à la bibliothèque" in message
-    assert f"[{t(309)}, enquete]" in message
-    assert f"contexte [{t(308)}, enqueteur, avant {t(309)} — jamais une preuve]" in message
+    assert "[T0309, enquete]" in message  # identifiants de tour abrégés : le modèle cite Q1, Q2…
+    assert "contexte [T0308, enqueteur, avant T0309 — jamais une preuve]" in message
+    shown = json.loads(message.split("<episode>\n", 1)[1].split("\n</episode>", 1)[0])
+    assert next(c for c in shown["claims"] if c["claim_id"] == "M1")["quote_ids"] == ["Q1", "Q2"]
     assert "tour complet de Q2" in message  # citation extraite d'un tour plus long : le tour brut est montré
     # ni l'étiquette de l'étape 3 (« c'est seulement pour mon travail »), ni le tour T0305 (« Google ») non cité
     assert "seulement pour" not in message and "Google." not in message
@@ -90,9 +109,29 @@ def test_e011_request_shows_only_raw_quotes_and_the_campus_routine_cannot_become
                      "R": ("supported", ["Q1"])}, {"M1": False}, status_fit="too_strong")
     verdict = g.episode_verdict(E011, request, judged)
     assert verdict["verdict"] == g.UNSUPPORTED
-    top = verdict["findings"][0]
-    assert top["problem"] == "aucune opération soutenue par les citations" and top["claim_ids"] == ["M1"]
-    assert top["quote_ids"] == ["Q2"]
+    problems = {f["problem"]: f for f in verdict["findings"]}
+    assert problems["aucune opération établie par les citations"]["quote_ids"] == ["Q2"]
+    assert "P (question pratique) non établi par les citations" in problems
+
+
+def test_e011_question_not_established_is_enough_for_unsupported_even_if_the_model_accepts_the_move():
+    """Benchmark réel 1.0 : P, B1, B2 non soutenus mais M1 « soutenu » → seulement doubtful. P est centrale."""
+    request = g.checker_request(E011_TRANSCRIPT, E011)
+    real = output({"P": ("not_supported", []), "S": ("supported", [t(309)]), "M1": ("supported", [t(307), t(309)]),
+                   "B1": ("not_supported", []), "B2": ("not_supported", []), "R": ("supported", [t(309)])},
+                  {"M1": True})
+    verdict = g.episode_verdict(E011, request, real)
+    assert verdict["verdict"] == g.UNSUPPORTED
+    assert verdict["findings"][0]["problem"] == "P (question pratique) non établi par les citations"
+    assert [f["level"] for f in verdict["findings"][1:]] == [g.DOUBTFUL, g.DOUBTFUL]  # B1, B2 : secondaires
+    # 1.1 : la proposition établie ne parle ni d'outil ni de limite → relation « different » → aucune opération
+    v11 = analysed({"P": {"relation": "different"}, "S": {"relation": "stronger_than_evidence"},
+                    "M1": {"relation": "different", "quote_ids": ["Q1", "Q2"],
+                           "evidence_proposition": "L'étudiant décrit sa semaine : campus, cours, bibliothèque."},
+                    "B1": {"relation": "different"}, "B2": {"relation": "different"}, "R": {}}, {"M1": False})
+    problems = [f["problem"] for f in g.episode_verdict(E011, request, v11)["findings"]]
+    assert problems[:2] == ["P (question pratique) non établi par les citations",
+                            "aucune opération établie par les citations"]
     assert g.formal_warnings(E011_TRANSCRIPT, E011) == ["BOUNDARY_NOT_A_PAIR"]
 
 
@@ -120,7 +159,7 @@ E005 = episode("E005", problem="L'étudiant limite l'usage de Lia à des situati
 
 def test_e005_a_story_about_other_students_cannot_by_itself_prove_a_personal_restriction():
     request = g.checker_request(E005_TRANSCRIPT, E005)
-    assert f"[{t(351)}, enqueteur]" in request["message"]  # le locuteur brut de chaque citation est montré
+    assert "[T0351, enqueteur]" in request["message"]  # le locuteur brut de chaque citation est montré
     judged = output({"P": ("not_supported", []), "S": ("not_supported", []), "M1": ("not_supported", ["Q1", "Q3"])},
                     {"M1": False}, third_party=True, status_fit="too_strong")
     verdict = g.episode_verdict(E005, request, judged)
@@ -129,6 +168,61 @@ def test_e005_a_story_about_other_students_cannot_by_itself_prove_a_personal_res
     assert "récit sur des tiers présenté comme position de l'enquêté·e" in problems
     assert "MOVE_CITES_INTERVIEWER_TURN M1" in g.formal_warnings(E005_TRANSCRIPT, E005)
     assert {"PROBLEM_NOT_A_QUESTION", "PROBLEM_EQUALS_SUMMARY"} <= set(g.formal_warnings(E005_TRANSCRIPT, E005))
+
+
+def test_e005_a_subject_shift_cannot_be_declared_supported_by_the_model():
+    """Benchmark réel 1.0 : P, S, M1 « supported », third_party false. En 1.1, même si le modèle juge la relation
+    favorable, « des élèves ont été sanctionnés » → « l'étudiant se limite » est un changement de sujet, énoncé par
+    des tiers : TRACE en déduit not_supported."""
+    request = g.checker_request(E005_TRANSCRIPT, E005)
+    third = {"asserted_by": "third_party", "subject_shift": True, "relation": "direct_paraphrase",
+             "evidence_proposition": "Des élèves ont utilisé l'IA, le professeur les a repérés, certains n'ont pas eu "
+                                     "les crédits."}
+    judged = analysed({"P": third, "S": third, "M1": third}, {"M1": False})  # third_party_as_student oublié
+    verdict = g.episode_verdict(E005, request, judged)
+    assert verdict["verdict"] == g.UNSUPPORTED
+    assert verdict["claim_verdicts"] == {"P": "not_supported", "S": "not_supported", "M1": "not_supported"}
+
+
+def test_e006_a_claim_carried_by_the_interviewer_is_never_established():
+    turns = transcript({152: ("enqueteur", "Tu peux créer des idées nouvelles ?"),
+                        153: ("enquete", "Pas forcément des bonnes idées mais oui je pense."),
+                        154: ("enqueteur", "D'accord. Donc tu estimes que ta capacité n'a pas ?"),
+                        155: ("enquete", "Oui comme tous les êtres humains.")})
+    ep = episode("E006", problem="L'étudiant évalue les risques associés à l'utilisation de Lia.",
+                 summary="L'étudiant évalue les risques associés à l'utilisation de Lia.",
+                 moves=[("restriction", "L'étudiant évalue les risques associés à l'utilisation de Lia.",
+                         (152, 153, 154, 155))],
+                 evidence=[(152, "Tu peux créer des idées nouvelles ?"), (155, "Oui comme tous les êtres humains.")])
+    request = g.checker_request(turns, ep)
+    judged = analysed({"P": {"relation": "stronger_than_evidence"}, "S": {"relation": "stronger_than_evidence"},
+                       "M1": {"asserted_by": "interviewer", "relation": "immediate_inference"}}, {"M1": False},
+                      framing=True)
+    verdict = g.episode_verdict(ep, request, judged)
+    assert verdict["verdict"] == g.UNSUPPORTED and verdict["claim_verdicts"]["M1"] == "not_supported"
+    assert "MOVE_CITES_INTERVIEWER_TURN M1" in g.formal_warnings(turns, ep)
+
+
+T0242 = ("D'accord. OK. Euh est-ce que des fois il y a des choses que tu demandes à répéter que tu demanderais pas à "
+         "tes amis ou au prof ?")
+E009_TRANSCRIPT = transcript({242: ("enqueteur", T0242),
+                              243: ("enquete", "Euh ben je demanderais pas à un prof de faire un travail à ma – à ma place."),
+                              244: ("enqueteur", "Ouais."), 245: ("enquete", "Ni à des amis d'ailleurs.")})
+E009 = episode("E009", status="ordinary_practice",
+               summary="L'étudiant ne demande pas à ChatGPT de lui faire des devoirs à sa place.",
+               evidence=[(243, "Euh ben je demanderais pas à un prof de faire un travail à ma – à ma place."),
+                         (245, "Ni à des amis d'ailleurs.")])
+
+
+def test_e009_the_preceding_question_is_shown_and_a_reversed_or_ambiguous_reading_is_never_supported():
+    request = g.checker_request(E009_TRANSCRIPT, E009)
+    assert f"contexte [T0242, enqueteur, avant T0243 — jamais une preuve] « {T0242} »" in request["message"]
+    reversed_ = analysed({"S": {"context_effect": "reverses", "relation": "direct_paraphrase"}}, {})
+    assert g.episode_verdict(E009, request, reversed_)["verdict"] == g.CONTRADICTED  # le résumé est central ici
+    ambiguous = analysed({"S": {"relation": "ambiguous"}}, {})
+    verdict = g.episode_verdict(E009, request, ambiguous)
+    assert verdict["verdict"] == g.UNSUPPORTED
+    assert verdict["findings"][0]["problem"] == "résumé (S) ambigu (plusieurs lectures)"
 
 
 # --- E003 réel ---------------------------------------------------------------------------------------------------
@@ -179,7 +273,7 @@ def test_e001_the_full_turn_shows_that_the_student_rejects_the_interviewer_sugge
     request = g.checker_request(E001_TRANSCRIPT, E001)
     message = request["message"]
     assert "tour complet de Q1 : « Soit pas pour les maths, pas forcément que je suis à la dernière minute." in message
-    assert f"contexte [{t(42)}, enqueteur, avant {t(43)} — jamais une preuve]" in message
+    assert "contexte [T0042, enqueteur, avant T0043 — jamais une preuve]" in message
     judged = output({"S": ("contradicted", ["Q1"]), "M1": ("contradicted", ["Q1"])}, {"M1": False}, framing=True)
     verdict = g.episode_verdict(E001, request, judged)
     assert verdict["verdict"] == g.CONTRADICTED
@@ -231,8 +325,8 @@ def test_comparison_with_the_manual_audit():
 def all_supported(params: dict) -> object:
     content = params["messages"][0]["content"]
     shown = json.loads(content.split("<episode>\n", 1)[1].split("\n</episode>", 1)[0])
-    claims = {c["claim_id"]: ("supported", ["Q1"]) for c in shown["claims"]}
-    return text_response(output(claims, {c: True for c in claims if c.startswith("M")}))
+    claims = {c["claim_id"]: {} for c in shown["claims"]}
+    return text_response(analysed(claims, {c: True for c in claims if c.startswith("M")}))
 
 
 def stage4_run(tmp_path, monkeypatch) -> dict:
@@ -286,3 +380,58 @@ def test_a_checker_failure_leaves_the_episode_not_checked(tmp_path, monkeypatch)
     result = asyncio.run(g.check_interview(Path(run["files"][0]["ingestion"]["output_dir"]), runner,
                                            lp.runtime_settings()))
     assert result["counts"]["not_checked"] == 6 and all(r["error"] for r in result["rows"])
+
+
+# --- Version 1.1 : verdict déduit, citations normalisées, schéma, prompt, recalcul sans appel ---------------------
+
+def test_claim_verdict_is_derived_from_the_analysis_never_declared():
+    base = {"asserted_by": "student", "subject_shift": False, "context_effect": "none"}
+    derive = lambda **f: g.claim_verdict({**base, **f})  # noqa: E731
+    assert derive(relation="equivalent") == derive(relation="direct_paraphrase") == "supported"
+    assert derive(relation="immediate_inference") == "inferred"
+    assert derive(relation="stronger_than_evidence") == derive(relation="different") == "not_supported"
+    assert derive(relation="ambiguous") == "ambiguous" and derive(relation="contradicted") == "contradicted"
+    for asserter in ("interviewer", "third_party", "previous_agent"):
+        assert derive(relation="equivalent", asserted_by=asserter) == "not_supported"
+    assert derive(relation="equivalent", subject_shift=True) == "not_supported"
+    assert derive(relation="equivalent", context_effect="limits") == "not_supported"
+    assert derive(relation="equivalent", context_effect="reverses") == "contradicted"
+    assert g.claim_verdict({"verdict": "supported"}) == "supported"  # rapport 1.0 relu
+    from agents.episode_grounding_checker import SPEC
+    order = list(SPEC.output_schema["$defs"]["ClaimCheck"]["properties"])
+    assert "verdict" not in order and order.index("evidence_proposition") < order.index("relation")
+    assert order.index("subject_shift") < order.index("relation") and order.index("context_effect") < order.index("relation")
+
+
+def test_turn_ids_returned_instead_of_quote_ids_are_mapped_back():
+    request = g.checker_request(E005_TRANSCRIPT, E005)
+    assert g.quote_ids([t(350), "T0354", "Q3", "T9999"], request) == ["Q1", "Q3", "T9999?"]
+
+
+def test_prompt_asks_the_six_questions_and_the_prudence_rule():
+    from agents.episode_grounding_checker import SPEC
+    prompt = SPEC.system_prompt
+    for expected in ("**Qui l'affirme ?**", "**Quelle proposition exacte", "**Changement de sujet ?**",
+                     "**Le contexte change-t-il le sens ?**", "**Relation**", "`definition_requirement`",
+                     "**Règle de prudence.**", "`ambiguous`", "sans recopier l'affirmation"):
+        assert expected in prompt
+
+
+def test_rescore_recomputes_an_existing_report_without_any_call(tmp_path, monkeypatch, capsys):
+    run = stage4_run(tmp_path, monkeypatch)
+    use_fake_runtime(monkeypatch, {GROUNDING: all_supported})
+    assert stage4_blocks_report.main(["grounding", run["output_dir"]]) == 0
+    path = lp.stage_dir(run, "4") / g.REPORT_FILENAME
+    report = json.loads(path.read_text(encoding="utf-8"))
+    row = report["interviews"][0]["rows"][0]  # réponse ancienne (1.0) : « P » déclaré non soutenu
+    row["checker_output"] = output({c: ("not_supported" if c == "P" else "supported", []) for c in
+                                    [x["claim_id"] for x in row["checker_output"]["claims"]]},
+                                   {m["move_id"]: True for m in row["checker_output"]["move_types"]})
+    path.write_text(json.dumps(report, ensure_ascii=False), encoding="utf-8")
+    before = path.read_bytes()
+    ollama = use_fake_runtime(monkeypatch, {})
+    assert stage4_blocks_report.main(["grounding", run["output_dir"], "--rescore",
+                                      "--false", row["episode_id"].rsplit("_", 1)[-1]]) == 0
+    out = capsys.readouterr().out
+    assert ollama.calls == [] and path.read_bytes() == before  # aucun appel, rapport non réécrit
+    assert "1/1 en accord" in out
