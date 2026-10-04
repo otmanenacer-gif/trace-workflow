@@ -14,6 +14,8 @@
     python scripts/trace_local.py status RUN                       # état du run
     python scripts/trace_local.py stage7 RUN                       # étape 7 : théorisation transversale du corpus à partir
                                                                    # de <run>/stage6/stage6_corpus.json -> <run>/stage7/
+    python scripts/trace_local.py stage8 RUN                       # étape 8 : BROUILLON du rapport corpus (étapes 6 et 7)
+                                                                   # -> <run>/stage8/stage8_report_draft.json et .md
     python scripts/trace_local.py report RUN [--verify E005,E009]  # rapport individuel expérimental (Markdown + JSON) à partir
                                                                    # des sorties validées, SANS aucun appel au modèle ;
                                                                    # --verify : épisodes « interprétation à vérifier »
@@ -249,6 +251,18 @@ def cmd_stage7(args) -> int:
     return EXIT_CODES[document["status"]]
 
 
+def cmd_stage8(args) -> int:
+    from core import stage8_report
+    metadata = load_metadata(resolve_run(args.run))
+    draft = stage8_report.run(metadata, log=lambda line: print(line, flush=True))
+    for line in stage8_report.summary_lines(draft):
+        print(line)
+    json_path, md_path = stage8_report.paths(metadata)
+    print(f"Brouillon : {lp.display_path(md_path)}")
+    print(f"Provenance : {lp.display_path(json_path)}")
+    return EXIT_CODES[draft["status"]]
+
+
 def cmd_report(args) -> int:
     from core import final_report
     result = final_report.generate(load_metadata(resolve_run(args.run)), args.verify)
@@ -399,6 +413,9 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("stage7", help="étape 7 : théorisation transversale du corpus (à partir de l'étape 6 du run)")
     p.add_argument("run")
     p.set_defaults(func=cmd_stage7)
+    p = sub.add_parser("stage8", help="étape 8 : brouillon du rapport corpus (à partir des étapes 6 et 7 du run)")
+    p.add_argument("run")
+    p.set_defaults(func=cmd_stage8)
     p = sub.add_parser("report", help="rapport individuel expérimental à partir des sorties validées (aucun appel)")
     p.add_argument("run")
     p.add_argument("--verify", help="épisodes dont l'interprétation est à vérifier (ex. E005,E006,E009,E011) ; "

@@ -30,5 +30,8 @@ servi par Ollama (voir `docs/local_runtime.md`).
 - Étape 7 : théorisation transversale (`core/stage7_theory.py`, agents `agents/theory_builder.py`) à partir de
   `<run>/stage6/stage6_corpus.json` — blocs thématiques puis une synthèse, preuves reconstituées par TRACE, cache et
   reprise ; `trace_local.py stage7 RUN` → `<run>/stage7/stage7_theory.json`.
+- Étape 8 : brouillon du rapport corpus (`core/stage8_report.py`, agent `agents/report_writer.py`) — sections
+  factuelles déterministes, une section analytique par appel, provenance par paragraphe `P8-…`, citations insérées par
+  TRACE ; `trace_local.py stage8 RUN` → `<run>/stage8/stage8_report_draft.json` et `.md`.
 - Rapport individuel expérimental (`core/final_report.py`, déterministe, Markdown + JSON dans `<run>/final_report/`) :
-  `trace_local.py report RUN`, Streamlit « Générer le rapport final ». Pas d'étape 8 ou au-delà sans demande explicite.
+  `trace_local.py report RUN`, Streamlit « Générer le rapport final ». Pas d'étape 9 ou au-delà sans demande explicite.

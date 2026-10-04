@@ -536,6 +536,25 @@ reprise : un bloc terminé n'est jamais rejoué, un bloc en échec seul. Sortie 
 tensions, cas négatifs, critères et frontières, à revoir, limites, index des preuves). Structure destinée à l'étape 8 :
 ce n'est pas encore un rapport.
 
+## Étape 8 — brouillon du rapport corpus
+
+```
+python scripts/trace_local.py stage8 <run_id>
+```
+
+À partir de `<run>/stage7/stage7_theory.json` (COMPLETE ; absent ou bloqué → `BLOCKED`) et de l'étape 6, jamais des
+transcriptions. Plan déterministe (propositions de l'étape 7 réparties par type et niveau) ; sections factuelles écrites
+par TRACE sans appel (titre et statut expérimental, résumé exécutif, corpus et couverture, méthodologie, limites,
+annexe de traçabilité) ; quatre sections analytiques (résultats ; variations et tensions ; discussion ; conclusion),
+un appel du *Report Section Writer* chacune, en cache, enregistrée dès sa validation, seule une section en échec
+rejouée. Chaque paragraphe (`P8-001`…) cite les propositions `TH…` dont il dérive ; entretiens, affirmations de
+l'étape 6, épisodes et contre-exemples sont reconstitués par TRACE ; les citations verbatim sont insérées par TRACE
+depuis l'étape 4 (revérifiées sur la transcription ; introuvable → supprimée, jamais reconstruite) ; un passage
+entre guillemets écrit par le modèle et absent des citations exactes est retiré ; un paragraphe sans proposition
+identifiable est rejeté ; une hypothèse individuelle est étiquetée comme telle. Sorties :
+`<run>/stage8/stage8_report_draft.json` (provenance complète) et `stage8_report_draft.md` — **brouillon non validé**
+(étape 9).
+
 ## Rapport individuel expérimental
 
 À partir des sorties **déjà validées** des étapes 3 à 5 (aucun recalcul, **aucun appel au modèle**), TRACE assemble un
