@@ -34,6 +34,8 @@ ACCOUNTABILITY = "accountability_episode_builder"  # étape 4 : épisodes d'acco
 TRAJECTORY = "trajectory_mapper"  # étape 5 : configuration et trajectoire intra-entretien
 COMPARATOR = "cross_interview_comparator"  # étape 6 : comparaison inter-entretiens
 GROUNDING = "episode_grounding_checker"  # étape 4 (diagnostic) : fondement des épisodes dans leurs citations
+THEORY_BLOCK = "theory_block_analyst"  # étape 7 : propositions théoriques d'un bloc thématique
+THEORY_SYNTHESIS = "theory_synthesizer"  # étape 7 : synthèse théorique finale
 
 REPAIR = "repair:"  # préfixe des réparations ciblées de l'étape 3 : "repair:practice_extractor", …
 
@@ -70,6 +72,10 @@ def agent_of(params: dict) -> str:
         return AUDITOR
     if "move_types" in properties:
         return GROUNDING
+    if "propositions" in properties:
+        return THEORY_BLOCK
+    if "theory_claims" in properties:
+        return THEORY_SYNTHESIS
     if "cross_case_claims" in properties:
         return COMPARATOR
     if "student_role_criteria" in properties:

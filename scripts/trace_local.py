@@ -12,7 +12,9 @@
     python scripts/trace_local.py stage6 SOURCE [SOURCE ...]       # étape 6 sur les sorties de l'étape 5 (runs,
                                                                    # dossiers de JSON ou fichiers JSON)
     python scripts/trace_local.py status RUN                       # état du run
-    python scripts/trace_local.py report RUN [--verify E005,E009]  # étape 7 : rapport final (Markdown + JSON) à partir
+    python scripts/trace_local.py stage7 RUN                       # étape 7 : théorisation transversale du corpus à partir
+                                                                   # de <run>/stage6/stage6_corpus.json -> <run>/stage7/
+    python scripts/trace_local.py report RUN [--verify E005,E009]  # rapport individuel expérimental (Markdown + JSON) à partir
                                                                    # des sorties validées, SANS aucun appel au modèle ;
                                                                    # --verify : épisodes « interprétation à vérifier »
     python scripts/trace_local.py refilter RUN [--interview ID]    # réapplique la sélectivité de l'étape 3 aux réponses
@@ -237,12 +239,22 @@ def cmd_batch(args) -> int:
     return 5 if manifest["counts"].get(batch.FAILED) else 0
 
 
+def cmd_stage7(args) -> int:
+    from core import stage7_theory
+    metadata = load_metadata(resolve_run(args.run))
+    document = stage7_theory.run(metadata, log=lambda line: print(line, flush=True))
+    for line in stage7_theory.summary_lines(document):
+        print(line)
+    print(f"Sortie : {lp.display_path(stage7_theory.out_path(metadata))}")
+    return EXIT_CODES[document["status"]]
+
+
 def cmd_report(args) -> int:
     from core import final_report
     result = final_report.generate(load_metadata(resolve_run(args.run)), args.verify)
     report = result["report"]
-    print(f"Run {report['run_id']} — étape 7, rapport final ({report['status']}, {report['interview_count']} entretien(s), "
-          "aucun appel au modèle)")
+    print(f"Run {report['run_id']} — rapport individuel expérimental ({report['status']}, {report['interview_count']} "
+          "entretien(s), aucun appel au modèle)")
     print(f"Étape 6 : {report['stage6']['status']}" + (f" — {report['stage6']['reason']}" if report["stage6"]["reason"]
                                                          else ""))
     if report["interpretations_to_verify"]:
@@ -384,7 +396,10 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("status", help="état du run")
     p.add_argument("run")
     p.set_defaults(func=cmd_status)
-    p = sub.add_parser("report", help="étape 7 : rapport final à partir des sorties validées (aucun appel)")
+    p = sub.add_parser("stage7", help="étape 7 : théorisation transversale du corpus (à partir de l'étape 6 du run)")
+    p.add_argument("run")
+    p.set_defaults(func=cmd_stage7)
+    p = sub.add_parser("report", help="rapport individuel expérimental à partir des sorties validées (aucun appel)")
     p.add_argument("run")
     p.add_argument("--verify", help="épisodes dont l'interprétation est à vérifier (ex. E005,E006,E009,E011) ; "
                                     "par défaut, la liste de la génération précédente")

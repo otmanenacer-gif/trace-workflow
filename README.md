@@ -516,7 +516,27 @@ régularités, variations, tensions, cas négatifs et exceptions, différences d
 ses entretiens, ses `trajectory_claim_id` et son bloc), configurations et critères récurrents comptés dans les sorties
 de l'étape 5 (au moins deux entretiens), `needs_review`, limites. Sortie : `<run>/stage6/stage6_corpus.json`.
 
-## Étape 7 — rapport final
+## Étape 7 — théorisation transversale du corpus
+
+```
+python scripts/trace_local.py stage7 <run_id>
+```
+
+À partir de `<run>/stage6/stage6_corpus.json` (COMPLETE ; sinon `BLOCKED`, ou `NOT_APPLICABLE_SINGLE_INTERVIEW`),
+jamais des transcriptions : (A) blocs thématiques suivant les catégories de l'étape 6 (régularités + configurations,
+variations + trajectoires, tensions, cas négatifs + exceptions, critères + frontières ; au plus 20 éléments par appel,
+aucun appel pour un bloc vide) — l'agent *Theory Block Analyst* propose des catégories et des propositions prudentes qui
+citent les éléments reçus ; (B) UN appel de synthèse (*Theory Synthesizer*) sur les seules propositions des blocs :
+fusion des doublons, relations entre catégories, hiérarchie. Les preuves (`supporting_interview_ids`,
+`supporting_cross_claim_ids`, `supporting_trajectory_claim_ids`, épisodes représentatifs, contre-exemples) sont
+reconstituées par TRACE à partir des éléments cités ; une proposition sans élément identifiable est rejetée ; appuyée
+par moins de deux entretiens, elle est une hypothèse / un cas individuel, jamais une régularité du corpus. Cache et
+reprise : un bloc terminé n'est jamais rejoué, un bloc en échec seul. Sortie : `<run>/stage7/stage7_theory.json`
+(couverture du corpus, catégories, propositions `theory_claim_id`, relations, régularités structurantes, variations,
+tensions, cas négatifs, critères et frontières, à revoir, limites, index des preuves). Structure destinée à l'étape 8 :
+ce n'est pas encore un rapport.
+
+## Rapport individuel expérimental
 
 À partir des sorties **déjà validées** des étapes 3 à 5 (aucun recalcul, **aucun appel au modèle**), TRACE assemble un
 rapport par run : résumé exécutif, configuration et trajectoires (étape 5), principaux épisodes d'accountability
@@ -530,7 +550,7 @@ qualitativement »). Une relecture humaine peut signaler des épisodes dont l'in
 la mention visible « interprétation à vérifier », sans modification de leur contenu (liste conservée dans
 `final_report/review_flags.json` et reprise à chaque régénération).
 
-- Streamlit : section « Étape 7 — Rapport final », champ « Épisodes dont l'interprétation est à vérifier », bouton
+- Streamlit : section « Rapport individuel expérimental », champ « Épisodes dont l'interprétation est à vérifier », bouton
   **Générer le rapport final** (aperçu et téléchargements) ;
 - CLI : `python scripts/trace_local.py report RUN [--verify E005,E006,E009,E011]`.
 

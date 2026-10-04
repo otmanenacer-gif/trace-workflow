@@ -1013,7 +1013,7 @@ def render_stage6_corpus(prepared) -> None:
         st.caption(note)
     if checked["mode"] == cross_interview_corpus.MODE_BLOCKED and checked["n_usable"] == 1:
         st.info(f"Étape 6 : **{local_pipeline.STAGE_NOT_APPLICABLE}** — {final_report.STAGE6_NOT_APPLICABLE_REASON} "
-                "Aucune comparaison n'est produite, aucun appel au modèle. Le rapport final (étape 7) le signale.")
+                "Aucune comparaison n'est produite, aucun appel au modèle. Le rapport individuel le signale.")
     elif checked["mode"] == cross_interview_corpus.MODE_BLOCKED:
         st.error("Étape 6 bloquée : moins de deux entretiens exploitables. Importez au moins deux triplets valides.")
     elif checked["mode"] == cross_interview_corpus.MODE_EXPLORATORY:
@@ -1176,7 +1176,7 @@ def finish_stage6_job() -> None:
 
 
 def render_stage7_section(run: dict) -> None:
-    st.header("Étape 7 — Rapport final")
+    st.header("Rapport individuel expérimental")
     st.caption(final_report.TITLE)
     st.markdown(
         "Assemble les sorties **déjà validées** des étapes 3 à 5 (aucun recalcul, **aucun appel au modèle**) : résumé "
@@ -1461,7 +1461,7 @@ if run:
     render_stage4_section(st.session_state.get("last_run") or run)
     # 10. Étape 5 — configuration et trajectoire intra-entretien (jamais automatique, après l'étape 4)
     render_stage5_section(st.session_state.get("last_run") or run)
-    # 10 bis. Étape 7 — rapport final (déterministe, aucun appel ; à partir des sorties validées)
+    # 10 bis. Rapport individuel expérimental (déterministe, aucun appel ; à partir des sorties validées)
     render_stage7_section(st.session_state.get("last_run") or run)
 else:
     st.info("Aucun run lancé pendant cette session.")

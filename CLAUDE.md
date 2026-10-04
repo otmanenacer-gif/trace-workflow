@@ -27,6 +27,8 @@ servi par Ollama (voir `docs/local_runtime.md`).
   blocs d'au plus 6 entretiens (étape 6 habituelle par bloc, cache et reprise), fusion déterministe dans
   `<run>/stage6/stage6_corpus.json`.
 - Étape 6 avec un seul entretien exploitable : `NOT_APPLICABLE_SINGLE_INTERVIEW`, aucune comparaison, aucun appel.
-- Étape 7 : rapport final DÉTERMINISTE (`core/final_report.py`, Markdown + JSON dans `<run>/final_report/`), assemblé à
-  partir des sorties validées des étapes 3 à 5, sans aucun appel au modèle ; Streamlit « Générer le rapport final »,
-  CLI `trace_local.py report RUN`. Pas d'étape 8 ou au-delà sans demande explicite.
+- Étape 7 : théorisation transversale (`core/stage7_theory.py`, agents `agents/theory_builder.py`) à partir de
+  `<run>/stage6/stage6_corpus.json` — blocs thématiques puis une synthèse, preuves reconstituées par TRACE, cache et
+  reprise ; `trace_local.py stage7 RUN` → `<run>/stage7/stage7_theory.json`.
+- Rapport individuel expérimental (`core/final_report.py`, déterministe, Markdown + JSON dans `<run>/final_report/`) :
+  `trace_local.py report RUN`, Streamlit « Générer le rapport final ». Pas d'étape 8 ou au-delà sans demande explicite.

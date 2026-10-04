@@ -93,7 +93,7 @@ def test_streamlit_button_generates_the_final_report(tmp_path, monkeypatch):
     at = AppTest.from_file(APP, default_timeout=30)
     at.session_state["last_run"] = run
     at.run()
-    assert not at.exception and "Étape 7 — Rapport final" in [h.value for h in at.header]
+    assert not at.exception and "Rapport individuel expérimental" in [h.value for h in at.header]
     at.button(key="final_report_generate").click().run()
     assert not at.exception
     assert "Rapport final généré (aucun appel au modèle)." in [s.value for s in at.success]

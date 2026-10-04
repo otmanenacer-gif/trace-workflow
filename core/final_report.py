@@ -1,4 +1,6 @@
-"""Étape 7 — rapport final (minimal), DÉTERMINISTE : aucun appel au modèle, aucun recalcul.
+"""Rapport individuel expérimental (anciennement présenté comme « étape 7 — rapport final »), DÉTERMINISTE :
+aucun appel au modèle, aucun recalcul. L'étape 7 du pipeline corpus est la théorisation transversale
+(core/stage7_theory.py).
 
 Assemble, pour chaque entretien d'un run, les sorties déjà VALIDÉES des étapes 3 à 5 :
 

@@ -267,7 +267,7 @@ OUTPUT_RESERVE = {"speaker_attribution_auditor": 2048, "practice_extractor": 819
                   "interaction_signal_reader": 6144, "interaction_signal_reader_long_distance": 3072,
                   "accountability_episode_builder": 6144, "episode_grounding_checker": 3072,
                   "trajectory_mapper": 8192,
-                  "cross_interview_comparator": 8192}
+                  "cross_interview_comparator": 8192, "theory_block_analyst": 4096, "theory_synthesizer": 6144}
 DEFAULT_OUTPUT_RESERVE = 4096
 
 
