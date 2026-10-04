@@ -33,5 +33,8 @@ servi par Ollama (voir `docs/local_runtime.md`).
 - Étape 8 : brouillon du rapport corpus (`core/stage8_report.py`, agent `agents/report_writer.py`) — sections
   factuelles déterministes, une section analytique par appel, provenance par paragraphe `P8-…`, citations insérées par
   TRACE ; `trace_local.py stage8 RUN` → `<run>/stage8/stage8_report_draft.json` et `.md`.
+- Étape 9 : validation du brouillon (`core/stage9_validation.py`, agent `agents/report_validator.py`) — contrôles
+  déterministes puis vérification sémantique légère par groupes, corrections déterministes ou exclusion, jamais de
+  régénération ; `trace_local.py stage9 RUN` → `<run>/stage9/`.
 - Rapport individuel expérimental (`core/final_report.py`, déterministe, Markdown + JSON dans `<run>/final_report/`) :
-  `trace_local.py report RUN`, Streamlit « Générer le rapport final ». Pas d'étape 9 ou au-delà sans demande explicite.
+  `trace_local.py report RUN`, Streamlit « Générer le rapport final ». Pas d'étape 10 ou au-delà sans demande explicite.

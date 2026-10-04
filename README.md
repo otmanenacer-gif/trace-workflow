@@ -555,6 +555,23 @@ identifiable est rejeté ; une hypothèse individuelle est étiquetée comme tel
 `<run>/stage8/stage8_report_draft.json` (provenance complète) et `stage8_report_draft.md` — **brouillon non validé**
 (étape 9).
 
+## Étape 9 — validation du rapport
+
+```
+python scripts/trace_local.py stage9 <run_id>
+```
+
+Vérifie le brouillon de l'étape 8 paragraphe par paragraphe (`PASS` / `WARN` / `FAIL`), sans refaire l'analyse :
+contrôles déterministes (identifiants `TH…`, entretiens, affirmations de l'étape 6, épisodes ; citations revérifiées
+sur l'étape 4 et la transcription — épisode, entretien, tour, locuteur, texte exact ; généralisation selon la portée
+et le nombre d'entretiens ; contre-exemples connus ; provenance ; avertissements en amont, jamais FAIL à eux seuls),
+puis vérification sémantique légère (*Report Validator*, un appel par groupe d'au plus 8 paragraphes, jamais les
+transcriptions ; modèle indisponible → contrôles déterministes seuls). `FAIL` : correction déterministe quand c'est
+possible (citation retirée, marqueur d'hypothèse individuelle, prudence, périmètre, contre-exemple connu), sinon
+paragraphe exclu — aucune régénération. Sorties `<run>/stage9/stage9_validation.json`,
+`stage9_validated_report.json` (`validated: true`) et `stage9_validated_report.md`. Statut : COMPLETE,
+SUCCESS_WITH_WARNINGS (livrable) ou BLOCKED (étape 8 absente ou inutilisable).
+
 ## Rapport individuel expérimental
 
 À partir des sorties **déjà validées** des étapes 3 à 5 (aucun recalcul, **aucun appel au modèle**), TRACE assemble un

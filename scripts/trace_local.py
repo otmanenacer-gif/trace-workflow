@@ -16,6 +16,8 @@
                                                                    # de <run>/stage6/stage6_corpus.json -> <run>/stage7/
     python scripts/trace_local.py stage8 RUN                       # étape 8 : BROUILLON du rapport corpus (étapes 6 et 7)
                                                                    # -> <run>/stage8/stage8_report_draft.json et .md
+    python scripts/trace_local.py stage9 RUN                       # étape 9 : validation du brouillon (PASS / WARN / FAIL)
+                                                                   # -> <run>/stage9/ (validation, rapport validé .json/.md)
     python scripts/trace_local.py report RUN [--verify E005,E009]  # rapport individuel expérimental (Markdown + JSON) à partir
                                                                    # des sorties validées, SANS aucun appel au modèle ;
                                                                    # --verify : épisodes « interprétation à vérifier »
@@ -263,6 +265,19 @@ def cmd_stage8(args) -> int:
     return EXIT_CODES[draft["status"]]
 
 
+def cmd_stage9(args) -> int:
+    from core import stage9_validation
+    metadata = load_metadata(resolve_run(args.run))
+    validation = stage9_validation.run(metadata, log=lambda line: print(line, flush=True))
+    for line in stage9_validation.summary_lines(validation):
+        print(line)
+    out = stage9_validation.paths(metadata)
+    print(f"Validation : {lp.display_path(out['validation'])}")
+    if validation["status"] != stage9_validation.BLOCKED:
+        print(f"Rapport validé : {lp.display_path(out['md'])}")
+    return EXIT_CODES["BLOCKED"] if validation["status"] == stage9_validation.BLOCKED else 0
+
+
 def cmd_report(args) -> int:
     from core import final_report
     result = final_report.generate(load_metadata(resolve_run(args.run)), args.verify)
@@ -416,6 +431,9 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("stage8", help="étape 8 : brouillon du rapport corpus (à partir des étapes 6 et 7 du run)")
     p.add_argument("run")
     p.set_defaults(func=cmd_stage8)
+    p = sub.add_parser("stage9", help="étape 9 : validation du brouillon du rapport corpus (PASS / WARN / FAIL)")
+    p.add_argument("run")
+    p.set_defaults(func=cmd_stage9)
     p = sub.add_parser("report", help="rapport individuel expérimental à partir des sorties validées (aucun appel)")
     p.add_argument("run")
     p.add_argument("--verify", help="épisodes dont l'interprétation est à vérifier (ex. E005,E006,E009,E011) ; "

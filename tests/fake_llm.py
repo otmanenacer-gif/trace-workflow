@@ -37,6 +37,7 @@ GROUNDING = "episode_grounding_checker"  # étape 4 (diagnostic) : fondement des
 THEORY_BLOCK = "theory_block_analyst"  # étape 7 : propositions théoriques d'un bloc thématique
 THEORY_SYNTHESIS = "theory_synthesizer"  # étape 7 : synthèse théorique finale
 REPORT_WRITER = "report_section_writer"  # étape 8 : rédaction d'une section du rapport corpus
+REPORT_VALIDATOR = "report_validator"  # étape 9 : vérification sémantique légère du brouillon
 
 REPAIR = "repair:"  # préfixe des réparations ciblées de l'étape 3 : "repair:practice_extractor", …
 
@@ -79,6 +80,8 @@ def agent_of(params: dict) -> str:
         return THEORY_SYNTHESIS
     if "paragraphs" in properties:
         return REPORT_WRITER
+    if "verdicts" in properties:
+        return REPORT_VALIDATOR
     if "cross_case_claims" in properties:
         return COMPARATOR
     if "student_role_criteria" in properties:
