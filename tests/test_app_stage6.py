@@ -44,8 +44,7 @@ def test_stage6_section_is_available_without_a_run(fake_agents):
     assert "Constituer le corpus Stage 6" in texts(at.subheader)
     assert "Aucune sortie de l'étape 5 importée." in texts(at.info)
     assert not [b for b in at.button if b.key in ("run_stage6", "stage6_launch")]
-    assert ("6. Comparaison transversale** (IA) — prête, exécution locale (Ollama), sur import des sorties "
-            "de l'étape 5") in texts(at.markdown)
+    assert "🔵 **6. Comparaison inter-entretiens** (IA) — prête, exécution locale (Ollama)" in texts(at.markdown)
 
 
 def test_two_interviews_exploratory_then_no_replay(fake_agents):

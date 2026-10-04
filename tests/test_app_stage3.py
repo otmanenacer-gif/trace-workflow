@@ -36,7 +36,7 @@ def test_app_starts_without_api_key():
     at = AppTest.from_file(APP, default_timeout=30).run()
     assert not at.exception
     assert "désactivée" not in texts(at.markdown) and "ANTHROPIC" not in texts(at.markdown) + texts(at.warning)
-    assert texts(at.markdown).count("prête, exécution locale (Ollama)") == 5  # étapes 2 à 6 du pipeline
+    assert texts(at.markdown).count("prête, exécution locale (Ollama)") == 7  # étapes IA 3 à 9 du pipeline
     assert ("**Exécution :** locale · **Runtime :** Ollama · **Modèle :** `qwen2.5:7b` · **Données externes :** "
             "aucune") in texts(at.markdown)
     assert "Ollama ne répond pas" in texts(at.error)  # aucun vrai Ollama pendant les tests : état affiché clairement
@@ -87,7 +87,7 @@ def test_test_mode_runs_both_agents_and_shows_results(tmp_path, fake_agents):
     labels = [b.label for b in at.get("download_button")]
     for name in ("practice_extractor.json", "interaction_signals.json", "evidence_validation.json"):
         assert f"Télécharger {name}" in labels
-    assert "🟢 **2. Extraction des pratiques** (IA) — terminé (1/1 entretien(s))" in texts(at.markdown)
+    assert "🟢 **3. Extraction des pratiques et analyse interactionnelle** (IA) — terminé (1/1 entretien(s))" in texts(at.markdown)
 
     # Second clic : l'étape est complète et à jour, elle n'est pas rejouée
     at.button(key="run_stage3").click().run()

@@ -134,32 +134,79 @@ def format_count(value: int | None) -> str:
     return f"{value or 0:,}".replace(",", "\u202f")
 
 
+PIPELINE_SENTENCE = (
+    "TRACE analyse chaque entretien jusqu'à l'étape 5, compare ensuite le corpus à l'étape 6, construit une analyse "
+    "transversale à l'étape 7, rédige le rapport à l'étape 8, le valide à l'étape 9 et produit les livrables finaux à "
+    "l'étape 10.")
+# Les dix étapes réelles : (libellé, clé du manifeste du pipeline complet, étape IA ?)
+PIPELINE_DISPLAY = (
+    ("Structuration / ingestion des entretiens", "1-2", False), ("Préparation des matériaux", "1-2", False),
+    ("Extraction des pratiques et analyse interactionnelle", "1-5", True),
+    ("Construction des épisodes d'accountability", "1-5", True),
+    ("Configuration et trajectoire intra-entretien", "1-5", True), ("Comparaison inter-entretiens", "6", True),
+    ("Théorisation transversale", "7", True), ("Rédaction analytique du rapport", "8", True),
+    ("Validation du rapport", "9", True), ("Livraison finale", "10", False))
+PIPELINE_STATE_LABELS = {
+    None: ("○", "en attente"), "RUNNING": ("⏳", "en cours"), "COMPLETE": ("✓", "terminé"), "SUCCESS": ("✓", "terminé"),
+    "SUCCESS_WITH_WARNINGS": ("⚠", "terminé avec avertissements"), "BLOCKED": ("✕", "bloqué"),
+    "FAILED": ("✕", "bloqué (échec)"), "ABORTED": ("✕", "bloqué (runtime local indisponible)"),
+    "NOT_APPLICABLE_SINGLE_INTERVIEW": ("✕", "bloqué (un seul entretien valide)"), "INTERRUPTED": ("⏸", "interrompu")}
+
+
+def pipeline_records(run: dict | None) -> tuple[dict, bool] | None:
+    """États du pipeline complet (1 → 10) : corpus ouvert dans « Analyse complète », sinon manifeste du run ouvert."""
+    corpus = st.session_state.get("full_corpus")
+    if corpus and Path(corpus).is_dir():
+        info = pipeline_jobs.progress(Path(corpus))
+        if info["run_dir"] is not None or info["alive"]:
+            records = {s["key"]: s["status"] for s in info["stages"]}
+            if info["alive"] and not any(records.values()):
+                records["1-5"] = "RUNNING"
+            return records, info["alive"]
+    if run:
+        manifest = local_jobs._read(Path(run["output_dir"]) / "pipeline" / "pipeline_manifest.json")
+        if manifest:
+            return {k: v.get("status") for k, v in (manifest.get("stages") or {}).items()}, True
+    return None
+
+
 def render_pipeline(run: dict | None) -> None:
-    """Affiche les étapes : ingestion, puis les étapes IA (exécution locale avec Ollama, aucun appel API)."""
-    ai_steps = (config.PRACTICE_STEP, config.INTERACTION_STEP, config.ACCOUNTABILITY_STEP, config.TRAJECTORY_STEP)
-    for index, step in enumerate(config.PIPELINE_STEPS, start=1):
-        if step == config.INGESTION_STEP:
-            state = run["pipeline"][step] if run else "prête"
-            icon = "🟢" if run and "échec" not in state else ("🟠" if run else "🔵")
-            st.markdown(f"{icon} **{index}. {step}** — {state}")
-        elif step == config.CROSS_INTERVIEW_STEP:
-            last = st.session_state.get("stage6_last")
-            if last:
-                warn = last["status"] not in cross_interview.DONE_STATUSES
-                st.markdown(f"{'🟠' if warn else '🟢'} **{index}. {step}** (IA) — {last['status']} "
-                            f"({last['corpus_n_usable']}/{last['corpus_n_total']} entretien(s) exploitable(s))")
-            else:
-                st.markdown(f"🔵 **{index}. {step}** (IA) — prête, exécution locale (Ollama), sur import des "
-                            "sorties de l'étape 5")
-        elif step in ai_steps:
-            state = run["pipeline"].get(step, "inactive") if run else "inactive"
-            if state != "inactive":
-                warn = "échec" in state or "incomplet" in state or "bloqué" in state
-                st.markdown(f"{'🟠' if warn else '🟢'} **{index}. {step}** (IA) — {state}")
-            else:
-                st.markdown(f"🔵 **{index}. {step}** (IA) — prête, exécution locale (Ollama)")
+    """Les dix étapes réelles de TRACE ; pendant ou après un pipeline complet, leur état vient de
+    <run>/pipeline/pipeline_manifest.json (○ en attente, ⏳ en cours, ✓ terminé, ⚠ avertissements, ✕ bloqué)."""
+    full = pipeline_records(run)
+    for index, (label, key, ai) in enumerate(PIPELINE_DISPLAY, start=1):
+        tag = " (IA)" if ai else ""
+        if full is not None:
+            records, alive = full
+            status = records.get(key) if key != "1-2" else ("COMPLETE" if records.get("1-5") not in (None, "RUNNING")
+                                                           or any(records.get(k) for k in ("6", "7", "8", "9", "10"))
+                                                           else records.get("1-5"))
+            if status == "RUNNING" and not alive:
+                status = "INTERRUPTED"
+            icon, text = PIPELINE_STATE_LABELS.get(status, ("○", str(status)))
+            st.markdown(f"{icon} **{index}. {label}**{tag} — {text}")
+            continue
+        state = None
+        if index <= 2:
+            state = run["pipeline"][config.INGESTION_STEP] if run else None
+        elif index == 3 and run:
+            states = {run["pipeline"].get(config.PRACTICE_STEP, "inactive"),
+                      run["pipeline"].get(config.INTERACTION_STEP, "inactive")} - {"inactive"}
+            state = " ; ".join(sorted(states)) or None
+        elif index in (4, 5) and run:
+            step = config.ACCOUNTABILITY_STEP if index == 4 else config.TRAJECTORY_STEP
+            state = run["pipeline"].get(step, "inactive")
+            state = None if state == "inactive" else state
+        elif index == 6 and st.session_state.get("stage6_last"):
+            last = st.session_state["stage6_last"]
+            state = (f"{last['status']} ({last['corpus_n_usable']}/{last['corpus_n_total']} entretien(s) "
+                     "exploitable(s))")
+        if state:
+            warn = any(w in state for w in ("échec", "incomplet", "bloqué", "FAILED", "BLOCKED"))
+            st.markdown(f"{'🟠' if warn else '🟢'} **{index}. {label}**{tag} — {state}")
         else:
-            st.markdown(f"⚪ **{index}. {step}** — _inactif_")
+            st.markdown(f"🔵 **{index}. {label}**{tag} — prête"
+                        + (", exécution locale (Ollama)" if ai else ""))
 
 
 def read_analysis_file(summary: dict, filename: str) -> str | None:
@@ -579,7 +626,7 @@ live_full_panel = st.fragment(run_every=3)(_full_fragment)
 
 def render_full_corpus_section() -> None:
     """Analyse complète d'un corpus (étapes 1 → 10) : `trace_local.py pipeline <corpus>` en arrière-plan."""
-    st.header("Analyse complète d'un corpus")
+    st.header("Analyse complète d'un corpus — Étapes 1 à 10")
     st.caption("Importez les entretiens : TRACE crée lui-même le dossier du corpus (noms de fichiers conservés, donc "
                "identifiants des entretiens inchangés), puis exécute tout le pipeline en arrière-plan, du texte au "
                "rapport final, avec le modèle local. Mêmes fichiers → même corpus → reprise sans recalcul.")
@@ -593,7 +640,7 @@ def render_full_corpus_section() -> None:
         for problem in problems:
             st.error(problem)
     label = st.text_input("Nom du corpus (facultatif)", key="full_label")
-    if st.button("Lancer l'analyse complète", type="primary", key="full_launch", disabled=not selected or bool(problems)):
+    if st.button("Lancer le pipeline complet", type="primary", key="full_launch", disabled=not selected or bool(problems)):
         try:
             corpus = pipeline_jobs.create_corpus(selected, label)
             st.session_state.full_corpus = str(corpus)
@@ -1367,17 +1414,13 @@ st.set_page_config(page_title="TRACE", layout="wide")
 st.title("TRACE")
 st.subheader("Analyse ethnométhodologique des usages étudiants des IAG")
 st.markdown(
-    "Outil **expérimental** d'analyse qualitative assistée par IA. "
-    "L'ingestion des entretiens est **déterministe** et sans IA : "
-    "extraction du texte, découpage en tours de parole et contrôle qualité. "
-    "Les étapes 3 à 6 (agents IA descriptifs) sont exécutées **localement** par TRACE avec un modèle servi par "
+    "Outil **expérimental** d'analyse qualitative assistée par IA, des entretiens au rapport final (étapes 1 à 10). "
+    "L'ingestion des entretiens est **déterministe** et sans IA : extraction du texte, découpage en tours de parole "
+    "et contrôle qualité. Les étapes d'analyse sont exécutées **localement** par TRACE avec un modèle servi par "
     "**Ollama** sur cet ordinateur : aucune clé, aucune API, aucune donnée envoyée à l'extérieur ; rien n'est lancé "
     "au chargement des fichiers."
 )
 render_runtime_panel()
-
-# Analyse complète d'un corpus (étapes 1 → 10, en arrière-plan)
-render_full_corpus_section()
 
 # 3. Problématique de recherche
 st.header("Problématique de recherche")
@@ -1395,8 +1438,21 @@ if st.button("Sauvegarder la problématique"):
     except OSError as exc:
         st.error(f"Impossible de sauvegarder la problématique : {exc}")
 
-# 4. Corpus
-st.header("Corpus")
+# Parcours principal : analyse complète d'un corpus (étapes 1 → 10, en arrière-plan)
+render_full_corpus_section()
+
+# 5. Pipeline (étapes réelles 1 → 10 ; état lu dans le manifeste du pipeline complet quand il existe)
+st.header("Pipeline")
+st.caption(PIPELINE_SENTENCE)
+pipeline_area = st.container()
+
+# Outils avancés : ancien parcours manuel, étape par étape
+st.header("Outils avancés — exécution étape par étape")
+st.caption("Pour tester ou rejouer une étape précise : ingestion d'entretiens (étapes 1-2), puis étapes 3 à 6 lancées "
+           "une à une ci-dessous, ou ouverture d'un run existant. Le parcours principal reste « Analyse complète d'un "
+           "corpus ».")
+# 4. Corpus (ingestion seule)
+st.subheader("Corpus — ingestion seule (étapes 1-2)")
 uploaded_files = st.file_uploader(
     "Importer des entretiens (PDF, DOCX, TXT)",
     type=list(config.ALLOWED_EXTENSIONS),
@@ -1430,18 +1486,8 @@ with st.expander("Ouvrir un run existant (par exemple exécuté avec la CLI loca
             except (TraceError, OSError, ValueError) as exc:
                 st.error(f"Run illisible : {exc}")
 
-# 5. Pipeline (structuration + étape 3 ; affichée après le lancement)
-st.header("Pipeline")
-st.caption(
-    "Actives : la structuration des entretiens (sans IA) et, sur action explicite, "
-    "l'extraction des pratiques et l'analyse interactionnelle (étape 3), puis la construction des épisodes "
-    "d'accountability (étape 4), la configuration intra-entretien (étape 5) et la comparaison inter-entretiens "
-    "(étape 6). Les autres étapes restent inactives."
-)
-pipeline_area = st.container()
-
 # 6. Lancement (ingestion uniquement : aucun appel IA ici)
-if st.button("Lancer l'analyse", type="primary"):
+if st.button("Lancer l'ingestion (étapes 1-2)"):
     if not uploaded_files:
         st.error("Aucun fichier chargé : importez au moins un entretien avant de lancer l'analyse.")
     else:

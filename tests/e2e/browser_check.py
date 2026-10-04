@@ -141,7 +141,7 @@ def upload_and_ingest(page, interview_path: Path) -> None:
     file_input(page, "Importer des entretiens").set_input_files(str(interview_path))
     expect(page.get_by_text(interview_path.name).first).to_be_visible(timeout=TIMEOUT_MS)
     wait_idle(page)  # l'import relance le script : cliquer seulement une fois le rendu terminé
-    page.get_by_role("button", name="Lancer l'analyse", exact=True).click()
+    page.get_by_role("button", name="Lancer l'ingestion (étapes 1-2)", exact=True).click()
     expect(page.get_by_text("Structuration des entretiens terminée")).to_be_visible(timeout=TIMEOUT_MS)
     expect(page.get_by_role("heading", name="Analyse IA — Étape 3")).to_be_visible(timeout=TIMEOUT_MS)
 

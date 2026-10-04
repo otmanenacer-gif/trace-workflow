@@ -41,6 +41,22 @@ def downloads(at) -> list[str]:
     return [e.proto.label for e in at.get("download_button") if e.proto.label.startswith("Télécharger stage10/")]
 
 
+def test_main_path_and_pipeline_panel_show_the_ten_real_stages(dirs):
+    at = AppTest.from_file(APP, default_timeout=60).run()
+    assert not at.exception
+    headers = [h.value for h in at.header]
+    main, panel, advanced = (headers.index(h) for h in ("Analyse complète d'un corpus — Étapes 1 à 10", "Pipeline",
+                                                        "Outils avancés — exécution étape par étape"))
+    assert main < panel < advanced  # parcours principal d'abord, ancien workflow en outils avancés
+    assert launch_button(at).label == "Lancer le pipeline complet"
+    markdown = texts(at.markdown)
+    for n, label in ((7, "Théorisation transversale"), (8, "Rédaction analytique du rapport"),
+                     (9, "Validation du rapport"), (10, "Livraison finale")):
+        assert f"**{n}. {label}**" in markdown
+    assert "**7. Théorisation transversale** (IA) — prête" in markdown and "inactif" not in markdown
+    assert "restent inactives" not in texts(at.caption) and "à l'étape 10." in texts(at.caption)
+
+
 def test_file_checks_minimum_two_and_no_duplicate_names(dirs):
     at = upload(FILES[:1])
     assert not at.exception and launch_button(at).disabled
@@ -61,6 +77,10 @@ def test_launch_runs_the_full_pipeline_in_background_then_reopens_with_deliverab
     assert downloads(at) == [f"Télécharger stage10/{n}" for n in ("final_report.md", "final_report.json",
                                                                  "delivery_manifest.json")]
     assert "✓ Étapes 1–5 — 2 / 2 entretiens" in texts(at.markdown) and "✓ Étape 10 — livraison" in texts(at.markdown)
+    panel = texts(at.markdown)  # panneau Pipeline : états lus dans pipeline_manifest.json
+    assert "✓ **1. Structuration / ingestion des entretiens** — terminé" in panel
+    assert "**9. Validation du rapport** (IA) — terminé avec avertissements" in panel
+    assert any(f"**10. Livraison finale** — {t}" in panel for t in ("terminé", "terminé avec avertissements"))
     corpus = pipeline_jobs.list_corpora()[0]
     assert sorted(p.name for p in corpus.iterdir() if p.is_file()) == sorted(n for n, _ in FILES)  # noms conservés
 
