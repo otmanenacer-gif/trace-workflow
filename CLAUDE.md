@@ -23,6 +23,9 @@ servi par Ollama (voir `docs/local_runtime.md`).
 - Lot sans surveillance : `trace_local.py batch <corpus> --until 5` (`core/batch.py`) — run retrouvé à chaque relance,
   étapes 3 → 5 par entretien, garde et cache habituels, une nouvelle tentative par étape, échec isolé, manifeste
   `<run>/batch/batch_manifest.json`.
+- Étape 6 d'un run : `trace_local.py stage6 <run_id>` (`core/stage6_blocks.py`) — entretiens `stage5_valid` du lot,
+  blocs d'au plus 6 entretiens (étape 6 habituelle par bloc, cache et reprise), fusion déterministe dans
+  `<run>/stage6/stage6_corpus.json`.
 - Étape 6 avec un seul entretien exploitable : `NOT_APPLICABLE_SINGLE_INTERVIEW`, aucune comparaison, aucun appel.
 - Étape 7 : rapport final DÉTERMINISTE (`core/final_report.py`, Markdown + JSON dans `<run>/final_report/`), assemblé à
   partir des sorties validées des étapes 3 à 5, sans aucun appel au modèle ; Streamlit « Générer le rapport final »,

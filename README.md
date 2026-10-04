@@ -500,6 +500,22 @@ chaque étape : `<run>/batch/batch_manifest.json` (COMPLETE / WARNINGS / FAILED 
 statuts des agents, durées, erreurs, liste `stage5_valid`). Les entretiens dont l'étape 5 est valide alimentent
 ensuite l'étape 6 : `python scripts/trace_local.py stage6 <run>`. Aucun contrôle expérimental n'est lancé.
 
+## Étape 6 d'un lot (par blocs)
+
+```
+python scripts/trace_local.py stage6 <run_id>
+```
+
+Prend les entretiens `stage5_valid` de `<run>/batch/batch_manifest.json` (sans manifeste : ceux dont l'étape 5 est
+COMPLETE), avec leurs sorties de l'étape 5 déjà enregistrées (aucune relance des étapes 1 à 5) ; les autres sont
+exclus avec leur raison. 0 entretien exploitable → `BLOCKED` ; 1 → `NOT_APPLICABLE_SINGLE_INTERVIEW` ; ≥ 2 →
+comparaison par **blocs d'au plus 6 entretiens** (17 → 3 blocs : 6, 6, 5) : chaque bloc est une étape 6 habituelle
+(même prompt, même validateur, cache, dossier `cross_interview/<corpus_id>/`), sauvegardée dès sa validation, jamais
+rejouée si elle est terminée ; un bloc en échec est seul rejoué à la relance. Fusion déterministe, sans appel :
+régularités, variations, tensions, cas négatifs et exceptions, différences de trajectoires (chaque affirmation avec
+ses entretiens, ses `trajectory_claim_id` et son bloc), configurations et critères récurrents comptés dans les sorties
+de l'étape 5 (au moins deux entretiens), `needs_review`, limites. Sortie : `<run>/stage6/stage6_corpus.json`.
+
 ## Étape 7 — rapport final
 
 À partir des sorties **déjà validées** des étapes 3 à 5 (aucun recalcul, **aucun appel au modèle**), TRACE assemble un

@@ -7,6 +7,8 @@
                                                                    # échec isolé, manifeste <run>/batch/batch_manifest.json
     python scripts/trace_local.py run RUN --until 5                # étapes 3 → 5 (chaque étape seulement si elle
                                                                    # n'est pas déjà complète et à jour)
+    python scripts/trace_local.py stage6 RUN                       # étape 6 d'un run (lot) : entretiens stage5_valid,
+                                                                   # blocs d'au plus 6 entretiens, fusion -> <run>/stage6/
     python scripts/trace_local.py stage6 SOURCE [SOURCE ...]       # étape 6 sur les sorties de l'étape 5 (runs,
                                                                    # dossiers de JSON ou fichiers JSON)
     python scripts/trace_local.py status RUN                       # état du run
@@ -166,7 +168,24 @@ def stage6_uploads(sources: list[str]) -> list[tuple[str, bytes]]:
     return uploads
 
 
+def cmd_stage6_run(run_dir: Path) -> int:
+    """Étape 6 d'un run (lot) : entretiens `stage5_valid`, blocs, fusion (core/stage6_blocks.py)."""
+    from core import stage6_blocks
+    document = stage6_blocks.run(load_metadata(run_dir), log=lambda line: print(line, flush=True))
+    for line in stage6_blocks.summary_lines(document):
+        print(line)
+    print(f"Sortie : {lp.display_path(stage6_blocks.out_path(load_metadata(run_dir)))}")
+    return EXIT_CODES[document["status"]]
+
+
 def cmd_stage6(args) -> int:
+    if len(args.sources) == 1 and not args.force:
+        try:
+            run_dir = resolve_run(args.sources[0])
+        except TraceError:
+            run_dir = None
+        if run_dir is not None:
+            return cmd_stage6_run(run_dir)
     result = lp.run_stage6(stage6_uploads(args.sources), force=args.force)
     status = result["status"]
     if args.json:
