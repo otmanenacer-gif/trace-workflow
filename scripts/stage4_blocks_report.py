@@ -6,10 +6,12 @@
     python scripts/stage4_blocks_report.py measure RUN
         # AUCUN appel : lit les journaux de la dernière exécution de l'étape 4 (local_runs/stage4/) — appels,
         # tokens d'entrée et de sortie réels par bloc, durée, tentatives, troncatures, réparations ciblées
-    python scripts/stage4_blocks_report.py grounding RUN [--plan | --rescore] [--solid E007,…] [--doubtful …] [--false …]
+    python scripts/stage4_blocks_report.py grounding RUN [--plan | --rescore] [--model M] [--solid E007,…] [--doubtful …] [--false …]
         # RAPPORT SEULEMENT : fondement de chaque épisode dans ses citations (Episode Grounding Checker, un appel par
         # épisode, réponses en cache) ; --plan : aucun appel (coût et avertissements formels) ; --rescore : aucun
-        # appel, verdicts recalculés avec l'agrégation actuelle sur les réponses du dernier rapport. Aucune sortie de
+        # appel, verdicts recalculés avec l'agrégation actuelle sur les réponses du dernier rapport. Modèle du seul
+        # vérificateur : --model ou TRACE_GROUNDING_MODEL (le reste du pipeline garde TRACE_LOCAL_MODEL ; rapport,
+        # journaux et cache propres à chaque modèle : deux modèles se comparent sur les mêmes épisodes). Aucune sortie de
         # l'étape 4 n'est modifiée ; comparaison facultative avec un audit manuel
     python scripts/stage4_blocks_report.py repairs RUN
         # AUCUN appel : réponses des blocs relues dans le cache TRACE ; identifiants étrangers retirés sans modèle et
@@ -28,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import dataclasses
 import json
 import sys
 from pathlib import Path
@@ -223,12 +226,16 @@ def print_grounding(result: dict) -> None:
 
 def cmd_grounding(args) -> int:
     metadata = load_metadata(resolve_run(args.run))
-    settings = lp.runtime_settings()
+    settings = stage4_grounding.grounding_settings()
+    if args.model:
+        settings = dataclasses.replace(settings, model=args.model)
     files = _files(metadata, args.interview)
     dirs = [Path(f["ingestion"]["output_dir"]) for f in files]
     manual = {k: _ids(v) for k, v in (("solide", args.solid), ("douteux", args.doubtful), ("faux", args.false))
               if _ids(v)}
-    print(f"Run {metadata['run_id']} — étape 4, contrôle sémantique en RAPPORT SEULEMENT (modèle {settings.model}) : "
+    pipeline_model = lp.runtime_settings().model
+    print(f"Run {metadata['run_id']} — étape 4, contrôle sémantique en RAPPORT SEULEMENT (vérificateur : modèle "
+          f"{settings.model}{'' if settings.model == pipeline_model else f' ; pipeline : {pipeline_model}'}) : "
           "aucune sortie de l'étape 4 n'est modifiée, aucune réparation")
     if args.plan:
         cache = AnalysisCache()
@@ -247,9 +254,10 @@ def cmd_grounding(args) -> int:
                     print(f"  {item['episode_id'].rsplit('_', 1)[-1]} : {', '.join(item['formal_warnings'])}")
         return 0
     if args.rescore:
-        path = lp.stage_dir(metadata, "4") / stage4_grounding.REPORT_FILENAME
+        path = stage4_grounding.report_path(metadata, settings.model)
         if not path.is_file():
-            print("Aucun rapport de contrôle sémantique dans ce run : lancez d'abord le diagnostic.")
+            print(f"Aucun rapport de contrôle sémantique pour le modèle {settings.model} dans ce run : lancez d'abord "
+                  "le diagnostic.")
             return 1
         previous = json.loads(path.read_text(encoding="utf-8"))
         print(f"Recalcul SANS appel : réponses du rapport existant (vérificateur {previous.get('agent_version')}), "
@@ -260,7 +268,7 @@ def cmd_grounding(args) -> int:
         if manual:
             print_comparison(stage4_grounding.compare([r for x in results for r in x["rows"]], manual))
         return 0
-    runner = lp.make_runner(settings, journal_dir=lp.stage_dir(metadata, "4") / "grounding")
+    runner = lp.make_runner(settings, journal_dir=stage4_grounding.journal_dir(metadata, settings.model))
     runner.require_ready()
 
     async def run_all() -> list[dict]:
@@ -277,7 +285,7 @@ def cmd_grounding(args) -> int:
     comparison = document.get("manual_comparison")
     if comparison:
         print_comparison(comparison)
-    print(f"\nRapport : {lp.display_path(lp.stage_dir(metadata, '4') / stage4_grounding.REPORT_FILENAME)}")
+    print(f"\nRapport : {lp.display_path(stage4_grounding.report_path(metadata, settings.model))}")
     return 0
 
 
@@ -309,6 +317,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("run")
     p.add_argument("--interview", action="append")
     p.add_argument("--plan", action="store_true", help="aucun appel : coût et avertissements formels")
+    p.add_argument("--model", help="modèle local du seul vérificateur (sinon TRACE_GROUNDING_MODEL, sinon "
+                                   "TRACE_LOCAL_MODEL)")
     p.add_argument("--rescore", action="store_true",
                    help="aucun appel : verdicts recalculés avec l'agrégation actuelle sur le dernier rapport")
     p.add_argument("--solid", help="audit manuel : épisodes solides (E007,E010,…)")

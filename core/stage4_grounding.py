@@ -22,6 +22,12 @@ forme ; ce module vérifie le fond, sans rien modifier :
       → verdict d'épisode déterministe (`episode_verdict`). Affirmations CENTRALES : la question pratique (P) et les
         opérations (M…) d'un épisode d'accountability ; le résumé (S) des autres statuts. Les autres (S d'un épisode
         d'accountability, B…, R, X) sont secondaires.
+        La question pratique n'est centrale que si elle a la forme d'une question (sinon PROBLEM_NOT_A_QUESTION :
+        champ mal rempli, secondaire).
+        Analyse INCOHÉRENTE du vérificateur (`analysis_unreliable`) — asserted_by=student avec subject_shift=true ;
+        asserted_by=interviewer sans aucune citation d'un tour de l'enquêteur ; raison ou notes affirmant le soutien
+        alors que les champs structurés le refusent : jamais une preuve de rejet ; l'affirmation compte au plus
+        pour doubtful.
            contradicted  une affirmation centrale contredite ;
            unsupported   P non établie (épisode d'accountability), aucune opération établie, S non établi (autres
                          statuts), récit sur des tiers présenté comme position de l'enquêté·e, statut trop fort ;
@@ -40,7 +46,9 @@ Aucune réparation, aucune décision bloquante : les sorties de l'étape 4 et la
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
+import os
 import re
 from pathlib import Path
 
@@ -49,22 +57,30 @@ from agents.base import sha256_text
 from core import config
 from core.accountability_candidates import excerpt
 from core.analysis_cache import AnalysisCache, compute_cache_key, write_json_atomic
-from core.llm_client import LLMError, LLMSettings
+from core.llm_client import ENV_GROUNDING_MODEL, LLMError, LLMSettings
 from core.schemas import SPEAKER_INTERVIEWER
 
 SPEC = checker.SPEC
-GROUNDING_VERSION = "1.1"  # 1.1 : verdicts déduits de l'analyse, affirmations centrales, citations Q… normalisées
+GROUNDING_VERSION = "1.2"  # 1.1 : verdicts déduits de l'analyse, affirmations centrales, citations Q… normalisées ;
+# 1.2 : question pratique centrale seulement si c'est une question, analyses incohérentes (analysis_unreliable)
 REPORT_FILENAME = "grounding_report.json"
 SUPPORTED, DOUBTFUL, UNSUPPORTED, CONTRADICTED = "supported", "doubtful", "unsupported", "contradicted"
 VERDICTS = (SUPPORTED, DOUBTFUL, UNSUPPORTED, CONTRADICTED)
 NOT_CHECKED = "not_checked"
 HOLDS = ("supported", "inferred")
 NOT_ESTABLISHED = ("not_supported", "ambiguous")
+UNRELIABLE = "analysis_unreliable"
+# Raison / notes qui affirment le soutien : termes du RAPPORT de soutien (pas du contenu de l'entretien)
+SUPPORT_TERMS = re.compile(r"appuy|soutenu|soutient|supported|établi|etabli|équivalent|equivalent|reformulation directe|"
+                           r"paraphrase directe|inférence immédiate|inference immediate|direct_paraphrase|"
+                           r"immediate_inference", re.IGNORECASE)
+NEGATION = re.compile(r"(?<!\w)(?:n['’]|(?:ne|pas|aucune?|non|sans|jamais)(?!\w))", re.IGNORECASE)
 RELATION_VERDICTS = {"equivalent": "supported", "direct_paraphrase": "supported", "immediate_inference": "inferred",
                      "stronger_than_evidence": "not_supported", "different": "not_supported",
                      "contradicted": "contradicted", "ambiguous": "ambiguous"}
 CLAIM_LABELS = {"not_supported": "non établi par les citations", "ambiguous": "ambigu (plusieurs lectures)",
-                "contradicted": "contredit par les citations", NOT_CHECKED: "non vérifié (sans verdict)"}
+                "contradicted": "contredit par les citations", NOT_CHECKED: "non vérifié (sans verdict)",
+                UNRELIABLE: "analyse du vérificateur incohérente (non retenue comme preuve de rejet)"}
 TURN_TEXT_RATIO = 0.9  # tour complet montré sous une citation qui en couvre moins de 90 %
 # Sections du prompt de l'Accountability Episode Builder reprises telles quelles comme définitions
 DEFINITION_HEADINGS = ("## Ce que « accountability » veut dire ici", "## Les trois statuts",
@@ -171,11 +187,17 @@ def checker_request(transcript: dict, episode: dict, builder_prompt: str | None 
 
 # --- Défauts formels (avertissements, déterministes) -------------------------------------------------------
 
+def problem_is_question(episode: dict) -> bool:
+    """La question pratique a-t-elle la forme attendue d'une question (« jusqu'où l'outil peut-il… ? ») ?"""
+    problem = _real(episode.get("accountability_problem"))
+    return bool(problem) and problem.rstrip().endswith("?")
+
+
 def formal_warnings(transcript: dict, episode: dict) -> list[str]:
     speaker = {t["turn_id"]: t["speaker"] for t in transcript["turns"]}
     warnings = []
     problem = _real(episode.get("accountability_problem"))
-    if problem and not problem.rstrip().endswith("?"):
+    if problem and not problem_is_question(episode):
         warnings.append("PROBLEM_NOT_A_QUESTION")
     if problem and problem.strip().lower() == (episode.get("episode_summary") or "").strip().lower():
         warnings.append("PROBLEM_EQUALS_SUMMARY")
@@ -219,17 +241,55 @@ def quote_ids(raw: list[str], request: dict) -> list[str]:
     return list(dict.fromkeys(out))
 
 
+def _sentences(text: str | None) -> list[str]:
+    return [s for s in re.split(r"(?<=[.;!?])\s+", text or "") if s.strip()]
+
+
+def _affirms_support(sentence: str) -> bool:
+    return bool(SUPPORT_TERMS.search(sentence)) and not NEGATION.search(sentence)
+
+
+def unreliable_reasons(claim: dict, request: dict, notes: str | None = None) -> list[str]:
+    """Incohérences LOGIQUES d'une analyse 1.1 (aucun jugement sur le fond) : qui l'affirme / changement de sujet,
+    énoncé de l'enquêteur sans citation de l'enquêteur, raison ou notes affirmant le soutien."""
+    if "relation" not in claim:
+        return []
+    reasons = []
+    if claim.get("asserted_by") == "student" and claim.get("subject_shift"):
+        reasons.append("asserted_by=student et subject_shift=true : l'enquêté·e parle de lui-même, pas de changement "
+                       "de sujet possible")
+    if claim.get("asserted_by") == "interviewer":
+        speakers = {q["quote_id"]: q["speaker"] for q in request["quotes"]}
+        if not any(speakers.get(q) == SPEAKER_INTERVIEWER for q in quote_ids(claim.get("quote_ids", []), request)):
+            reasons.append("asserted_by=interviewer sans aucune citation d'un tour de l'enquêteur")
+    cid = claim.get("claim_id", "")
+    texts = _sentences(claim.get("reason")) + [s for s in _sentences(notes) if re.search(rf"(?<!\w){re.escape(cid)}(?!\w)", s)]
+    if any(_affirms_support(text) for text in texts):
+        reasons.append("raison ou notes affirmant le soutien, champs structurés le refusant")
+    return reasons
+
+
 def episode_verdict(episode: dict, request: dict, output: dict) -> dict:
-    """Verdict de l'épisode (voir l'en-tête du module). Une affirmation sans verdict n'est jamais comptée comme
-    établie (doubtful)."""
+    """Verdict de l'épisode (voir l'en-tête du module). Une affirmation sans verdict, ou dont l'analyse est
+    incohérente, n'est jamais comptée comme établie ni comme rejetée (doubtful)."""
     by_id = {c["claim_id"]: c for c in output.get("claims", [])}
     types = {m["move_id"]: m for m in output.get("move_types", [])}
     claims = request["claims"]
-    verdict_of = {c["claim_id"]: claim_verdict(by_id[c["claim_id"]]) if c["claim_id"] in by_id else NOT_CHECKED
-                  for c in claims}
+    verdict_of, unreliable = {}, {}
+    for c in claims:
+        cid = c["claim_id"]
+        if cid not in by_id:
+            verdict_of[cid] = NOT_CHECKED
+            continue
+        verdict_of[cid] = claim_verdict(by_id[cid])
+        if verdict_of[cid] not in HOLDS:  # une incohérence ne vaut jamais preuve de rejet
+            reasons = unreliable_reasons(by_id[cid], request, output.get("notes"))
+            if reasons:
+                verdict_of[cid], unreliable[cid] = UNRELIABLE, reasons
     moves = [c["claim_id"] for c in claims if c["claim_id"].startswith("M")]
     is_episode = episode.get("episode_status") == "accountability_episode"
-    central = (["P"] if is_episode and "P" in verdict_of else []) + moves + ([] if is_episode else ["S"])
+    problem_central = is_episode and "P" in verdict_of and problem_is_question(episode)
+    central = (["P"] if problem_central else []) + moves + ([] if is_episode else ["S"])
     held = [m for m in moves if verdict_of[m] in HOLDS]
     findings = []
 
@@ -262,7 +322,7 @@ def episode_verdict(episode: dict, request: dict, output: dict) -> dict:
                                               or cid in moves and not held and value in NOT_ESTABLISHED)
         if value not in HOLDS and not central_handled:
             add(DOUBTFUL, f"{cid} {CLAIM_LABELS.get(value, value)}", [cid],
-                "affirmation sans verdict" if value == NOT_CHECKED else "")
+                "affirmation sans verdict" if value == NOT_CHECKED else "; ".join(unreliable.get(cid, [])))
     for mid in moves:
         check = types.get(mid)
         if check is None or not check.get("type_fits_definition"):
@@ -277,7 +337,7 @@ def episode_verdict(episode: dict, request: dict, output: dict) -> dict:
     rank = {SUPPORTED: 0, DOUBTFUL: 1, UNSUPPORTED: 2, CONTRADICTED: 3}
     verdict = max((f["level"] for f in findings), key=rank.get, default=SUPPORTED)
     return {"verdict": verdict, "findings": sorted(findings, key=lambda f: -rank[f["level"]]),
-            "claim_verdicts": verdict_of}
+            "claim_verdicts": verdict_of, "unreliable_analyses": unreliable, "problem_central": problem_central}
 
 
 def rescore(document: dict, interview_dirs: list[Path]) -> list[dict]:
@@ -326,6 +386,34 @@ def compare(rows: list[dict], manual: dict[str, list[str]]) -> dict:
 
 
 # --- Exécution (rapport seulement) ------------------------------------------------------------------------
+
+def grounding_settings(env: dict | None = None) -> LLMSettings:
+    """Réglages du vérificateur : ceux du pipeline (TRACE_LOCAL_MODEL…), sauf le modèle si TRACE_GROUNDING_MODEL est
+    défini — le reste du pipeline n'en tient jamais compte."""
+    env = os.environ if env is None else env
+    settings = LLMSettings.from_env(env)
+    model = (env.get(ENV_GROUNDING_MODEL) or "").strip()
+    return dataclasses.replace(settings, model=model) if model else settings
+
+
+def model_slug(model: str) -> str:
+    return re.sub(r"[^A-Za-z0-9._-]+", "-", model).strip("-")
+
+
+def report_path(metadata: dict, model: str) -> Path:
+    """Rapport du modèle du pipeline : grounding_report.json ; d'un autre modèle : grounding_report__<modèle>.json
+    (deux modèles se comparent sans s'écraser)."""
+    from core import local_pipeline as lp
+    name = REPORT_FILENAME if model == LLMSettings.from_env().model else f"grounding_report__{model_slug(model)}.json"
+    return lp.stage_dir(metadata, "4") / name
+
+
+def journal_dir(metadata: dict, model: str) -> Path:
+    """Journaux des appels (leur nom ne dépend pas du modèle) : un dossier par modèle autre que celui du pipeline."""
+    from core import local_pipeline as lp
+    base = lp.stage_dir(metadata, "4") / "grounding"
+    return base if model == LLMSettings.from_env().model else base / model_slug(model)
+
 
 def cache_key_fields(transcript: dict, settings: LLMSettings, message: str) -> dict:
     return {"source_sha256": transcript["source"]["sha256"], "transcript_sha256": sha256_text(message),
@@ -406,12 +494,12 @@ async def check_interview(interview_dir: Path, client, settings: LLMSettings,
 
 
 def report(metadata: dict, results: list[dict], settings: LLMSettings, manual: dict | None = None) -> dict:
-    """Rapport complet, écrit dans local_runs/stage4/grounding_report.json (fichier de diagnostic séparé)."""
-    from core import local_pipeline as lp
+    """Rapport complet, écrit dans local_runs/stage4/ (fichier de diagnostic séparé, propre au modèle)."""
     document = {"grounding_version": GROUNDING_VERSION, "mode": "report-only", **SPEC.identity(),
-                "model": settings.model, "run_id": metadata.get("run_id"), "interviews": results}
+                "model": settings.model, "pipeline_model": LLMSettings.from_env().model,
+                "run_id": metadata.get("run_id"), "interviews": results}
     if manual:
         rows = [r for result in results for r in result["rows"]]
         document["manual_comparison"] = compare(rows, manual)
-    write_json_atomic(lp.stage_dir(metadata, "4") / REPORT_FILENAME, document)
+    write_json_atomic(report_path(metadata, settings.model), document)
     return document

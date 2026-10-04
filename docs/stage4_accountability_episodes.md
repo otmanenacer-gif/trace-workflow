@@ -347,6 +347,15 @@ un contexte qui inverse le sens la contredit. Affirmations centrales : la questi
 citations `Q…` de ses tours ; un identifiant de tour renvoyé à la place est ramené à ses citations.
 `--rescore` recalcule les verdicts d'un rapport existant avec l'agrégation actuelle, sans appel.
 
+Agrégation 1.2 (le vérificateur `qwen2.5:7b` recopie l'affirmation dans 32 propositions sur 49) : la question pratique
+n'est centrale que si elle a la forme d'une question (sinon `PROBLEM_NOT_A_QUESTION`, secondaire) ; une analyse
+logiquement incohérente — `asserted_by=student` avec `subject_shift=true`, `asserted_by=interviewer` sans citation d'un
+tour de l'enquêteur, raison ou notes affirmant le soutien (« appuyé », « équivalent », « reformulation directe »…, sans
+négation) alors que les champs structurés le refusent — devient `analysis_unreliable` : jamais une preuve de rejet,
+au plus `doubtful`. Modèle du seul vérificateur : `--model` ou `TRACE_GROUNDING_MODEL` (rapport
+`grounding_report__<modèle>.json`, journaux `local_runs/stage4/grounding/<modèle>/`, cache propres au modèle ; ni
+l'étape 3 ni l'étape 4 ne sont recalculées).
+
 Mode actuel : **rapport seulement** — aucune sortie de l'étape 4 n'est modifiée, aucune réparation, rien de bloquant.
 `python scripts/stage4_blocks_report.py grounding RUN --plan` (aucun appel : coût, avertissements) ;
 `python scripts/stage4_blocks_report.py grounding RUN [--solid …] [--doubtful …] [--false …]` (un appel par épisode,

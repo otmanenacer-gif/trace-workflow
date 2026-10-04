@@ -41,8 +41,12 @@ ENV_TEMPERATURE = "TRACE_LOCAL_TEMPERATURE"
 ENV_CONCURRENCY = "TRACE_LOCAL_CONCURRENCY"
 ENV_INTERACTION_CHUNK_TOKENS = "TRACE_INTERACTION_CHUNK_TOKENS"
 ENV_PRACTICE_CHUNK_TOKENS = "TRACE_PRACTICE_CHUNK_TOKENS"
+# Modèle du seul Episode Grounding Checker (diagnostic, core/stage4_grounding.py) ; le reste du pipeline garde
+# TRACE_LOCAL_MODEL. Lu par stage4_grounding.grounding_settings, jamais par LLMSettings.
+ENV_GROUNDING_MODEL = "TRACE_GROUNDING_MODEL"
 ENV_VARS = (ENV_LOCAL_MODEL, ENV_OLLAMA_URL, ENV_NUM_CTX, ENV_TIMEOUT, ENV_MAX_CORRECTIONS, ENV_MAX_METHOD_CORRECTIONS,
-            ENV_KEEP_ALIVE, ENV_TEMPERATURE, ENV_CONCURRENCY, ENV_INTERACTION_CHUNK_TOKENS, ENV_PRACTICE_CHUNK_TOKENS)
+            ENV_KEEP_ALIVE, ENV_TEMPERATURE, ENV_CONCURRENCY, ENV_INTERACTION_CHUNK_TOKENS, ENV_PRACTICE_CHUNK_TOKENS,
+            ENV_GROUNDING_MODEL)
 
 # Modèle par défaut : bon en français, sorties JSON structurées fiables, contexte long, et tient entièrement dans
 # une carte graphique de 8 Go avec le contexte dimensionné par appel. Remplaçable par TRACE_LOCAL_MODEL.

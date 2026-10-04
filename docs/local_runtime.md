@@ -61,6 +61,7 @@ Chaque appel au modèle écrit une ligne de mesure (terminal de la CLI, `job.log
 | Variable | Défaut | Rôle |
 |---|---|---|
 | `TRACE_LOCAL_MODEL` | `qwen2.5:7b` | modèle Ollama utilisé par tous les agents |
+| `TRACE_GROUNDING_MODEL` | `TRACE_LOCAL_MODEL` | modèle du seul Episode Grounding Checker (diagnostic de l'étape 4, rapport seulement) ; rapport `grounding_report__<modèle>.json`, journaux et cache propres au modèle ; le reste du pipeline n'en tient pas compte |
 | `TRACE_OLLAMA_URL` | `http://localhost:11434` | adresse d'Ollama — **boucle locale uniquement** (localhost, 127.0.0.1, ::1) |
 | `TRACE_OLLAMA_NUM_CTX` | `32768` | fenêtre de contexte **maximale** : chaque appel reçoit la plus petite fenêtre qui contient sa requête et sa réponse (voir « Performances ») ; une requête plus longue est refusée (`PROMPT_TOO_LONG`), jamais tronquée |
 | `TRACE_OLLAMA_TIMEOUT` | `1800` | délai maximal d'une génération, en secondes |

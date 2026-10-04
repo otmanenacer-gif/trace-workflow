@@ -15,6 +15,7 @@ réponses « verdict » (1.0) restent lisibles (`--rescore` d'un rapport antéri
 """
 
 import asyncio
+import dataclasses
 import hashlib
 import json
 from pathlib import Path
@@ -435,3 +436,172 @@ def test_rescore_recomputes_an_existing_report_without_any_call(tmp_path, monkey
     out = capsys.readouterr().out
     assert ollama.calls == [] and path.read_bytes() == before  # aucun appel, rapport non réécrit
     assert "1/1 en accord" in out
+
+
+# --- Agrégation 1.2 : question pratique mal formée secondaire, analyses incohérentes non retenues -------------------
+
+E010_TRANSCRIPT = transcript({
+    286: ("enqueteur", "Comme un outil."),
+    287: ("enquete", "D'accord. Est-ce que tu as l'impression qu'il te connaît ?"),
+    289: ("enqueteur", "Est-ce qu'il te comprend ?"),
+    290: ("enquete", "Hm Non, parce que ça reste assez superficiel au sens où c'est des c'est des questions académiques, "
+                     "mais je parle je ne parle jamais de enfin juste une fois et j'ai essayé le plus impersonnel possible "
+                     "– parce que c'était parce que c'était c'était dans un moment d'urgence – H j'essaye – en fait c'est "
+                     "juste que j'utilise pas l'IA – pour – pour avoir des – des échanges personnels. C'est seulement "
+                     "pour – pour mon travail ou pour avoir des informations.")})
+E010 = episode("E010", problem="L'étudiant utilise ChatGPT pour des recherches académiques sur des concepts.",
+               summary="L'étudiant limite l'usage de ChatGPT à des recherches académiques superficielles et "
+                       "impersonnelles, sans échanges personnels.",
+               moves=[("restriction", "L'étudiant limite l'usage à des recherches académiques superficielles et "
+                                      "impersonnelles.", (289, 290))],
+               boundary=["c'est des questions académiques"],
+               evidence=[(287, "D'accord. Est-ce que tu as l'impression qu'il te connaît ?"),
+                         (289, "Est-ce qu'il te comprend ?"), (290, E010_TRANSCRIPT["turns"][3]["text"])])
+# Réponse RÉELLE de qwen2.5:7b (vérificateur 1.1, run OTMANE_NACER), telle qu'enregistrée dans grounding_report.json
+E010_QWEN_V11 = {
+    "claims": [
+        {"claim_id": "P", "asserted_by": "interviewer", "quote_ids": [],
+         "evidence_proposition": "L'étudiant utilise ChatGPT pour des recherches académiques sur des concepts.",
+         "subject_shift": False, "context_effect": "none", "relation": "different",
+         "reason": "Cette affirmation est une proposition de l'enquêteur et n'est pas appuyée par les citations."},
+        {"claim_id": "S", "asserted_by": "interviewer", "quote_ids": [],
+         "evidence_proposition": "L'étudiant limite l'usage de ChatGPT à des recherches académiques superficielles et "
+                                 "impersonnelles, sans échanges personnels.",
+         "subject_shift": False, "context_effect": "none", "relation": "different",
+         "reason": "Cette affirmation est une proposition de l'enquêteur et n'est pas appuyée par les citations."},
+        {"claim_id": "M1", "asserted_by": "student", "quote_ids": ["Q3"],
+         "evidence_proposition": "L'étudiant limite l'usage à des recherches académiques superficielles et impersonnelles.",
+         "subject_shift": True, "context_effect": "none", "relation": "equivalent",
+         "reason": "Les citations montrent que l'étudiant limite l'usage de ChatGPT à des recherches académiques "
+                   "superficielles et impersonnelles."},
+        {"claim_id": "B1", "asserted_by": "previous_agent", "quote_ids": ["Q3"],
+         "evidence_proposition": "c'est des questions académiques", "subject_shift": True, "context_effect": "none",
+         "relation": "direct_paraphrase",
+         "reason": "Les citations montrent que l'étudiant limite l'usage de ChatGPT à des questions académiques, ce qui "
+                   "est une reformulation directe de la frontière proposée."}],
+    "move_types": [{"move_id": "M1", "definition_requirement": "L'étudiant limite l'usage à des recherches académiques "
+                                                               "superficielles et impersonnelles.",
+                    "evidence_shows": "L'étudiant limite l'usage à des recherches académiques superficielles et "
+                                      "impersonnelles.",
+                    "type_fits_definition": True,
+                    "reason": "Les citations montrent que l'étudiant limite l'usage de ChatGPT à des recherches "
+                              "académiques superficielles et impersonnelles."}],
+    "third_party_as_student": False, "interviewer_framing_as_student": True, "status_fit": "too_weak",
+    "notes": "Les affirmations P et S sont des propositions de l'enquêteur et ne sont pas appuyées par les citations. "
+             "L'opération M1 est bien appuyée par les citations."}
+
+
+def test_real_e010_qwen_answer_incoherent_analyses_never_make_the_episode_unsupported():
+    request = g.checker_request(E010_TRANSCRIPT, E010)
+    verdict = g.episode_verdict(E010, request, E010_QWEN_V11)
+    assert verdict["verdict"] == g.DOUBTFUL  # rapport 1.1 : unsupported
+    assert verdict["problem_central"] is False  # « L'étudiant utilise ChatGPT… » n'est pas une question
+    unreliable = verdict["unreliable_analyses"]
+    assert set(unreliable) == {"P", "S", "M1", "B1"}
+    assert unreliable["P"] == ["asserted_by=interviewer sans aucune citation d'un tour de l'enquêteur"]
+    assert any("subject_shift=true" in r for r in unreliable["M1"])
+    assert any("affirmant le soutien" in r for r in unreliable["M1"])  # notes : « M1 est bien appuyée »
+    assert unreliable["B1"] == ["raison ou notes affirmant le soutien, champs structurés le refusant"]
+    assert all(f["level"] == g.DOUBTFUL for f in verdict["findings"])
+
+
+def test_a_problem_that_is_not_a_question_is_secondary_a_real_question_stays_central():
+    turns = transcript({333: ("enqueteur", "Est-ce que tu le délègues ?"),
+                        334: ("enquete", "Bah j'ai jamais demandé à – à l'IA de faire un plan pour moi.")})
+    moves = [("refusal", "L'étudiant dit ne jamais demander de plan à l'IA.", (334,))]
+    evidence = [(334, "j'ai jamais demandé à – à l'IA de faire un plan pour moi")]
+    judged = analysed({"P": {"relation": "different"}, "S": {}, "M1": {}}, {"M1": True})
+    statement = episode("E012", problem="L'étudiant utilise l'IA pour organiser son travail.", summary="Résumé.",
+                        moves=moves, evidence=evidence)
+    verdict = g.episode_verdict(statement, g.checker_request(turns, statement), judged)
+    assert verdict["verdict"] == g.DOUBTFUL and verdict["problem_central"] is False
+    assert "PROBLEM_NOT_A_QUESTION" in g.formal_warnings(turns, statement)
+    question = episode("E012", problem="Jusqu'où l'outil peut-il intervenir dans le plan ?", summary="Résumé.",
+                       moves=moves, evidence=evidence)
+    verdict = g.episode_verdict(question, g.checker_request(turns, question), judged)
+    assert verdict["verdict"] == g.UNSUPPORTED and verdict["problem_central"] is True
+
+
+def test_an_interviewer_attribution_is_kept_as_a_rejection_only_when_an_interviewer_quote_is_cited():
+    request = g.checker_request(E005_TRANSCRIPT, E005)  # Q2 = T0351, enqueteur
+    without = {"asserted_by": "interviewer", "quote_ids": ["Q1"], "relation": "equivalent"}
+    with_quote = {"asserted_by": "interviewer", "quote_ids": ["Q2"], "relation": "equivalent"}
+    claim = lambda fields: {**analysed({"M1": fields}, {})["claims"][0]}  # noqa: E731
+    assert g.unreliable_reasons(claim(without), request) == ["asserted_by=interviewer sans aucune citation d'un tour "
+                                                             "de l'enquêteur"]
+    assert g.unreliable_reasons(claim(with_quote), request) == []
+    assert g.unreliable_reasons(claim({**with_quote, "quote_ids": [t(351)]}), request) == []  # tour → citation Q2
+
+
+def test_a_negated_reason_is_not_an_affirmation_of_support_and_notes_only_flag_the_named_claim():
+    request = g.checker_request(E010_TRANSCRIPT, E010)
+    negated = {"claim_id": "P", "asserted_by": "student", "quote_ids": ["Q3"], "evidence_proposition": "x",
+               "subject_shift": False, "context_effect": "none", "relation": "different",
+               "reason": "Cette affirmation n'est pas appuyée par les citations."}
+    assert g.unreliable_reasons(negated, request) == []
+    notes = "L'opération M1 est bien appuyée par les citations."
+    assert g.unreliable_reasons(negated, request, notes) == []  # la note nomme M1, pas P
+    assert g.unreliable_reasons({**negated, "claim_id": "M1"}, request, notes) == [
+        "raison ou notes affirmant le soutien, champs structurés le refusant"]
+
+
+def test_coherent_rejections_are_unchanged():
+    """E006 réel : l'enquêté·e parle, le contexte limite, relation plus forte que les preuves : rejet cohérent."""
+    turns = transcript({147: ("enquete", "Euh si j'ai le temps, – euh je pense mais ça me prendra beaucoup de temps."),
+                        151: ("enquete", "Non, Lia ne comprend pas rien. Lia comprend ce qu'on lui donne mais Lia ne peut "
+                                         "pas créer d'idées nouvelles.")})
+    ep = episode("E006", problem="L'étudiant évalue les risques associés à l'utilisation de Lia.",
+                 summary="L'étudiant évalue les risques associés à l'utilisation de Lia.",
+                 moves=[("restriction", "L'étudiant évalue les risques associés à l'utilisation de Lia.", (147, 151))],
+                 evidence=[(147, "si j'ai le temps"), (151, "Lia ne peut pas créer d'idées nouvelles.")])
+    stronger = {"asserted_by": "student", "context_effect": "limits", "relation": "stronger_than_evidence",
+                "reason": "Les citations montrent que l'étudiant évalue les risques de l'utilisation de Lia."}
+    verdict = g.episode_verdict(ep, g.checker_request(turns, ep), analysed({"P": stronger, "S": {}, "M1": stronger},
+                                                                            {"M1": False}))
+    assert verdict["verdict"] == g.UNSUPPORTED and verdict["unreliable_analyses"] == {}
+
+
+# --- Modèle du seul vérificateur : TRACE_GROUNDING_MODEL / --model --------------------------------------------
+
+def test_grounding_model_variable_changes_only_the_checker_model(monkeypatch):
+    monkeypatch.setenv("TRACE_GROUNDING_MODEL", "autre-modele:14b")
+    monkeypatch.setenv("TRACE_LOCAL_MODEL", "qwen2.5:7b")
+    assert g.grounding_settings().model == "autre-modele:14b"
+    assert lp.runtime_settings().model == "qwen2.5:7b"  # le pipeline n'en tient pas compte
+    assert g.grounding_settings().num_ctx == lp.runtime_settings().num_ctx
+    run = {"output_dir": "x"}
+    assert g.report_path(run, "autre-modele:14b").name == "grounding_report__autre-modele-14b.json"
+    assert g.report_path(run, "qwen2.5:7b").name == g.REPORT_FILENAME
+    assert g.journal_dir(run, "autre-modele:14b").name == "autre-modele-14b"
+    fields = lambda model: g.cache_key_fields(E011_TRANSCRIPT, dataclasses.replace(lp.runtime_settings(), model=model), "m")  # noqa: E731
+    from core.analysis_cache import compute_cache_key
+    assert compute_cache_key(fields("qwen2.5:7b")) != compute_cache_key(fields("autre-modele:14b"))
+
+
+def test_two_checker_models_are_compared_on_the_same_episodes_without_recomputing_stage4(tmp_path, monkeypatch):
+    run = stage4_run(tmp_path, monkeypatch)
+    analysis_dir = Path(run["files"][0]["ingestion"]["output_dir"]) / config.ANALYSIS_SUBDIR
+    before = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in analysis_dir.glob("*.json")}
+    ollama = use_fake_runtime(monkeypatch, {GROUNDING: all_supported})
+    assert stage4_blocks_report.main(["grounding", run["output_dir"]]) == 0
+    assert {c["payload"]["model"] for c in ollama.calls} == {"qwen2.5:7b"} and len(ollama.calls) == 6
+
+    monkeypatch.setenv("TRACE_GROUNDING_MODEL", "fake-model")  # second modèle : mêmes épisodes, autres réponses
+    ollama = use_fake_runtime(monkeypatch, {GROUNDING: all_supported})
+    assert stage4_blocks_report.main(["grounding", run["output_dir"]]) == 0
+    assert {c["payload"]["model"] for c in ollama.calls} == {"fake-model"} and len(ollama.calls) == 6
+    assert ollama.calls_for(ACCOUNTABILITY) == []  # ni étape 3 ni étape 4 recalculées
+    stage_dir = lp.stage_dir(run, "4")
+    default = json.loads((stage_dir / g.REPORT_FILENAME).read_text(encoding="utf-8"))
+    other = json.loads((stage_dir / "grounding_report__fake-model.json").read_text(encoding="utf-8"))
+    assert default["model"] == "qwen2.5:7b" and other["model"] == "fake-model"
+    assert other["pipeline_model"] == "qwen2.5:7b"
+    assert list((stage_dir / "grounding" / "fake-model").glob("*.json"))  # journaux séparés par modèle
+    after = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in analysis_dir.glob("*.json")}
+    assert after == before
+
+    monkeypatch.delenv("TRACE_GROUNDING_MODEL")  # --model : même effet que la variable, réponses en cache
+    ollama = use_fake_runtime(monkeypatch, {GROUNDING: all_supported})
+    assert stage4_blocks_report.main(["grounding", run["output_dir"], "--model", "fake-model", "--rescore"]) == 0
+    assert stage4_blocks_report.main(["grounding", run["output_dir"], "--model", "fake-model"]) == 0
+    assert ollama.calls == []
