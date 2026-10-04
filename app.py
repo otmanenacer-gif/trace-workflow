@@ -66,7 +66,7 @@ _purge_stale_project_modules()
 
 from core import accountability, analysis, config, stage3_restore, stage4_restore, trajectory  # noqa: E402
 from core import cross_interview, cross_interview_corpus  # noqa: E402
-from core import final_report, local_jobs, local_pipeline  # noqa: E402
+from core import final_report, local_jobs, local_pipeline, pipeline_jobs  # noqa: E402
 from core.ingestion import ingest_run  # noqa: E402
 from core.llm_client import LLMError, LLMSettings  # noqa: E402
 from core.run_manager import TraceError, get_extension, init_run, list_runs, load_metadata  # noqa: E402
@@ -534,6 +534,122 @@ def render_job_panel(job_dir: Path, restart) -> None:
     with st.expander(f"Mesures de la dernière exécution locale (étape {job.get('stage')}, "
                      f"{local_jobs.JOB_LABELS.get(state, state)}, {_fmt_seconds(job['elapsed_seconds'])})"):
         render_job_details(job)
+
+
+def _clock(seconds) -> str:
+    seconds = int(seconds or 0)
+    return f"{seconds // 3600:02d}:{seconds % 3600 // 60:02d}:{seconds % 60:02d}"
+
+
+def render_full_progress(info: dict) -> None:
+    """Progression du pipeline complet, lue dans <run>/pipeline/pipeline_manifest.json et le manifeste du lot."""
+    st.markdown(f"**Run :** `{info['run_id'] or 'création en cours…'}` · **Statut global :** "
+                f"{info['overall_status'] or ('démarrage' if info['alive'] else '—')}"
+                + (f" · **Étape actuelle :** {info['current_stage']}" if info["current_stage"] else ""))
+    lines = [f"{s['icon']} {s['label']}" + (f" — {s['detail']}" if s["detail"] else "")
+             + (" (déjà terminée, non relancée)" if s["skipped"] else "") for s in info["stages"]]
+    st.markdown("\n".join(f"- {line}" for line in lines))
+    timing = [f"écoulé {_clock(info['elapsed_seconds'])}"] if info["elapsed_seconds"] is not None else []
+    if info["eta_seconds"]:
+        timing.append(f"ETA ≈ {_clock(info['eta_seconds'])}")
+    if info["current"]:
+        st.info(f"{info['current']['interview_id']} — étape {info['current']['stage']} en cours"
+                + (f" · {' — '.join(timing)}" if timing else ""), icon="⏳")
+    elif timing:
+        st.caption(" — ".join(timing))
+    for failed in info["failed_interviews"]:
+        st.error(f"FAILED : {failed['interview_id']} — {failed.get('error') or 'échec'} (exclu, les autres continuent)")
+    if info["warnings"]:
+        with st.expander(f"Avertissements ({len(info['warnings'])})"):
+            st.markdown("\n".join(f"- {w}" for w in info["warnings"]))
+
+
+def _full_fragment(corpus: str) -> None:
+    info = pipeline_jobs.progress(Path(corpus))
+    if not info["alive"]:
+        st.rerun(scope="app")
+        return
+    render_full_progress(info)
+    st.caption("Vous pouvez rafraîchir ou fermer cette page : l'analyse continue en arrière-plan. Rouvrez TRACE pour "
+               "retrouver sa progression.")
+
+
+live_full_panel = st.fragment(run_every=3)(_full_fragment)
+
+
+def render_full_corpus_section() -> None:
+    """Analyse complète d'un corpus (étapes 1 → 10) : `trace_local.py pipeline <corpus>` en arrière-plan."""
+    st.header("Analyse complète d'un corpus")
+    st.caption("Importez les entretiens : TRACE crée lui-même le dossier du corpus (noms de fichiers conservés, donc "
+               "identifiants des entretiens inchangés), puis exécute tout le pipeline en arrière-plan, du texte au "
+               "rapport final, avec le modèle local. Mêmes fichiers → même corpus → reprise sans recalcul.")
+    files = st.file_uploader("Entretiens du corpus (PDF, DOCX, TXT — 2 minimum)", type=list(config.ALLOWED_EXTENSIONS),
+                             accept_multiple_files=True, key="full_files")
+    selected = [(f.name, f.getvalue()) for f in files or []]
+    problems = pipeline_jobs.check_files(selected) if selected else []
+    if selected:
+        st.table([{"Fichier": name, "Entretien": pipeline_jobs.interview_id(name), "Taille": format_size(len(data))}
+                  for name, data in selected])
+        for problem in problems:
+            st.error(problem)
+    label = st.text_input("Nom du corpus (facultatif)", key="full_label")
+    if st.button("Lancer l'analyse complète", type="primary", key="full_launch", disabled=not selected or bool(problems)):
+        try:
+            corpus = pipeline_jobs.create_corpus(selected, label)
+            st.session_state.full_corpus = str(corpus)
+            st.query_params["corpus"] = corpus.name
+            pipeline_jobs.start(corpus, st.session_state.get("problematique") or "")
+        except local_jobs.JobAlreadyRunning as exc:
+            st.warning(str(exc))
+        except (ValueError, OSError) as exc:
+            st.error(str(exc))
+        st.rerun()
+    corpora = pipeline_jobs.list_corpora()
+    if corpora:
+        with st.expander("Rouvrir un corpus déjà lancé"):
+            chosen = st.selectbox("Corpus", [p.name for p in corpora], key="full_open_name")
+            if st.button("Ouvrir ce corpus", key="full_open"):
+                st.session_state.full_corpus = str(pipeline_jobs.corpora_dir() / chosen)
+                st.query_params["corpus"] = chosen
+                st.rerun()
+    if not st.session_state.get("full_corpus"):  # refresh / réouverture : corpus de l'adresse, sinon analyse en cours
+        wanted = st.query_params.get("corpus")
+        if wanted and (pipeline_jobs.corpora_dir() / wanted).is_dir():
+            st.session_state.full_corpus = str(pipeline_jobs.corpora_dir() / wanted)
+        else:
+            active = next((p for p in corpora if (pipeline_jobs.read_job(p) or {}).get("alive")), None)
+            if active is not None:
+                st.session_state.full_corpus = str(active)
+    corpus = st.session_state.get("full_corpus")
+    if not corpus:
+        return
+    info = pipeline_jobs.progress(Path(corpus))
+    st.subheader(f"Corpus `{Path(corpus).name}`")
+    if info["alive"]:
+        live_full_panel(corpus)
+        return
+    if info["complete"]:
+        st.success(f"**TRACE COMPLETE** — {info['included']} / {info['interviews_total']} entretiens inclus — "
+                   f"**{info['overall_status']}**")
+        for name, path in info["files"].items():
+            st.download_button(f"Télécharger stage10/{name}", path.read_bytes(), file_name=name,
+                               key=f"full_dl_{name}")
+        render_full_progress(info)
+        return
+    render_full_progress(info)
+    if info["reason"]:
+        st.warning(f"Arrêt : {info['reason']}")
+    if info["job"] and info["job"].get("message"):
+        st.error(info["job"]["message"])
+    if info["can_resume"]:
+        if st.button("Reprendre", type="primary", key="full_resume"):
+            try:
+                pipeline_jobs.start(Path(corpus), st.session_state.get("problematique") or "")
+            except local_jobs.JobAlreadyRunning as exc:
+                st.warning(str(exc))
+            st.rerun()
+        st.caption("« Reprendre » relance exactement le même pipeline sur le même corpus : les étapes et réponses déjà "
+                   "validées sont reprises, jamais recalculées.")
 
 
 def finish_run_job(run: dict) -> dict:
@@ -1259,6 +1375,9 @@ st.markdown(
     "au chargement des fichiers."
 )
 render_runtime_panel()
+
+# Analyse complète d'un corpus (étapes 1 → 10, en arrière-plan)
+render_full_corpus_section()
 
 # 3. Problématique de recherche
 st.header("Problématique de recherche")

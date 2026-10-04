@@ -494,6 +494,11 @@ Exécute tout TRACE, du dossier de corpus au rapport final (lot 1 → 5, puis é
 autres ; arrêt propre si moins de deux entretiens sont valides ou si une étape reste BLOCKED. Manifeste global :
 `<run>/pipeline/pipeline_manifest.json`.
 
+Depuis Streamlit (`streamlit run app.py`), section **« Analyse complète d'un corpus »** : importer au moins deux
+entretiens, puis « Lancer l'analyse complète ». TRACE crée le dossier du corpus (`data/corpora/`, noms de fichiers
+conservés), lance la même commande dans un processus détaché (fermer la page ne l'arrête pas) et affiche la
+progression, puis les livrables de l'étape 10 ; « Reprendre » relance le même corpus après une interruption.
+
 ## Lot sans surveillance (étapes 1 → 5)
 
 ```

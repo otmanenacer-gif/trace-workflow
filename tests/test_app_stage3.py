@@ -122,8 +122,9 @@ def test_speaker_audit_is_shown_and_never_editable(tmp_path, monkeypatch):
         e.label for e in at.expander]
     assert "Télécharger speaker_attribution_audit.json" in [b.label for b in at.get("download_button")]
     # aucun champ de saisie ne permet de modifier la transcription (seule la problématique est éditable ; le seul
-    # champ texte est celui des épisodes signalés « interprétation à vérifier » du rapport final, étape 7)
-    assert [t.key for t in at.text_input] == ["final_report_to_verify"]
+    # champ texte est celui des épisodes signalés « interprétation à vérifier » du rapport final, étape 7 ; plus le
+    # nom facultatif d'un corpus de l'analyse complète)
+    assert [t.key for t in at.text_input] == ["full_label", "final_report_to_verify"]
     assert [t.key for t in at.text_area] == ["problematique"]
 
 

@@ -42,6 +42,9 @@ servi par Ollama (voir `docs/local_runtime.md`).
 - Pipeline complet : `trace_local.py pipeline <corpus>` (`core/pipeline.py`, orchestration seule) — lot 1 → 5 puis
   étapes 6 → 10 existantes, étape terminée et à jour non relancée, reprise par la même commande, manifeste
   `<run>/pipeline/pipeline_manifest.json`.
+- Streamlit « Analyse complète d'un corpus » : `core/pipeline_jobs.py` — corpus géré dans `data/corpora/<nom>_<empreinte>/`,
+  processus détaché `python -m core.pipeline_jobs <corpus>` (= `trace_local.py pipeline`), battement dans
+  `<corpus>/.trace/job.json`, progression lue dans les manifestes.
 - Rapport individuel expérimental (`core/final_report.py`, déterministe, Markdown + JSON dans `<run>/final_report/`) :
   `trace_local.py report RUN`, Streamlit « Générer le rapport final ». Pas d'étape 11 sans
   demande explicite.
