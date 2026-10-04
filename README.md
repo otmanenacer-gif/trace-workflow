@@ -482,6 +482,18 @@ l'interface affiche « Stage 3 restauré depuis fichiers — 0 appel API » et l
 des sorties normales. Le cache de l'étape 3, lui, n'est pas reconstitué : relancer l'étape 3 sur cet
 entretien (`--force`) referait ses appels au modèle local.
 
+## Full unattended pipeline
+
+```
+python scripts/trace_local.py pipeline C:/Users/Alto/corpus_17
+```
+
+Exécute tout TRACE, du dossier de corpus au rapport final (lot 1 → 5, puis étapes 6 → 10), avec le modèle local
+(`--model qwen2.5:7b` par défaut) et 0 API. Relancez exactement la même commande après une interruption : même run,
+étapes terminées non relancées, caches réutilisés. Un entretien en échec est exclu (et documenté) sans arrêter les
+autres ; arrêt propre si moins de deux entretiens sont valides ou si une étape reste BLOCKED. Manifeste global :
+`<run>/pipeline/pipeline_manifest.json`.
+
 ## Lot sans surveillance (étapes 1 → 5)
 
 ```

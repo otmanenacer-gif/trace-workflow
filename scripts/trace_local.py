@@ -21,6 +21,9 @@
     python scripts/trace_local.py stage10 RUN                      # étape 10 : LIVRAISON finale (aucun modèle, aucune
                                                                    # analyse) -> <run>/stage10/final_report.md/.json,
                                                                    # delivery_manifest.json
+    python scripts/trace_local.py pipeline CORPUS [--model M]      # PIPELINE COMPLET sans surveillance : étapes 1 -> 10
+                                                                   # (lot, puis 6 -> 10) ; relancer la même commande
+                                                                   # reprend le même run -> <run>/pipeline/
     python scripts/trace_local.py report RUN [--verify E005,E009]  # rapport individuel expérimental (Markdown + JSON) à partir
                                                                    # des sorties validées, SANS aucun appel au modèle ;
                                                                    # --verify : épisodes « interprétation à vérifier »
@@ -302,6 +305,49 @@ def cmd_stage10(args) -> int:
     return 0
 
 
+def cmd_pipeline(args) -> int:
+    import os
+
+    from core import batch, pipeline
+    from core.llm_client import ENV_LOCAL_MODEL
+    if args.model:
+        os.environ[ENV_LOCAL_MODEL] = args.model
+    corpus = Path(args.corpus)
+    if not corpus.is_dir():
+        raise TraceError(f"Corpus introuvable : {args.corpus} (dossier d'entretiens .txt / .docx / .pdf).")
+    log = lambda line: print(line, flush=True)  # noqa: E731
+    metadata = batch.open_corpus(corpus, args.problematique or "", log=log)  # lien corpus → run : reprise
+    runner = pipeline.Pipeline(metadata, corpus.resolve(), stage_retries=args.retries,
+                               runtime_wait=args.runtime_wait, runtime_retries=args.runtime_retries, log=log)
+    rule = "=" * 40
+    try:
+        manifest = runner.run()
+    except KeyboardInterrupt:
+        print(f"\n{rule}\nPipeline interrupted safely.\nRerun the same command to resume.\n"
+              f"Manifest: {lp.display_path(runner.path)}\n{rule}")
+        return 130
+    status = manifest["overall_status"]
+    counts = manifest.get("interview_counts") or {}
+    print(f"\n{rule}")
+    if status in pipeline.FINAL_OK:
+        print("TRACE PIPELINE COMPLETE")
+        print(f"Run: {manifest['run_id']}")
+        print(f"Interviews: {counts.get('included_stage6')} / {counts.get('total')} included")
+        print(f"Result: {status}")
+        print(f"Total duration: {pipeline.format_duration(manifest['active_seconds'])}")
+        print(f"Final report: {manifest['final_report']}")
+    else:
+        print(f"TRACE PIPELINE STOPPED — {status}")
+        print(f"Run: {manifest['run_id']}")
+        print(f"Interviews: {counts.get('stage5_valid')} / {counts.get('total')} valid after stage 5")
+        print(f"Reason: {manifest['reason']}")
+        print("Rerun the same command to resume (after fixing the cause if needed).")
+    print(f"Manifest: {lp.display_path(runner.path)}")
+    print(rule)
+    return {pipeline.ABORTED: EXIT_RUNTIME, pipeline.BLOCKED: EXIT_CODES["BLOCKED"], pipeline.FAILED: EXIT_CODES["FAILED"],
+            pipeline.NOT_APPLICABLE: EXIT_CODES[pipeline.NOT_APPLICABLE]}.get(status, 0)
+
+
 def cmd_report(args) -> int:
     from core import final_report
     result = final_report.generate(load_metadata(resolve_run(args.run)), args.verify)
@@ -461,6 +507,15 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("stage10", help="étape 10 : livraison finale (rapport validé -> rapport final, sans modèle)")
     p.add_argument("run")
     p.set_defaults(func=cmd_stage10)
+    p = sub.add_parser("pipeline", help="pipeline complet sans surveillance : corpus -> rapport final (étapes 1 -> 10), "
+                                        "reprise par la même commande")
+    p.add_argument("corpus", help="dossier des entretiens (.txt, .docx, .pdf)")
+    p.add_argument("--model", help="modèle Ollama local (défaut : TRACE_LOCAL_MODEL ou qwen2.5:7b)")
+    p.add_argument("--problematique", default="")
+    p.add_argument("--retries", type=int, default=1, help="nouvelles tentatives d'une étape en échec (défaut 1)")
+    p.add_argument("--runtime-wait", type=float, default=60, help="attente si Ollama est injoignable, en s (défaut 60)")
+    p.add_argument("--runtime-retries", type=int, default=30, help="attentes successives avant arrêt (défaut 30)")
+    p.set_defaults(func=cmd_pipeline)
     p = sub.add_parser("report", help="rapport individuel expérimental à partir des sorties validées (aucun appel)")
     p.add_argument("run")
     p.add_argument("--verify", help="épisodes dont l'interprétation est à vérifier (ex. E005,E006,E009,E011) ; "

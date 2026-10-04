@@ -39,6 +39,9 @@ servi par Ollama (voir `docs/local_runtime.md`).
 - Étape 10 : livraison finale (`core/stage10_delivery.py`, déterministe, aucun modèle, aucune analyse) — paragraphes
   validés recopiés tels quels en 13 sections, statistiques lues dans les manifestes ; `trace_local.py stage10 RUN` →
   `<run>/stage10/final_report.md`, `final_report.json`, `delivery_manifest.json`.
+- Pipeline complet : `trace_local.py pipeline <corpus>` (`core/pipeline.py`, orchestration seule) — lot 1 → 5 puis
+  étapes 6 → 10 existantes, étape terminée et à jour non relancée, reprise par la même commande, manifeste
+  `<run>/pipeline/pipeline_manifest.json`.
 - Rapport individuel expérimental (`core/final_report.py`, déterministe, Markdown + JSON dans `<run>/final_report/`) :
-  `trace_local.py report RUN`, Streamlit « Générer le rapport final ». Pas d'orchestrateur global ni d'étape 11 sans
+  `trace_local.py report RUN`, Streamlit « Générer le rapport final ». Pas d'étape 11 sans
   demande explicite.
